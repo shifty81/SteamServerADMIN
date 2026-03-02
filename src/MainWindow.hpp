@@ -35,10 +35,13 @@ public:
 private slots:
     void onAddServer();
     void onCloneServer();
+    void onRemoveServer();
     void onSyncMods();
     void onSyncConfigs();
+    void onBroadcastCommand();
     void onSearchChanged(const QString &text);
     void onServerListItemClicked(QListWidgetItem *item);
+    void updateTabStatusIndicators();
 
 private:
     void addServerTab(ServerConfig &server);

@@ -33,4 +33,9 @@ private:
     QList<ServerRow> m_rows;
 
     QWidget *m_rowContainer = nullptr;
+
+    // Cluster summary labels
+    QLabel *m_totalLabel   = nullptr;
+    QLabel *m_onlineLabel  = nullptr;
+    QLabel *m_offlineLabel = nullptr;
 };

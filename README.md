@@ -28,7 +28,11 @@ A cross-platform Qt6 desktop application for managing SteamCMD-based game server
 | **Searchable sidebar** | Instantly filter the server list by name |
 | **System tray** | Minimize to tray; balloon notifications for crashes, backups, and clone events |
 | **Server cloning** | Duplicate an existing server config with a new name in one click |
+| **Server removal** | Remove a server from the configuration (stops it first if running; files on disk are preserved) |
 | **Operation log** | Centralized timestamped log of all server operations, viewable in a dedicated tab |
+| **Cluster summary** | Home Dashboard shows total / online / offline server counts at a glance |
+| **Broadcast command** | Send an RCON command to all managed servers simultaneously |
+| **Tab status indicators** | Server tabs display 🟢/🔴 status indicators that update in real time |
 
 ---
 

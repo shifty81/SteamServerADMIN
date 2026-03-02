@@ -54,9 +54,16 @@ public:
     int getPlayerCount(const ServerConfig &server);
     QString sendRconCommand(const ServerConfig &server, const QString &cmd);
 
+    // ---- Server removal ----
+    /** Remove a server by name. Stops it first if running.
+     *  Returns true if found and removed. */
+    bool removeServer(const QString &serverName);
+
     // ---- Cluster operations ----
     void syncModsCluster();
     void syncConfigsCluster(const QString &masterConfigZip);
+    /** Send an RCON command to all servers and return combined results. */
+    QStringList broadcastRconCommand(const QString &cmd);
 
     // ---- SteamCMD path ----
     void setSteamCmdPath(const QString &path);
