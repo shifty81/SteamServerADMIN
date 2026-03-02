@@ -36,6 +36,8 @@ private:
     static constexpr int SERVERDATA_AUTH_RESPONSE  = 2;
     static constexpr int SERVERDATA_EXECCOMMAND    = 2;
     static constexpr int SERVERDATA_RESPONSE_VALUE = 0;
+    // Source RCON spec: max body is 4096 bytes; total packet ≤ 4110 bytes.
+    static constexpr int MAX_RCON_PACKET_SIZE      = 4110;
 
     struct Packet {
         int id;

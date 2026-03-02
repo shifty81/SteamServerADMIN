@@ -163,7 +163,7 @@ bool RconClient::recvPacket(Packet &pkt, int timeoutMs)
     QByteArray sizeBuf = m_socket->read(4);
     int packetSize = read32(sizeBuf, 0);
 
-    if (packetSize < 10 || packetSize > 4096) {
+    if (packetSize < 10 || packetSize > MAX_RCON_PACKET_SIZE) {
         emit errorOccurred(tr("Invalid RCON packet size: %1").arg(packetSize));
         return false;
     }

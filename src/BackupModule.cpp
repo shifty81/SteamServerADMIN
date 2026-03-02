@@ -10,8 +10,21 @@
 // Zip helpers – use platform-native tools via QProcess so we don't need an
 // additional library dependency.
 //   Windows  : PowerShell Compress-Archive / Expand-Archive
-//   Linux/Mac: zip / unzip
+//              Paths are passed as PowerShell script variables to avoid any
+//              special-character injection in the -Command string.
+//   Linux/Mac: zip / unzip (paths passed as separate QProcess arguments)
 // ---------------------------------------------------------------------------
+
+// Escape a path for use in a PowerShell double-quoted string.
+// Only double-quotes and backticks need escaping inside "…".
+static QString escapePwshArg(const QString &path)
+{
+    QString s = path;
+    s.replace(QLatin1Char('`'),  QStringLiteral("``"));
+    s.replace(QLatin1Char('"'),  QStringLiteral("`\""));
+    s.replace(QLatin1Char('$'),  QStringLiteral("`$"));
+    return s;
+}
 
 bool BackupModule::createZip(const QString &sourceDir, const QString &destZip)
 {
@@ -26,13 +39,18 @@ bool BackupModule::createZip(const QString &sourceDir, const QString &destZip)
 
     QProcess process;
 #ifdef Q_OS_WIN
+    // Assign paths to PowerShell variables first to avoid injection.
+    QString script = QStringLiteral(
+        "$src = \"%1\\*\"; $dst = \"%2\"; "
+        "Compress-Archive -LiteralPath $src -DestinationPath $dst -Force")
+        .arg(escapePwshArg(QDir::toNativeSeparators(sourceDir)),
+             escapePwshArg(QDir::toNativeSeparators(destZip)));
     QString cmd = QStringLiteral("powershell");
     QStringList args = {
         QStringLiteral("-NoProfile"),
+        QStringLiteral("-NonInteractive"),
         QStringLiteral("-Command"),
-        QStringLiteral("Compress-Archive -Path '%1\\*' -DestinationPath '%2' -Force")
-            .arg(QDir::toNativeSeparators(sourceDir),
-                 QDir::toNativeSeparators(destZip))
+        script
     };
 #else
     QString cmd = QStringLiteral("zip");
@@ -58,13 +76,17 @@ bool BackupModule::extractZip(const QString &zipFile, const QString &destDir)
 
     QProcess process;
 #ifdef Q_OS_WIN
+    QString script = QStringLiteral(
+        "$src = \"%1\"; $dst = \"%2\"; "
+        "Expand-Archive -LiteralPath $src -DestinationPath $dst -Force")
+        .arg(escapePwshArg(QDir::toNativeSeparators(zipFile)),
+             escapePwshArg(QDir::toNativeSeparators(destDir)));
     QString cmd = QStringLiteral("powershell");
     QStringList args = {
         QStringLiteral("-NoProfile"),
+        QStringLiteral("-NonInteractive"),
         QStringLiteral("-Command"),
-        QStringLiteral("Expand-Archive -Path '%1' -DestinationPath '%2' -Force")
-            .arg(QDir::toNativeSeparators(zipFile),
-                 QDir::toNativeSeparators(destDir))
+        script
     };
 #else
     QString cmd = QStringLiteral("unzip");

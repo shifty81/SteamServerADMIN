@@ -106,15 +106,21 @@ void HomeDashboard::refresh()
         row->addStretch();
         layout->addLayout(row);
 
-        // Capture server by ref (stable since QList keeps pointers after reserve)
-        connect(startBtn,   &QPushButton::clicked, this,
-                [this, &server]() { m_manager->startServer(server); });
-        connect(stopBtn,    &QPushButton::clicked, this,
-                [this, &server]() { m_manager->stopServer(server); });
-        connect(restartBtn, &QPushButton::clicked, this,
-                [this, &server]() { m_manager->restartServer(server); });
-        connect(backupBtn,  &QPushButton::clicked, this,
-                [this, &server]() { m_manager->takeSnapshot(server); });
+        // Capture by name so the lambda remains valid even if QList reallocates.
+        QString sname = server.name;
+        auto findServer = [this, sname]() -> ServerConfig * {
+            for (ServerConfig &s : m_manager->servers())
+                if (s.name == sname) return &s;
+            return nullptr;
+        };
+        connect(startBtn,   &QPushButton::clicked, this, [this, findServer]() {
+            if (auto *s = findServer()) m_manager->startServer(*s); });
+        connect(stopBtn,    &QPushButton::clicked, this, [this, findServer]() {
+            if (auto *s = findServer()) m_manager->stopServer(*s); });
+        connect(restartBtn, &QPushButton::clicked, this, [this, findServer]() {
+            if (auto *s = findServer()) m_manager->restartServer(*s); });
+        connect(backupBtn,  &QPushButton::clicked, this, [this, findServer]() {
+            if (auto *s = findServer()) m_manager->takeSnapshot(*s); });
 
         ServerRow r;
         r.statusLight  = statusLight;
