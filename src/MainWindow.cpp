@@ -395,6 +395,9 @@ void MainWindow::onBroadcastCommand()
 
 void MainWindow::updateTabStatusIndicators()
 {
+    if (m_manager->servers().isEmpty())
+        return;
+
     for (int i = 1; i < m_tabs->count(); ++i) {
         auto *stw = qobject_cast<ServerTabWidget *>(m_tabs->widget(i));
         if (!stw) continue;
