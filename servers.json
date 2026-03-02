@@ -1,0 +1,38 @@
+[
+  {
+    "name": "ARK Cluster 1",
+    "appid": 2430930,
+    "dir": "C:/Servers/ark_cluster1",
+    "executable": "ShooterGameServer.exe",
+    "launchArgs": "TheIsland_WP?listen?MaxPlayers=70",
+    "rcon": {
+      "host": "127.0.0.1",
+      "port": 27020,
+      "password": "changeme"
+    },
+    "mods": [731604991, 880454836],
+    "backupFolder": "C:/Servers/Backups/ark_cluster1",
+    "autoUpdate": true,
+    "keepBackups": 10,
+    "backupIntervalMinutes": 30,
+    "restartIntervalHours": 24
+  },
+  {
+    "name": "CS2 Server",
+    "appid": 730,
+    "dir": "C:/Servers/cs2",
+    "executable": "cs2.exe",
+    "launchArgs": "-dedicated +map de_dust2",
+    "rcon": {
+      "host": "127.0.0.1",
+      "port": 27015,
+      "password": "changeme"
+    },
+    "mods": [],
+    "backupFolder": "C:/Servers/Backups/cs2",
+    "autoUpdate": true,
+    "keepBackups": 10,
+    "backupIntervalMinutes": 60,
+    "restartIntervalHours": 48
+  }
+]
