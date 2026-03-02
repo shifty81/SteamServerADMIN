@@ -34,21 +34,21 @@ void SchedulerModule::startScheduler(const QString &serverName)
     if (m_timers.contains(serverName))
         stopScheduler(serverName);
 
-    // Find the server config
-    const ServerConfig *cfg = nullptr;
+    // Find the server config and copy the interval values
+    int backupMinutes = 0;
+    int restartHours  = 0;
     for (const ServerConfig &s : m_manager->servers()) {
         if (s.name == serverName) {
-            cfg = &s;
+            backupMinutes = s.backupIntervalMinutes;
+            restartHours  = s.restartIntervalHours;
             break;
         }
     }
-    if (!cfg)
-        return;
 
     Timers t;
 
     // --- Automatic backup timer ---
-    if (cfg->backupIntervalMinutes > 0) {
+    if (backupMinutes > 0) {
         t.backupTimer = new QTimer(this);
         t.backupTimer->setTimerType(Qt::VeryCoarseTimer);
 
@@ -64,11 +64,11 @@ void SchedulerModule::startScheduler(const QString &serverName)
             }
         });
 
-        t.backupTimer->start(cfg->backupIntervalMinutes * 60 * 1000);
+        t.backupTimer->start(backupMinutes * 60 * 1000);
     }
 
     // --- Automatic restart timer ---
-    if (cfg->restartIntervalHours > 0) {
+    if (restartHours > 0) {
         t.restartTimer = new QTimer(this);
         t.restartTimer->setTimerType(Qt::VeryCoarseTimer);
 
@@ -84,7 +84,7 @@ void SchedulerModule::startScheduler(const QString &serverName)
             }
         });
 
-        t.restartTimer->start(cfg->restartIntervalHours * 60 * 60 * 1000);
+        t.restartTimer->start(restartHours * 60 * 60 * 1000);
     }
 
     m_timers[serverName] = t;

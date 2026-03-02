@@ -139,10 +139,11 @@ void ServerManager::startServer(ServerConfig &server)
 
     // Detect unexpected exits (crashes)
     QString sname = server.name;
-    connect(proc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
-            this, [this, sname](int exitCode, QProcess::ExitStatus exitStatus) {
-                onProcessFinished(sname, exitCode, exitStatus);
-            });
+    QMetaObject::Connection conn = connect(
+        proc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+        this, [this, sname](int exitCode, QProcess::ExitStatus exitStatus) {
+            onProcessFinished(sname, exitCode, exitStatus);
+        });
 
     QStringList args;
     if (!server.launchArgs.isEmpty())
@@ -151,9 +152,11 @@ void ServerManager::startServer(ServerConfig &server)
     proc->start(exe, args);
     if (proc->waitForStarted(5000)) {
         m_processes[server.name] = proc;
+        m_crashConns[server.name] = conn;
         emit logMessage(server.name, QStringLiteral("Server started (PID %1).").arg(proc->processId()));
     } else {
         emit logMessage(server.name, QStringLiteral("Failed to start server: ") + proc->errorString());
+        QObject::disconnect(conn);
         proc->deleteLater();
     }
 }
@@ -165,9 +168,13 @@ void ServerManager::stopServer(ServerConfig &server)
         emit logMessage(server.name, QStringLiteral("Server is not running."));
         return;
     }
-    // Disconnect the finished signal so the intentional stop is not treated as a crash
-    QObject::disconnect(proc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
-                        this, nullptr);
+    // Disconnect the crash-detection handler so the intentional stop is not
+    // treated as a crash.
+    auto connIt = m_crashConns.find(server.name);
+    if (connIt != m_crashConns.end()) {
+        QObject::disconnect(*connIt);
+        m_crashConns.erase(connIt);
+    }
     proc->terminate();
     if (!proc->waitForFinished(10000))
         proc->kill();
@@ -196,14 +203,15 @@ QProcess *ServerManager::processFor(const ServerConfig &server) const
 void ServerManager::onProcessFinished(const QString &serverName, int exitCode,
                                       QProcess::ExitStatus exitStatus)
 {
-    // Clean up the process entry
+    // Clean up the process entry and stored connection
     QProcess *proc = m_processes.value(serverName, nullptr);
     if (proc) {
         m_processes.remove(serverName);
         proc->deleteLater();
     }
+    m_crashConns.remove(serverName);
 
-    if (exitStatus == QProcess::CrashExit || exitCode != 0) {
+    if (exitStatus == QProcess::CrashExit) {
         emit logMessage(serverName,
                         QStringLiteral("Server crashed (exit code %1). Attempting auto-restart…")
                             .arg(exitCode));

@@ -66,7 +66,8 @@ private:
                            QProcess::ExitStatus exitStatus);
     QString m_configFile;
     QList<ServerConfig> m_servers;
-    QMap<QString, QProcess *> m_processes; // keyed by server name
+    QMap<QString, QProcess *> m_processes;                // keyed by server name
+    QMap<QString, QMetaObject::Connection> m_crashConns;  // crash-detection connections
     QString m_steamCmdPath;
 
     QProcess *processFor(const ServerConfig &server) const;
