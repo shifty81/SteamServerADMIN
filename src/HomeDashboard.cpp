@@ -19,6 +19,24 @@ HomeDashboard::HomeDashboard(ServerManager *manager, QWidget *parent)
         "font-size:20px; font-weight:bold; padding:8px;"));
     outerLayout->addWidget(title);
 
+    // Cluster summary row
+    auto *summaryLayout = new QHBoxLayout();
+    summaryLayout->setSpacing(16);
+    m_totalLabel   = new QLabel(tr("Total: 0"),   this);
+    m_onlineLabel  = new QLabel(tr("Online: 0"),  this);
+    m_offlineLabel = new QLabel(tr("Offline: 0"), this);
+    for (auto *l : { m_totalLabel, m_onlineLabel, m_offlineLabel })
+        l->setStyleSheet(QStringLiteral("font-size:14px; padding:4px 8px;"));
+    m_onlineLabel->setStyleSheet(m_onlineLabel->styleSheet()
+        + QStringLiteral(" color: green;"));
+    m_offlineLabel->setStyleSheet(m_offlineLabel->styleSheet()
+        + QStringLiteral(" color: red;"));
+    summaryLayout->addWidget(m_totalLabel);
+    summaryLayout->addWidget(m_onlineLabel);
+    summaryLayout->addWidget(m_offlineLabel);
+    summaryLayout->addStretch();
+    outerLayout->addLayout(summaryLayout);
+
     // Scrollable container for server rows
     auto *scroll = new QScrollArea(this);
     scroll->setWidgetResizable(true);
@@ -135,10 +153,14 @@ void HomeDashboard::refresh()
 void HomeDashboard::updateStatus()
 {
     const QList<ServerConfig> &srvs = m_manager->servers();
+    int onlineCount = 0;
+
     for (int i = 0; i < m_rows.size() && i < srvs.size(); ++i) {
         const ServerConfig &s = srvs.at(i);
         bool online = m_manager->isServerRunning(s);
         int players = online ? m_manager->getPlayerCount(s) : -1;
+
+        if (online) ++onlineCount;
 
         QString light;
         QString tooltip;
@@ -159,4 +181,11 @@ void HomeDashboard::updateStatus()
                                         ? QString::number(players)
                                         : QStringLiteral("–"));
     }
+
+    // Update cluster summary
+    int total   = srvs.size();
+    int offline = total - onlineCount;
+    if (m_totalLabel)   m_totalLabel->setText(tr("Total: %1").arg(total));
+    if (m_onlineLabel)  m_onlineLabel->setText(tr("Online: %1").arg(onlineCount));
+    if (m_offlineLabel) m_offlineLabel->setText(tr("Offline: %1").arg(offline));
 }

@@ -51,6 +51,14 @@ private slots:
     // ---- Server cloning tests ----
     void testCloneServerConfig();
     void testCloneServerDuplicateNameRejected();
+
+    // ---- Server removal tests ----
+    void testRemoveServer();
+    void testRemoveServerNotFound();
+    void testRemoveServerPersistence();
+
+    // ---- Broadcast RCON tests ----
+    void testBroadcastRconCommand();
 };
 
 void TestServerConfig::testSaveAndLoad()
@@ -647,6 +655,123 @@ void TestServerConfig::testCloneServerDuplicateNameRejected()
             foundDuplicate = true;
     }
     QVERIFY2(foundDuplicate, "Cloning with same name should trigger duplicate error");
+}
+
+// ---------------------------------------------------------------------------
+// Server removal tests
+// ---------------------------------------------------------------------------
+
+void TestServerConfig::testRemoveServer()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+
+    ServerManager mgr(tmp.filePath(QStringLiteral("servers.json")));
+
+    ServerConfig s1;
+    s1.name  = QStringLiteral("Server1");
+    s1.appid = 730;
+    s1.dir   = QStringLiteral("/srv/s1");
+
+    ServerConfig s2;
+    s2.name  = QStringLiteral("Server2");
+    s2.appid = 2430930;
+    s2.dir   = QStringLiteral("/srv/s2");
+
+    mgr.servers() << s1 << s2;
+    QCOMPARE(mgr.servers().size(), 2);
+
+    // Remove first server
+    bool removed = mgr.removeServer(QStringLiteral("Server1"));
+    QVERIFY(removed);
+    QCOMPARE(mgr.servers().size(), 1);
+    QCOMPARE(mgr.servers().first().name, QStringLiteral("Server2"));
+}
+
+void TestServerConfig::testRemoveServerNotFound()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+
+    ServerManager mgr(tmp.filePath(QStringLiteral("servers.json")));
+
+    ServerConfig s;
+    s.name  = QStringLiteral("MyServer");
+    s.appid = 730;
+    s.dir   = QStringLiteral("/srv/my");
+    mgr.servers() << s;
+
+    // Try to remove a non-existent server
+    bool removed = mgr.removeServer(QStringLiteral("NonExistent"));
+    QVERIFY(!removed);
+    QCOMPARE(mgr.servers().size(), 1);
+}
+
+void TestServerConfig::testRemoveServerPersistence()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    ServerManager mgr(configPath);
+
+    ServerConfig s1;
+    s1.name  = QStringLiteral("Alpha");
+    s1.appid = 730;
+    s1.dir   = QStringLiteral("/srv/alpha");
+
+    ServerConfig s2;
+    s2.name  = QStringLiteral("Beta");
+    s2.appid = 2430930;
+    s2.dir   = QStringLiteral("/srv/beta");
+
+    mgr.servers() << s1 << s2;
+    QVERIFY(mgr.saveConfig());
+
+    // Remove and save
+    mgr.removeServer(QStringLiteral("Alpha"));
+    QVERIFY(mgr.saveConfig());
+
+    // Reload and verify
+    ServerManager mgr2(configPath);
+    QVERIFY(mgr2.loadConfig());
+    QCOMPARE(mgr2.servers().size(), 1);
+    QCOMPARE(mgr2.servers().first().name, QStringLiteral("Beta"));
+}
+
+// ---------------------------------------------------------------------------
+// Broadcast RCON tests
+// ---------------------------------------------------------------------------
+
+void TestServerConfig::testBroadcastRconCommand()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+
+    ServerManager mgr(tmp.filePath(QStringLiteral("servers.json")));
+
+    ServerConfig s1;
+    s1.name  = QStringLiteral("S1");
+    s1.appid = 730;
+    s1.dir   = QStringLiteral("/srv/s1");
+    s1.rcon.host = QStringLiteral("127.0.0.1");
+    s1.rcon.port = 27015;
+
+    ServerConfig s2;
+    s2.name  = QStringLiteral("S2");
+    s2.appid = 2430930;
+    s2.dir   = QStringLiteral("/srv/s2");
+    s2.rcon.host = QStringLiteral("127.0.0.1");
+    s2.rcon.port = 27016;
+
+    mgr.servers() << s1 << s2;
+
+    // broadcastRconCommand should return one result per server
+    // (RCON will fail to connect in test env, but that's expected)
+    QStringList results = mgr.broadcastRconCommand(QStringLiteral("status"));
+    QCOMPARE(results.size(), 2);
+    QVERIFY(results.at(0).contains(QStringLiteral("[S1]")));
+    QVERIFY(results.at(1).contains(QStringLiteral("[S2]")));
 }
 
 QTEST_MAIN(TestServerConfig)

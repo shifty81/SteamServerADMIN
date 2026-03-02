@@ -20,6 +20,7 @@
 #include <QApplication>
 #include <QTextEdit>
 #include <QFontDatabase>
+#include <QTimer>
 
 static const QString kConfigFile = QStringLiteral("servers.json");
 
@@ -71,12 +72,16 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
 
     auto *addBtn      = new QPushButton(tr("＋  Add Server"), sidebar);
     auto *cloneBtn    = new QPushButton(tr("📋  Clone Server"), sidebar);
+    auto *removeBtn   = new QPushButton(tr("✕  Remove Server"), sidebar);
     auto *syncModsBtn = new QPushButton(tr("⟳  Sync Mods (All)"), sidebar);
     auto *syncCfgBtn  = new QPushButton(tr("⟳  Sync Configs (All)"), sidebar);
+    auto *broadcastBtn= new QPushButton(tr("📢  Broadcast Command"), sidebar);
     sideLayout->addWidget(addBtn);
     sideLayout->addWidget(cloneBtn);
+    sideLayout->addWidget(removeBtn);
     sideLayout->addWidget(syncModsBtn);
     sideLayout->addWidget(syncCfgBtn);
+    sideLayout->addWidget(broadcastBtn);
 
     mainLayout->addWidget(sidebar);
 
@@ -102,13 +107,20 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     m_scheduler->startAll();
 
     // ---- Connections ----
-    connect(addBtn,      &QPushButton::clicked, this, &MainWindow::onAddServer);
-    connect(cloneBtn,    &QPushButton::clicked, this, &MainWindow::onCloneServer);
-    connect(syncModsBtn, &QPushButton::clicked, this, &MainWindow::onSyncMods);
-    connect(syncCfgBtn,  &QPushButton::clicked, this, &MainWindow::onSyncConfigs);
+    connect(addBtn,       &QPushButton::clicked, this, &MainWindow::onAddServer);
+    connect(cloneBtn,     &QPushButton::clicked, this, &MainWindow::onCloneServer);
+    connect(removeBtn,    &QPushButton::clicked, this, &MainWindow::onRemoveServer);
+    connect(syncModsBtn,  &QPushButton::clicked, this, &MainWindow::onSyncMods);
+    connect(syncCfgBtn,   &QPushButton::clicked, this, &MainWindow::onSyncConfigs);
+    connect(broadcastBtn, &QPushButton::clicked, this, &MainWindow::onBroadcastCommand);
     connect(m_searchBox, &QLineEdit::textChanged, this, &MainWindow::onSearchChanged);
     connect(m_serverList, &QListWidget::itemClicked,
             this, &MainWindow::onServerListItemClicked);
+
+    // Periodic tab-status update (every 5 seconds)
+    auto *tabStatusTimer = new QTimer(this);
+    connect(tabStatusTimer, &QTimer::timeout, this, &MainWindow::updateTabStatusIndicators);
+    tabStatusTimer->start(5000);
 }
 
 // ---------------------------------------------------------------------------
@@ -307,6 +319,101 @@ void MainWindow::onCloneServer()
     m_logModule->log(newName, QStringLiteral("Cloned from '%1'.").arg(source));
     m_trayManager->notify(tr("Server Cloned"),
                           tr("'%1' cloned from '%2'.").arg(newName, source));
+}
+
+// ---------------------------------------------------------------------------
+
+void MainWindow::onRemoveServer()
+{
+    if (m_manager->servers().isEmpty()) {
+        QMessageBox::information(this, tr("Remove Server"),
+                                 tr("No servers to remove."));
+        return;
+    }
+
+    QStringList names;
+    for (const ServerConfig &s : std::as_const(m_manager->servers()))
+        names << s.name;
+
+    bool ok = false;
+    QString target = QInputDialog::getItem(
+        this, tr("Remove Server"), tr("Select server to remove:"),
+        names, 0, false, &ok);
+    if (!ok || target.isEmpty()) return;
+
+    auto reply = QMessageBox::question(
+        this, tr("Remove Server"),
+        tr("Remove '%1' from configuration?\n\nThis will stop the server if running.\n"
+           "Server files on disk are NOT deleted.").arg(target));
+    if (reply != QMessageBox::Yes) return;
+
+    m_scheduler->stopScheduler(target);
+
+    // Remove the corresponding tab
+    for (int i = 1; i < m_tabs->count(); ++i) {
+        auto *stw = qobject_cast<ServerTabWidget *>(m_tabs->widget(i));
+        if (stw && stw->serverName() == target) {
+            m_tabs->removeTab(i);
+            stw->deleteLater();
+            break;
+        }
+    }
+
+    m_manager->removeServer(target);
+    m_manager->saveConfig();
+    rebuildSidebarList();
+    m_dashboard->refresh();
+
+    m_logModule->log(target, QStringLiteral("Server removed."));
+    m_trayManager->notify(tr("Server Removed"),
+                          tr("'%1' has been removed.").arg(target));
+}
+
+// ---------------------------------------------------------------------------
+
+void MainWindow::onBroadcastCommand()
+{
+    if (m_manager->servers().isEmpty()) {
+        QMessageBox::information(this, tr("Broadcast"),
+                                 tr("No servers configured."));
+        return;
+    }
+
+    bool ok = false;
+    QString cmd = QInputDialog::getText(
+        this, tr("Broadcast RCON Command"),
+        tr("Command to send to ALL servers:"),
+        QLineEdit::Normal, QString(), &ok);
+    if (!ok || cmd.trimmed().isEmpty()) return;
+
+    QStringList results = m_manager->broadcastRconCommand(cmd.trimmed());
+    QMessageBox::information(this, tr("Broadcast Results"),
+                             results.join(QLatin1Char('\n')));
+}
+
+// ---------------------------------------------------------------------------
+
+void MainWindow::updateTabStatusIndicators()
+{
+    for (int i = 1; i < m_tabs->count(); ++i) {
+        auto *stw = qobject_cast<ServerTabWidget *>(m_tabs->widget(i));
+        if (!stw) continue;
+
+        QString name = stw->serverName();
+        // Find the server config
+        bool found = false;
+        for (const ServerConfig &s : std::as_const(m_manager->servers())) {
+            if (s.name == name) {
+                bool online = m_manager->isServerRunning(s);
+                QString indicator = online ? QStringLiteral("🟢 ") : QStringLiteral("🔴 ");
+                m_tabs->setTabText(i, indicator + name);
+                found = true;
+                break;
+            }
+        }
+        if (!found)
+            m_tabs->setTabText(i, name);
+    }
 }
 
 // ---------------------------------------------------------------------------

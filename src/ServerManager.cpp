@@ -361,6 +361,17 @@ void ServerManager::syncModsCluster()
         updateMods(s);
 }
 
+QStringList ServerManager::broadcastRconCommand(const QString &cmd)
+{
+    QStringList results;
+    for (const ServerConfig &s : std::as_const(m_servers)) {
+        QString resp = sendRconCommand(s, cmd);
+        results << QStringLiteral("[%1] %2").arg(s.name, resp);
+        emit logMessage(s.name, QStringLiteral("Broadcast RCON: %1 → %2").arg(cmd, resp));
+    }
+    return results;
+}
+
 void ServerManager::syncConfigsCluster(const QString &masterConfigZip)
 {
     for (const ServerConfig &s : std::as_const(m_servers)) {
@@ -373,3 +384,23 @@ void ServerManager::syncConfigsCluster(const QString &masterConfigZip)
 
 void ServerManager::setSteamCmdPath(const QString &path) { m_steamCmdPath = path; }
 QString ServerManager::steamCmdPath() const               { return m_steamCmdPath; }
+
+// ---------------------------------------------------------------------------
+// Server removal
+// ---------------------------------------------------------------------------
+
+bool ServerManager::removeServer(const QString &serverName)
+{
+    for (int i = 0; i < m_servers.size(); ++i) {
+        if (m_servers.at(i).name == serverName) {
+            // Stop if running
+            if (isServerRunning(m_servers[i]))
+                stopServer(m_servers[i]);
+
+            m_servers.removeAt(i);
+            emit logMessage(serverName, QStringLiteral("Server removed from configuration."));
+            return true;
+        }
+    }
+    return false;
+}
