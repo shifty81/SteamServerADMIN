@@ -2,6 +2,7 @@
 
 #include <QString>
 #include <QList>
+#include <QStringList>
 
 struct RconInfo {
     QString host;
@@ -22,4 +23,36 @@ struct ServerConfig {
     int backupIntervalMinutes = 30;
     int restartIntervalHours = 24;
     int keepBackups = 10;     // maximum number of versioned backups to retain
+
+    /**
+     * @brief Validate this server configuration.
+     * @return A list of human-readable error strings. Empty list means valid.
+     */
+    QStringList validate() const
+    {
+        QStringList errors;
+
+        if (name.trimmed().isEmpty())
+            errors << QStringLiteral("Server name must not be empty.");
+
+        if (appid <= 0)
+            errors << QStringLiteral("Steam AppID must be a positive integer.");
+
+        if (dir.trimmed().isEmpty())
+            errors << QStringLiteral("Installation directory must not be empty.");
+
+        if (rcon.port < 1 || rcon.port > 65535)
+            errors << QStringLiteral("RCON port must be between 1 and 65535.");
+
+        if (keepBackups < 0)
+            errors << QStringLiteral("Keep-backups count must not be negative.");
+
+        if (backupIntervalMinutes < 0)
+            errors << QStringLiteral("Backup interval must not be negative.");
+
+        if (restartIntervalHours < 0)
+            errors << QStringLiteral("Restart interval must not be negative.");
+
+        return errors;
+    }
 };

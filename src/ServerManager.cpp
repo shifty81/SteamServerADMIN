@@ -8,6 +8,7 @@
 #include <QJsonDocument>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QSet>
 #include <QDebug>
 
 // ---------------------------------------------------------------------------
@@ -68,8 +69,39 @@ bool ServerManager::loadConfig()
     return true;
 }
 
+QStringList ServerManager::validateAll() const
+{
+    QStringList errors;
+    QSet<QString> seenNames;
+
+    for (int i = 0; i < m_servers.size(); ++i) {
+        const ServerConfig &s = m_servers.at(i);
+        QStringList serverErrors = s.validate();
+        for (const QString &e : std::as_const(serverErrors))
+            errors << QStringLiteral("Server #%1 (%2): %3")
+                          .arg(i + 1)
+                          .arg(s.name.isEmpty() ? QStringLiteral("<unnamed>") : s.name, e);
+
+        if (!s.name.trimmed().isEmpty()) {
+            if (seenNames.contains(s.name))
+                errors << QStringLiteral("Duplicate server name: '%1'.").arg(s.name);
+            else
+                seenNames.insert(s.name);
+        }
+    }
+
+    return errors;
+}
+
 bool ServerManager::saveConfig() const
 {
+    // Validate before saving
+    QStringList errors = validateAll();
+    if (!errors.isEmpty()) {
+        qWarning() << "ServerManager::saveConfig: validation failed:" << errors;
+        return false;
+    }
+
     QJsonArray arr;
     for (const ServerConfig &s : m_servers) {
         QJsonObject obj;

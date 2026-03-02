@@ -24,6 +24,7 @@ A cross-platform Qt6 desktop application for managing SteamCMD-based game server
 | **Config file editor** | Edit `GameUserSettings.ini` (or any config file) with syntax-highlighted text editor |
 | **Cluster sync** | Push mod updates or a master config zip to every managed server at once |
 | **Server lifecycle** | Start / Stop / Restart server processes directly from the GUI |
+| **Config validation** | Server configs are validated before saving; catches empty names, invalid AppIDs, port ranges, duplicates |
 | **Searchable sidebar** | Instantly filter the server list by name |
 
 ---

@@ -27,6 +27,11 @@ public:
     bool loadConfig();
     bool saveConfig() const;
 
+    // ---- Validation ----
+    /** Validate all server configs and check for duplicate names.
+     *  Returns a list of error strings; empty list = all valid. */
+    QStringList validateAll() const;
+
     QList<ServerConfig> &servers();
     const QList<ServerConfig> &servers() const;
 
