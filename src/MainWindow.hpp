@@ -9,6 +9,7 @@
 
 class HomeDashboard;
 class ServerTabWidget;
+class SchedulerModule;
 
 /**
  * @brief Main application window.
@@ -40,6 +41,7 @@ private:
     void rebuildSidebarList();
 
     ServerManager   *m_manager        = nullptr;
+    SchedulerModule *m_scheduler      = nullptr;
     QTabWidget      *m_tabs           = nullptr;
     QListWidget     *m_serverList     = nullptr;
     QLineEdit       *m_searchBox      = nullptr;

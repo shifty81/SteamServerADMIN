@@ -15,6 +15,11 @@ A cross-platform Qt6 desktop application for managing SteamCMD-based game server
 | **Versioned backups** | Timestamped zip snapshots of configs, maps, and mods; configurable retention count |
 | **Backup rotation** | Automatically keeps only the last *N* backups per type |
 | **Snapshot restore** | Select any previous snapshot from the Backups tab and restore with one click |
+| **Scheduled backups** | Automatic periodic snapshots driven by `backupIntervalMinutes` per server |
+| **Scheduled restarts** | Automatic periodic server restarts driven by `restartIntervalHours` per server |
+| **Crash detection** | Detects unexpected server exits and automatically restarts the process |
+| **Auto-update on start** | When `autoUpdate` is true, mods are updated via SteamCMD before launching |
+| **Pre-update snapshots** | A full snapshot is taken before every mod update, enabling safe rollback |
 | **Live RCON console** | Send commands to any running server; receive responses in the built-in console |
 | **Config file editor** | Edit `GameUserSettings.ini` (or any config file) with syntax-highlighted text editor |
 | **Cluster sync** | Push mod updates or a master config zip to every managed server at once |
@@ -89,7 +94,8 @@ SSA/
 │   ├── ServerConfig.hpp      # Server data structures
 │   ├── BackupModule.*        # Versioned zip snapshots
 │   ├── SteamCmdModule.*      # SteamCMD wrapper
-│   └── RconClient.*          # Source RCON protocol (TCP)
+│   ├── RconClient.*          # Source RCON protocol (TCP)
+│   └── SchedulerModule.*     # Scheduled backups & restarts
 ├── tests/
 │   └── test_serverconfig.cpp # Qt Test unit tests
 ├── CMakeLists.txt

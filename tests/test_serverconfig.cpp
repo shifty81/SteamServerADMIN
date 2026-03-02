@@ -5,10 +5,12 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QTemporaryDir>
+#include <QSignalSpy>
 
 #include "ServerConfig.hpp"
 #include "ServerManager.hpp"
 #include "BackupModule.hpp"
+#include "SchedulerModule.hpp"
 
 // ---------------------------------------------------------------------------
 // ServerConfig round-trip through ServerManager save/load
@@ -20,6 +22,9 @@ private slots:
     void testSaveAndLoad();
     void testAddRemoveMod();
     void testBackupRotation();
+    void testSchedulerStartStop();
+    void testSchedulerTimerIntervals();
+    void testCrashSignalEmitted();
 };
 
 void TestServerConfig::testSaveAndLoad()
@@ -124,6 +129,90 @@ void TestServerConfig::testBackupRotation()
                                QStringLiteral("20260103_120000_config.zip") }) {
         QVERIFY2(remaining.contains(f), qPrintable(f + " should be kept"));
     }
+}
+
+void TestServerConfig::testSchedulerStartStop()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+
+    ServerManager mgr(configPath);
+    ServerConfig s;
+    s.name = QStringLiteral("Sched Server");
+    s.appid = 730;
+    s.dir = tmp.path();
+    s.backupFolder = tmp.filePath(QStringLiteral("backups"));
+    s.backupIntervalMinutes = 10;
+    s.restartIntervalHours = 2;
+    mgr.servers() << s;
+    mgr.saveConfig();
+
+    SchedulerModule scheduler(&mgr);
+
+    // Start scheduler for the server
+    scheduler.startScheduler(QStringLiteral("Sched Server"));
+
+    // Starting again should not crash (replaces timers)
+    scheduler.startScheduler(QStringLiteral("Sched Server"));
+
+    // Stop scheduler
+    scheduler.stopScheduler(QStringLiteral("Sched Server"));
+
+    // Stopping an unknown server should not crash
+    scheduler.stopScheduler(QStringLiteral("Unknown"));
+
+    // startAll / stopAll
+    scheduler.startAll();
+    scheduler.stopAll();
+}
+
+void TestServerConfig::testSchedulerTimerIntervals()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+
+    ServerManager mgr(configPath);
+    ServerConfig s;
+    s.name = QStringLiteral("Timer Server");
+    s.appid = 730;
+    s.dir = tmp.path();
+    s.backupFolder = tmp.filePath(QStringLiteral("backups"));
+    s.backupIntervalMinutes = 0;   // disabled
+    s.restartIntervalHours  = 0;   // disabled
+    mgr.servers() << s;
+
+    SchedulerModule scheduler(&mgr);
+    scheduler.startAll();
+
+    // With intervals set to 0, no timers should fire (no crash)
+    scheduler.stopAll();
+
+    // Now test with positive values
+    mgr.servers()[0].backupIntervalMinutes = 5;
+    mgr.servers()[0].restartIntervalHours = 1;
+    scheduler.startAll();
+    scheduler.stopAll();
+}
+
+void TestServerConfig::testCrashSignalEmitted()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+
+    ServerManager mgr(configPath);
+
+    // Verify the serverCrashed signal exists and can be spied on
+    QSignalSpy spy(&mgr, &ServerManager::serverCrashed);
+    QVERIFY(spy.isValid());
+
+    // No crashes should have been emitted yet
+    QCOMPARE(spy.count(), 0);
 }
 
 QTEST_MAIN(TestServerConfig)

@@ -28,6 +28,8 @@ set(APP_SOURCES
     src/SteamCmdModule.hpp
     src/RconClient.cpp
     src/RconClient.hpp
+    src/SchedulerModule.cpp
+    src/SchedulerModule.hpp
 )
 
 qt_add_executable(SSA ${APP_SOURCES})
@@ -56,6 +58,8 @@ if(Qt6Test_FOUND)
         src/SteamCmdModule.hpp
         src/RconClient.cpp
         src/RconClient.hpp
+        src/SchedulerModule.cpp
+        src/SchedulerModule.hpp
     )
 
     target_link_libraries(SSA_Tests PRIVATE

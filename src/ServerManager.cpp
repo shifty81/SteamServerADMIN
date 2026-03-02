@@ -120,6 +120,12 @@ void ServerManager::startServer(ServerConfig &server)
         return;
     }
 
+    // Auto-update mods before starting if enabled
+    if (server.autoUpdate && !server.mods.isEmpty()) {
+        emit logMessage(server.name, QStringLiteral("Auto-update: updating mods before start…"));
+        updateMods(server);
+    }
+
     QString exe = server.dir + QDir::separator() + server.executable;
     auto *proc  = new QProcess(this);
     connect(proc, &QProcess::readyReadStandardOutput, this, [this, &server, proc]() {
@@ -131,6 +137,14 @@ void ServerManager::startServer(ServerConfig &server)
             emit logMessage(server.name, QString::fromLocal8Bit(proc->readLine()).trimmed());
     });
 
+    // Detect unexpected exits (crashes)
+    QString sname = server.name;
+    QMetaObject::Connection conn = connect(
+        proc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+        this, [this, sname](int exitCode, QProcess::ExitStatus exitStatus) {
+            onProcessFinished(sname, exitCode, exitStatus);
+        });
+
     QStringList args;
     if (!server.launchArgs.isEmpty())
         args = server.launchArgs.split(QLatin1Char(' '), Qt::SkipEmptyParts);
@@ -138,9 +152,11 @@ void ServerManager::startServer(ServerConfig &server)
     proc->start(exe, args);
     if (proc->waitForStarted(5000)) {
         m_processes[server.name] = proc;
+        m_crashConns[server.name] = conn;
         emit logMessage(server.name, QStringLiteral("Server started (PID %1).").arg(proc->processId()));
     } else {
         emit logMessage(server.name, QStringLiteral("Failed to start server: ") + proc->errorString());
+        QObject::disconnect(conn);
         proc->deleteLater();
     }
 }
@@ -151,6 +167,13 @@ void ServerManager::stopServer(ServerConfig &server)
     if (!proc) {
         emit logMessage(server.name, QStringLiteral("Server is not running."));
         return;
+    }
+    // Disconnect the crash-detection handler so the intentional stop is not
+    // treated as a crash.
+    auto connIt = m_crashConns.find(server.name);
+    if (connIt != m_crashConns.end()) {
+        QObject::disconnect(*connIt);
+        m_crashConns.erase(connIt);
     }
     proc->terminate();
     if (!proc->waitForFinished(10000))
@@ -177,6 +200,35 @@ QProcess *ServerManager::processFor(const ServerConfig &server) const
     return m_processes.value(server.name, nullptr);
 }
 
+void ServerManager::onProcessFinished(const QString &serverName, int exitCode,
+                                      QProcess::ExitStatus exitStatus)
+{
+    // Clean up the process entry and stored connection
+    QProcess *proc = m_processes.value(serverName, nullptr);
+    if (proc) {
+        m_processes.remove(serverName);
+        proc->deleteLater();
+    }
+    m_crashConns.remove(serverName);
+
+    if (exitStatus == QProcess::CrashExit) {
+        emit logMessage(serverName,
+                        QStringLiteral("Server crashed (exit code %1). Attempting auto-restart…")
+                            .arg(exitCode));
+        emit serverCrashed(serverName);
+
+        // Find the server config and restart
+        for (ServerConfig &s : m_servers) {
+            if (s.name == serverName) {
+                startServer(s);
+                break;
+            }
+        }
+    } else {
+        emit logMessage(serverName, QStringLiteral("Server exited normally."));
+    }
+}
+
 // ---------------------------------------------------------------------------
 // SteamCMD
 // ---------------------------------------------------------------------------
@@ -194,6 +246,10 @@ void ServerManager::deployServer(ServerConfig &server)
 
 void ServerManager::updateMods(ServerConfig &server)
 {
+    // Take a snapshot before updating mods so we can roll back if needed
+    emit logMessage(server.name, QStringLiteral("Taking pre-update snapshot…"));
+    takeSnapshot(server);
+
     emit logMessage(server.name, QStringLiteral("Updating mods…"));
     SteamCmdModule steamCmd;
     steamCmd.setSteamCmdPath(m_steamCmdPath);
