@@ -10,6 +10,8 @@
 class HomeDashboard;
 class ServerTabWidget;
 class SchedulerModule;
+class LogModule;
+class TrayManager;
 
 /**
  * @brief Main application window.
@@ -20,6 +22,7 @@ class SchedulerModule;
  *   │ Search   │                                        │
  *   │ List     │                                        │
  *   │ [Add]    │                                        │
+ *   │ [Clone]  │                                        │
  *   │ [Sync]   │                                        │
  *   └──────────┴────────────────────────────────────────┘
  */
@@ -31,6 +34,7 @@ public:
 
 private slots:
     void onAddServer();
+    void onCloneServer();
     void onSyncMods();
     void onSyncConfigs();
     void onSearchChanged(const QString &text);
@@ -39,9 +43,12 @@ private slots:
 private:
     void addServerTab(ServerConfig &server);
     void rebuildSidebarList();
+    void buildLogViewerTab();
 
     ServerManager   *m_manager        = nullptr;
     SchedulerModule *m_scheduler      = nullptr;
+    LogModule       *m_logModule      = nullptr;
+    TrayManager     *m_trayManager    = nullptr;
     QTabWidget      *m_tabs           = nullptr;
     QListWidget     *m_serverList     = nullptr;
     QLineEdit       *m_searchBox      = nullptr;

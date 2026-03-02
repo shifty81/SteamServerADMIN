@@ -11,6 +11,7 @@
 #include "ServerManager.hpp"
 #include "BackupModule.hpp"
 #include "SchedulerModule.hpp"
+#include "LogModule.hpp"
 
 // ---------------------------------------------------------------------------
 // ServerConfig round-trip through ServerManager save/load
@@ -40,6 +41,16 @@ private slots:
     void testLoadMissingFile();
     void testMultipleServersRoundTrip();
     void testDefaultFieldValues();
+
+    // ---- LogModule tests ----
+    void testLogModuleWritesEntries();
+    void testLogModuleMaxEntries();
+    void testLogModuleFileOutput();
+    void testLogModuleEntryAddedSignal();
+
+    // ---- Server cloning tests ----
+    void testCloneServerConfig();
+    void testCloneServerDuplicateNameRejected();
 };
 
 void TestServerConfig::testSaveAndLoad()
@@ -487,6 +498,155 @@ void TestServerConfig::testDefaultFieldValues()
     QVERIFY(s.dir.isEmpty());
     QVERIFY(s.executable.isEmpty());
     QVERIFY(s.mods.isEmpty());
+}
+
+// ---------------------------------------------------------------------------
+// LogModule tests
+// ---------------------------------------------------------------------------
+
+void TestServerConfig::testLogModuleWritesEntries()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+
+    LogModule log(tmp.filePath(QStringLiteral("test.log")));
+    log.log(QStringLiteral("Server1"), QStringLiteral("Started"));
+    log.log(QStringLiteral("Server2"), QStringLiteral("Backup complete"));
+
+    QStringList entries = log.entries();
+    QCOMPARE(entries.size(), 2);
+    QVERIFY(entries.at(0).contains(QStringLiteral("Server1")));
+    QVERIFY(entries.at(0).contains(QStringLiteral("Started")));
+    QVERIFY(entries.at(1).contains(QStringLiteral("Server2")));
+    QVERIFY(entries.at(1).contains(QStringLiteral("Backup complete")));
+}
+
+void TestServerConfig::testLogModuleMaxEntries()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+
+    LogModule log(tmp.filePath(QStringLiteral("test.log")));
+    log.setMaxEntries(3);
+
+    for (int i = 0; i < 5; ++i)
+        log.log(QStringLiteral("S"), QStringLiteral("msg%1").arg(i));
+
+    QStringList entries = log.entries();
+    QCOMPARE(entries.size(), 3);
+    // Oldest entries should have been trimmed; newest 3 remain
+    QVERIFY(entries.at(0).contains(QStringLiteral("msg2")));
+    QVERIFY(entries.at(1).contains(QStringLiteral("msg3")));
+    QVERIFY(entries.at(2).contains(QStringLiteral("msg4")));
+}
+
+void TestServerConfig::testLogModuleFileOutput()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+
+    QString logPath = tmp.filePath(QStringLiteral("test.log"));
+
+    {
+        LogModule log(logPath);
+        log.log(QStringLiteral("TestSrv"), QStringLiteral("hello"));
+    }
+
+    QFile f(logPath);
+    QVERIFY(f.open(QIODevice::ReadOnly));
+    QString content = QString::fromUtf8(f.readAll());
+    QVERIFY(content.contains(QStringLiteral("TestSrv")));
+    QVERIFY(content.contains(QStringLiteral("hello")));
+}
+
+void TestServerConfig::testLogModuleEntryAddedSignal()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+
+    LogModule log(tmp.filePath(QStringLiteral("test.log")));
+    QSignalSpy spy(&log, &LogModule::entryAdded);
+    QVERIFY(spy.isValid());
+
+    log.log(QStringLiteral("S"), QStringLiteral("event"));
+    QCOMPARE(spy.count(), 1);
+
+    QString emitted = spy.at(0).at(0).toString();
+    QVERIFY(emitted.contains(QStringLiteral("event")));
+}
+
+// ---------------------------------------------------------------------------
+// Server cloning tests
+// ---------------------------------------------------------------------------
+
+void TestServerConfig::testCloneServerConfig()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+
+    ServerManager mgr(tmp.filePath(QStringLiteral("servers.json")));
+
+    ServerConfig s;
+    s.name  = QStringLiteral("Original");
+    s.appid = 730;
+    s.dir   = QStringLiteral("/srv/orig");
+    s.mods  = { 111, 222 };
+    s.rcon.port = 27015;
+    s.backupIntervalMinutes = 15;
+    mgr.servers() << s;
+
+    // Clone it
+    ServerConfig cloned = s;
+    cloned.name = QStringLiteral("Clone");
+    mgr.servers() << cloned;
+
+    // Validate – should pass (no duplicates, both configs valid)
+    QStringList errors = mgr.validateAll();
+    QVERIFY2(errors.isEmpty(),
+             qPrintable(QStringLiteral("Expected no errors: ") + errors.join(QStringLiteral("; "))));
+
+    // Verify clone has same fields
+    const ServerConfig &c = mgr.servers().last();
+    QCOMPARE(c.name,  QStringLiteral("Clone"));
+    QCOMPARE(c.appid, 730);
+    QCOMPARE(c.dir,   QStringLiteral("/srv/orig"));
+    QCOMPARE(c.mods,  QList<int>({ 111, 222 }));
+    QCOMPARE(c.backupIntervalMinutes, 15);
+
+    // Save and reload
+    QVERIFY(mgr.saveConfig());
+    ServerManager mgr2(tmp.filePath(QStringLiteral("servers.json")));
+    QVERIFY(mgr2.loadConfig());
+    QCOMPARE(mgr2.servers().size(), 2);
+    QCOMPARE(mgr2.servers().at(1).name, QStringLiteral("Clone"));
+}
+
+void TestServerConfig::testCloneServerDuplicateNameRejected()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+
+    ServerManager mgr(tmp.filePath(QStringLiteral("servers.json")));
+
+    ServerConfig s;
+    s.name  = QStringLiteral("MyServer");
+    s.appid = 730;
+    s.dir   = QStringLiteral("/srv/my");
+    mgr.servers() << s;
+
+    // Clone with same name (should fail validation)
+    ServerConfig cloned = s;  // same name
+    mgr.servers() << cloned;
+
+    QStringList errors = mgr.validateAll();
+    QVERIFY(!errors.isEmpty());
+
+    bool foundDuplicate = false;
+    for (const QString &e : std::as_const(errors)) {
+        if (e.contains(QStringLiteral("Duplicate")))
+            foundDuplicate = true;
+    }
+    QVERIFY2(foundDuplicate, "Cloning with same name should trigger duplicate error");
 }
 
 QTEST_MAIN(TestServerConfig)

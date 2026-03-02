@@ -2,6 +2,8 @@
 #include "HomeDashboard.hpp"
 #include "ServerTabWidget.hpp"
 #include "SchedulerModule.hpp"
+#include "LogModule.hpp"
+#include "TrayManager.hpp"
 
 #include <QHBoxLayout>
 #include <QVBoxLayout>
@@ -16,6 +18,8 @@
 #include <QSettings>
 #include <QDir>
 #include <QApplication>
+#include <QTextEdit>
+#include <QFontDatabase>
 
 static const QString kConfigFile = QStringLiteral("servers.json");
 
@@ -27,6 +31,19 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     // ---- Backend ----
     m_manager = new ServerManager(kConfigFile, this);
     m_manager->loadConfig();
+
+    // ---- Logging ----
+    m_logModule = new LogModule(QStringLiteral("ssa.log"), this);
+    connect(m_manager, &ServerManager::logMessage, m_logModule, &LogModule::log);
+
+    // ---- System tray ----
+    m_trayManager = new TrayManager(this, this);
+    connect(m_trayManager, &TrayManager::quitRequested, qApp, &QApplication::quit);
+    connect(m_manager, &ServerManager::serverCrashed, this, [this](const QString &name) {
+        m_trayManager->notify(tr("Server Crashed"),
+                              tr("'%1' crashed and is being restarted.").arg(name),
+                              QSystemTrayIcon::Warning);
+    });
 
     // ---- Central widget ----
     auto *central = new QWidget(this);
@@ -53,9 +70,11 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     sideLayout->addWidget(m_serverList);
 
     auto *addBtn      = new QPushButton(tr("＋  Add Server"), sidebar);
+    auto *cloneBtn    = new QPushButton(tr("📋  Clone Server"), sidebar);
     auto *syncModsBtn = new QPushButton(tr("⟳  Sync Mods (All)"), sidebar);
     auto *syncCfgBtn  = new QPushButton(tr("⟳  Sync Configs (All)"), sidebar);
     sideLayout->addWidget(addBtn);
+    sideLayout->addWidget(cloneBtn);
     sideLayout->addWidget(syncModsBtn);
     sideLayout->addWidget(syncCfgBtn);
 
@@ -75,12 +94,16 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
 
     rebuildSidebarList();
 
+    // Log Viewer tab (always last)
+    buildLogViewerTab();
+
     // Start scheduled tasks (automatic backups and restarts)
     m_scheduler = new SchedulerModule(m_manager, this);
     m_scheduler->startAll();
 
     // ---- Connections ----
     connect(addBtn,      &QPushButton::clicked, this, &MainWindow::onAddServer);
+    connect(cloneBtn,    &QPushButton::clicked, this, &MainWindow::onCloneServer);
     connect(syncModsBtn, &QPushButton::clicked, this, &MainWindow::onSyncMods);
     connect(syncCfgBtn,  &QPushButton::clicked, this, &MainWindow::onSyncConfigs);
     connect(m_searchBox, &QLineEdit::textChanged, this, &MainWindow::onSearchChanged);
@@ -225,4 +248,89 @@ void MainWindow::onServerListItemClicked(QListWidgetItem *item)
             return;
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+
+void MainWindow::onCloneServer()
+{
+    if (m_manager->servers().isEmpty()) {
+        QMessageBox::information(this, tr("Clone Server"),
+                                 tr("No servers to clone."));
+        return;
+    }
+
+    // Build a list of server names for the user to pick from
+    QStringList names;
+    for (const ServerConfig &s : std::as_const(m_manager->servers()))
+        names << s.name;
+
+    bool ok = false;
+    QString source = QInputDialog::getItem(
+        this, tr("Clone Server"), tr("Select server to clone:"),
+        names, 0, false, &ok);
+    if (!ok || source.isEmpty()) return;
+
+    QString newName = QInputDialog::getText(
+        this, tr("Clone Server"), tr("New server name:"),
+        QLineEdit::Normal, source + QStringLiteral(" (Copy)"), &ok);
+    if (!ok || newName.trimmed().isEmpty()) return;
+    newName = newName.trimmed();
+
+    // Find the source config
+    const ServerConfig *src = nullptr;
+    for (const ServerConfig &s : std::as_const(m_manager->servers())) {
+        if (s.name == source) { src = &s; break; }
+    }
+    if (!src) return;
+
+    // Deep-copy the config with new name
+    ServerConfig cloned = *src;
+    cloned.name = newName;
+
+    // Validate before adding
+    m_manager->servers() << cloned;
+    QStringList errors = m_manager->validateAll();
+    if (!errors.isEmpty()) {
+        m_manager->servers().removeLast();
+        QMessageBox::warning(this, tr("Validation Error"),
+                             tr("Cannot clone server:\n\n%1").arg(errors.join(QLatin1Char('\n'))));
+        return;
+    }
+
+    m_manager->saveConfig();
+    addServerTab(m_manager->servers().last());
+    rebuildSidebarList();
+    m_dashboard->refresh();
+    m_scheduler->startScheduler(newName);
+
+    m_logModule->log(newName, QStringLiteral("Cloned from '%1'.").arg(source));
+    m_trayManager->notify(tr("Server Cloned"),
+                          tr("'%1' cloned from '%2'.").arg(newName, source));
+}
+
+// ---------------------------------------------------------------------------
+
+void MainWindow::buildLogViewerTab()
+{
+    auto *logWidget = new QWidget(m_tabs);
+    auto *layout    = new QVBoxLayout(logWidget);
+
+    auto *title = new QLabel(tr("Operation Log"), logWidget);
+    title->setStyleSheet(QStringLiteral("font-size:16px; font-weight:bold; padding:4px;"));
+    layout->addWidget(title);
+
+    auto *logView = new QTextEdit(logWidget);
+    logView->setReadOnly(true);
+    logView->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
+    layout->addWidget(logView);
+
+    // Populate with existing entries
+    for (const QString &entry : m_logModule->entries())
+        logView->append(entry);
+
+    // Live updates
+    connect(m_logModule, &LogModule::entryAdded, logView, &QTextEdit::append);
+
+    m_tabs->addTab(logWidget, tr("📝 Log"));
 }
