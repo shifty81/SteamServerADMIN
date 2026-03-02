@@ -26,6 +26,9 @@ A cross-platform Qt6 desktop application for managing SteamCMD-based game server
 | **Server lifecycle** | Start / Stop / Restart server processes directly from the GUI |
 | **Config validation** | Server configs are validated before saving; catches empty names, invalid AppIDs, port ranges, duplicates |
 | **Searchable sidebar** | Instantly filter the server list by name |
+| **System tray** | Minimize to tray; balloon notifications for crashes, backups, and clone events |
+| **Server cloning** | Duplicate an existing server config with a new name in one click |
+| **Operation log** | Centralized timestamped log of all server operations, viewable in a dedicated tab |
 
 ---
 
@@ -96,7 +99,9 @@ SSA/
 │   ├── BackupModule.*        # Versioned zip snapshots
 │   ├── SteamCmdModule.*      # SteamCMD wrapper
 │   ├── RconClient.*          # Source RCON protocol (TCP)
-│   └── SchedulerModule.*     # Scheduled backups & restarts
+│   ├── SchedulerModule.*     # Scheduled backups & restarts
+│   ├── LogModule.*           # Centralized operation logging
+│   └── TrayManager.*         # System tray icon & notifications
 ├── tests/
 │   └── test_serverconfig.cpp # Qt Test unit tests
 ├── CMakeLists.txt

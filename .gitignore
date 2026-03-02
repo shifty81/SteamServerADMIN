@@ -30,3 +30,6 @@ _deps/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Runtime files
+ssa.log

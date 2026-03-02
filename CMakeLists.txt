@@ -30,6 +30,10 @@ set(APP_SOURCES
     src/RconClient.hpp
     src/SchedulerModule.cpp
     src/SchedulerModule.hpp
+    src/LogModule.cpp
+    src/LogModule.hpp
+    src/TrayManager.cpp
+    src/TrayManager.hpp
 )
 
 qt_add_executable(SSA ${APP_SOURCES})
@@ -60,6 +64,8 @@ if(Qt6Test_FOUND)
         src/RconClient.hpp
         src/SchedulerModule.cpp
         src/SchedulerModule.hpp
+        src/LogModule.cpp
+        src/LogModule.hpp
     )
 
     target_link_libraries(SSA_Tests PRIVATE
