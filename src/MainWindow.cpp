@@ -19,6 +19,7 @@
 #include <QDir>
 #include <QApplication>
 #include <QTextEdit>
+#include <QFontDatabase>
 
 static const QString kConfigFile = QStringLiteral("servers.json");
 
@@ -321,7 +322,7 @@ void MainWindow::buildLogViewerTab()
 
     auto *logView = new QTextEdit(logWidget);
     logView->setReadOnly(true);
-    logView->setFont(QFont(QStringLiteral("Monospace"), 9));
+    logView->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
     layout->addWidget(logView);
 
     // Populate with existing entries
