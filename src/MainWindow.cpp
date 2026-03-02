@@ -1,6 +1,7 @@
 #include "MainWindow.hpp"
 #include "HomeDashboard.hpp"
 #include "ServerTabWidget.hpp"
+#include "SchedulerModule.hpp"
 
 #include <QHBoxLayout>
 #include <QVBoxLayout>
@@ -73,6 +74,10 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
         addServerTab(s);
 
     rebuildSidebarList();
+
+    // Start scheduled tasks (automatic backups and restarts)
+    m_scheduler = new SchedulerModule(m_manager, this);
+    m_scheduler->startAll();
 
     // ---- Connections ----
     connect(addBtn,      &QPushButton::clicked, this, &MainWindow::onAddServer);
@@ -157,6 +162,7 @@ void MainWindow::onAddServer()
     addServerTab(m_manager->servers().last());
     rebuildSidebarList();
     m_dashboard->refresh();
+    m_scheduler->startScheduler(s.name);
 
     // Offer to immediately deploy via SteamCMD
     auto reply = QMessageBox::question(

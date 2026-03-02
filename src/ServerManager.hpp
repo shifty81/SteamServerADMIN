@@ -59,8 +59,11 @@ public:
 
 signals:
     void logMessage(const QString &serverName, const QString &message);
+    void serverCrashed(const QString &serverName);
 
 private:
+    void onProcessFinished(const QString &serverName, int exitCode,
+                           QProcess::ExitStatus exitStatus);
     QString m_configFile;
     QList<ServerConfig> m_servers;
     QMap<QString, QProcess *> m_processes; // keyed by server name
