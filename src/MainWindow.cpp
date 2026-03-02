@@ -157,7 +157,17 @@ void MainWindow::onAddServer()
     s.rcon.port    = rconPort;
     s.rcon.password= rconPass;
 
+    // Tentatively add the server and validate the full list (catches
+    // per-field errors and duplicate names in one place).
     m_manager->servers() << s;
+    QStringList errors = m_manager->validateAll();
+    if (!errors.isEmpty()) {
+        m_manager->servers().removeLast();
+        QMessageBox::warning(this, tr("Validation Error"),
+                             tr("Cannot add server:\n\n%1").arg(errors.join(QLatin1Char('\n'))));
+        return;
+    }
+
     m_manager->saveConfig();
     addServerTab(m_manager->servers().last());
     rebuildSidebarList();
