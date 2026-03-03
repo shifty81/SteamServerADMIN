@@ -21,6 +21,9 @@
 #include <QTextEdit>
 #include <QFontDatabase>
 #include <QTimer>
+#include <QMenuBar>
+#include <QPalette>
+#include <QStyle>
 
 static const QString kConfigFile = QStringLiteral("servers.json");
 
@@ -28,6 +31,16 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
 {
     setWindowTitle(tr("SSA – Steam Server ADMIN"));
     resize(1600, 900);
+
+    // ---- Menu bar ----
+    auto *viewMenu = menuBar()->addMenu(tr("&View"));
+    auto *darkModeAction = viewMenu->addAction(tr("Toggle Dark Mode"));
+    connect(darkModeAction, &QAction::triggered, this, &MainWindow::toggleDarkMode);
+
+    // Apply saved theme preference
+    QSettings settings;
+    if (settings.value(QStringLiteral("darkMode"), false).toBool())
+        toggleDarkMode();
 
     // ---- Backend ----
     m_manager = new ServerManager(kConfigFile, this);
@@ -73,12 +86,16 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     auto *addBtn      = new QPushButton(tr("＋  Add Server"), sidebar);
     auto *cloneBtn    = new QPushButton(tr("📋  Clone Server"), sidebar);
     auto *removeBtn   = new QPushButton(tr("✕  Remove Server"), sidebar);
+    auto *exportBtn   = new QPushButton(tr("📤  Export Server"), sidebar);
+    auto *importBtn   = new QPushButton(tr("📥  Import Server"), sidebar);
     auto *syncModsBtn = new QPushButton(tr("⟳  Sync Mods (All)"), sidebar);
     auto *syncCfgBtn  = new QPushButton(tr("⟳  Sync Configs (All)"), sidebar);
     auto *broadcastBtn= new QPushButton(tr("📢  Broadcast Command"), sidebar);
     sideLayout->addWidget(addBtn);
     sideLayout->addWidget(cloneBtn);
     sideLayout->addWidget(removeBtn);
+    sideLayout->addWidget(exportBtn);
+    sideLayout->addWidget(importBtn);
     sideLayout->addWidget(syncModsBtn);
     sideLayout->addWidget(syncCfgBtn);
     sideLayout->addWidget(broadcastBtn);
@@ -110,6 +127,8 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     connect(addBtn,       &QPushButton::clicked, this, &MainWindow::onAddServer);
     connect(cloneBtn,     &QPushButton::clicked, this, &MainWindow::onCloneServer);
     connect(removeBtn,    &QPushButton::clicked, this, &MainWindow::onRemoveServer);
+    connect(exportBtn,    &QPushButton::clicked, this, &MainWindow::onExportServer);
+    connect(importBtn,    &QPushButton::clicked, this, &MainWindow::onImportServer);
     connect(syncModsBtn,  &QPushButton::clicked, this, &MainWindow::onSyncMods);
     connect(syncCfgBtn,   &QPushButton::clicked, this, &MainWindow::onSyncConfigs);
     connect(broadcastBtn, &QPushButton::clicked, this, &MainWindow::onBroadcastCommand);
@@ -371,6 +390,69 @@ void MainWindow::onRemoveServer()
 
 // ---------------------------------------------------------------------------
 
+void MainWindow::onExportServer()
+{
+    if (m_manager->servers().isEmpty()) {
+        QMessageBox::information(this, tr("Export Server"),
+                                 tr("No servers to export."));
+        return;
+    }
+
+    QStringList names;
+    for (const ServerConfig &s : std::as_const(m_manager->servers()))
+        names << s.name;
+
+    bool ok = false;
+    QString target = QInputDialog::getItem(
+        this, tr("Export Server"), tr("Select server to export:"),
+        names, 0, false, &ok);
+    if (!ok || target.isEmpty()) return;
+
+    QString path = QFileDialog::getSaveFileName(
+        this, tr("Export Server Config"), target + QStringLiteral(".json"),
+        tr("JSON files (*.json)"));
+    if (path.isEmpty()) return;
+
+    if (m_manager->exportServerConfig(target, path)) {
+        QMessageBox::information(this, tr("Export Server"),
+                                 tr("'%1' exported to:\n%2").arg(target, path));
+        m_logModule->log(target, QStringLiteral("Config exported to ") + path);
+    } else {
+        QMessageBox::warning(this, tr("Export Server"),
+                             tr("Failed to export '%1'.").arg(target));
+    }
+}
+
+void MainWindow::onImportServer()
+{
+    QString path = QFileDialog::getOpenFileName(
+        this, tr("Import Server Config"), QString(),
+        tr("JSON files (*.json);;All files (*)"));
+    if (path.isEmpty()) return;
+
+    QString error = m_manager->importServerConfig(path);
+    if (!error.isEmpty()) {
+        QMessageBox::warning(this, tr("Import Server"),
+                             tr("Cannot import server:\n\n%1").arg(error));
+        return;
+    }
+
+    ServerConfig &imported = m_manager->servers().last();
+    m_manager->saveConfig();
+    addServerTab(imported);
+    rebuildSidebarList();
+    m_dashboard->refresh();
+    m_scheduler->startScheduler(imported.name);
+
+    QMessageBox::information(this, tr("Import Server"),
+                             tr("'%1' imported successfully.").arg(imported.name));
+    m_logModule->log(imported.name, QStringLiteral("Config imported from ") + path);
+    m_trayManager->notify(tr("Server Imported"),
+                          tr("'%1' imported.").arg(imported.name));
+}
+
+// ---------------------------------------------------------------------------
+
 void MainWindow::onBroadcastCommand()
 {
     if (m_manager->servers().isEmpty()) {
@@ -430,6 +512,11 @@ void MainWindow::buildLogViewerTab()
     title->setStyleSheet(QStringLiteral("font-size:16px; font-weight:bold; padding:4px;"));
     layout->addWidget(title);
 
+    // Search/filter bar
+    auto *filterEdit = new QLineEdit(logWidget);
+    filterEdit->setPlaceholderText(tr("Filter log entries…"));
+    layout->addWidget(filterEdit);
+
     auto *logView = new QTextEdit(logWidget);
     logView->setReadOnly(true);
     logView->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
@@ -442,5 +529,45 @@ void MainWindow::buildLogViewerTab()
     // Live updates
     connect(m_logModule, &LogModule::entryAdded, logView, &QTextEdit::append);
 
+    // Filter log entries when search text changes
+    connect(filterEdit, &QLineEdit::textChanged, this,
+            [this, logView](const QString &text) {
+                logView->clear();
+                for (const QString &entry : m_logModule->entries()) {
+                    if (text.isEmpty() || entry.contains(text, Qt::CaseInsensitive))
+                        logView->append(entry);
+                }
+            });
+
     m_tabs->addTab(logWidget, tr("📝 Log"));
+}
+
+// ---------------------------------------------------------------------------
+
+void MainWindow::toggleDarkMode()
+{
+    QSettings settings;
+    bool isDark = settings.value(QStringLiteral("darkMode"), false).toBool();
+    isDark = !isDark;
+    settings.setValue(QStringLiteral("darkMode"), isDark);
+
+    if (isDark) {
+        QPalette dark;
+        dark.setColor(QPalette::Window,          QColor(53, 53, 53));
+        dark.setColor(QPalette::WindowText,      Qt::white);
+        dark.setColor(QPalette::Base,            QColor(35, 35, 35));
+        dark.setColor(QPalette::AlternateBase,   QColor(53, 53, 53));
+        dark.setColor(QPalette::ToolTipBase,     Qt::white);
+        dark.setColor(QPalette::ToolTipText,     Qt::white);
+        dark.setColor(QPalette::Text,            Qt::white);
+        dark.setColor(QPalette::Button,          QColor(53, 53, 53));
+        dark.setColor(QPalette::ButtonText,      Qt::white);
+        dark.setColor(QPalette::BrightText,      Qt::red);
+        dark.setColor(QPalette::Link,            QColor(42, 130, 218));
+        dark.setColor(QPalette::Highlight,       QColor(42, 130, 218));
+        dark.setColor(QPalette::HighlightedText, Qt::black);
+        qApp->setPalette(dark);
+    } else {
+        qApp->setPalette(qApp->style()->standardPalette());
+    }
 }

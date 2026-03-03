@@ -64,6 +64,9 @@ bool ServerManager::loadConfig()
         for (const QJsonValue &m : obj[QStringLiteral("mods")].toArray())
             s.mods << m.toInt();
 
+        for (const QJsonValue &m : obj[QStringLiteral("disabledMods")].toArray())
+            s.disabledMods << m.toInt();
+
         m_servers << s;
     }
     return true;
@@ -125,6 +128,10 @@ bool ServerManager::saveConfig() const
         QJsonArray mods;
         for (int m : s.mods) mods << m;
         obj[QStringLiteral("mods")] = mods;
+
+        QJsonArray disabledMods;
+        for (int m : s.disabledMods) disabledMods << m;
+        obj[QStringLiteral("disabledMods")] = disabledMods;
 
         arr << obj;
     }
@@ -403,4 +410,99 @@ bool ServerManager::removeServer(const QString &serverName)
         }
     }
     return false;
+}
+
+// ---------------------------------------------------------------------------
+// Export / Import
+// ---------------------------------------------------------------------------
+
+bool ServerManager::exportServerConfig(const QString &serverName,
+                                       const QString &filePath) const
+{
+    const ServerConfig *found = nullptr;
+    for (const ServerConfig &s : m_servers) {
+        if (s.name == serverName) { found = &s; break; }
+    }
+    if (!found) return false;
+
+    const ServerConfig &s = *found;
+    QJsonObject obj;
+    obj[QStringLiteral("name")]          = s.name;
+    obj[QStringLiteral("appid")]         = s.appid;
+    obj[QStringLiteral("dir")]           = s.dir;
+    obj[QStringLiteral("executable")]    = s.executable;
+    obj[QStringLiteral("launchArgs")]    = s.launchArgs;
+    obj[QStringLiteral("backupFolder")]  = s.backupFolder;
+    obj[QStringLiteral("autoUpdate")]    = s.autoUpdate;
+    obj[QStringLiteral("keepBackups")]   = s.keepBackups;
+    obj[QStringLiteral("backupIntervalMinutes")] = s.backupIntervalMinutes;
+    obj[QStringLiteral("restartIntervalHours")]  = s.restartIntervalHours;
+
+    QJsonObject rcon;
+    rcon[QStringLiteral("host")]     = s.rcon.host;
+    rcon[QStringLiteral("port")]     = s.rcon.port;
+    rcon[QStringLiteral("password")] = s.rcon.password;
+    obj[QStringLiteral("rcon")] = rcon;
+
+    QJsonArray mods;
+    for (int m : s.mods) mods << m;
+    obj[QStringLiteral("mods")] = mods;
+
+    QJsonArray disabledMods;
+    for (int m : s.disabledMods) disabledMods << m;
+    obj[QStringLiteral("disabledMods")] = disabledMods;
+
+    QFile file(filePath);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
+        return false;
+    file.write(QJsonDocument(obj).toJson());
+    return true;
+}
+
+QString ServerManager::importServerConfig(const QString &filePath)
+{
+    QFile file(filePath);
+    if (!file.open(QIODevice::ReadOnly))
+        return QStringLiteral("Cannot open file.");
+
+    QJsonParseError err;
+    QJsonDocument doc = QJsonDocument::fromJson(file.readAll(), &err);
+    if (err.error != QJsonParseError::NoError)
+        return QStringLiteral("Invalid JSON: ") + err.errorString();
+    if (!doc.isObject())
+        return QStringLiteral("Expected a JSON object.");
+
+    QJsonObject obj = doc.object();
+    ServerConfig s;
+    s.name           = obj[QStringLiteral("name")].toString();
+    s.appid          = obj[QStringLiteral("appid")].toInt();
+    s.dir            = obj[QStringLiteral("dir")].toString();
+    s.executable     = obj[QStringLiteral("executable")].toString();
+    s.launchArgs     = obj[QStringLiteral("launchArgs")].toString();
+    s.backupFolder   = obj[QStringLiteral("backupFolder")].toString();
+    s.autoUpdate     = obj[QStringLiteral("autoUpdate")].toBool(true);
+    s.keepBackups    = obj[QStringLiteral("keepBackups")].toInt(10);
+    s.backupIntervalMinutes = obj[QStringLiteral("backupIntervalMinutes")].toInt(30);
+    s.restartIntervalHours  = obj[QStringLiteral("restartIntervalHours")].toInt(24);
+
+    QJsonObject rcon = obj[QStringLiteral("rcon")].toObject();
+    s.rcon.host     = rcon[QStringLiteral("host")].toString(QStringLiteral("127.0.0.1"));
+    s.rcon.port     = rcon[QStringLiteral("port")].toInt(27015);
+    s.rcon.password = rcon[QStringLiteral("password")].toString();
+
+    for (const QJsonValue &m : obj[QStringLiteral("mods")].toArray())
+        s.mods << m.toInt();
+    for (const QJsonValue &m : obj[QStringLiteral("disabledMods")].toArray())
+        s.disabledMods << m.toInt();
+
+    // Validate before adding
+    m_servers << s;
+    QStringList errors = validateAll();
+    if (!errors.isEmpty()) {
+        m_servers.removeLast();
+        return errors.join(QStringLiteral("\n"));
+    }
+
+    emit logMessage(s.name, QStringLiteral("Server imported from file."));
+    return QString();
 }

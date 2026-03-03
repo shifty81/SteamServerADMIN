@@ -25,7 +25,11 @@ A cross-platform Qt6 desktop application for managing SteamCMD-based game server
 | **Cluster sync** | Push mod updates or a master config zip to every managed server at once |
 | **Server lifecycle** | Start / Stop / Restart server processes directly from the GUI |
 | **Config validation** | Server configs are validated before saving; catches empty names, invalid AppIDs, port ranges, duplicates |
+| **Export / Import** | Export any server config to JSON; import a config file to add a server |
+| **Mod enable / disable** | Toggle individual mods on or off without removing them from the list |
+| **Dark mode** | Switch between light and dark themes via the View menu; preference is saved |
 | **Searchable sidebar** | Instantly filter the server list by name |
+| **Searchable log** | Filter operation-log entries with a real-time search box |
 | **System tray** | Minimize to tray; balloon notifications for crashes, backups, and clone events |
 | **Server cloning** | Duplicate an existing server config with a new name in one click |
 | **Server removal** | Remove a server from the configuration (stops it first if running; files on disk are preserved) |
@@ -76,6 +80,7 @@ See `servers.json` in the repository root for an example configuration.
     "launchArgs": "TheIsland_WP?listen?MaxPlayers=70",
     "rcon": { "host": "127.0.0.1", "port": 27020, "password": "changeme" },
     "mods": [731604991, 880454836],
+    "disabledMods": [],
     "backupFolder": "/srv/backups/ark_cluster1",
     "autoUpdate": true,
     "keepBackups": 10,
