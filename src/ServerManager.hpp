@@ -65,6 +65,14 @@ public:
     /** Send an RCON command to all servers and return combined results. */
     QStringList broadcastRconCommand(const QString &cmd);
 
+    // ---- Export / Import individual server configs ----
+    /** Export a single server's config to a JSON file.
+     *  Returns true on success. */
+    bool exportServerConfig(const QString &serverName, const QString &filePath) const;
+    /** Import a server config from a JSON file. Validates before adding.
+     *  Returns an error string on failure, or empty string on success. */
+    QString importServerConfig(const QString &filePath);
+
     // ---- SteamCMD path ----
     void setSteamCmdPath(const QString &path);
     QString steamCmdPath() const;

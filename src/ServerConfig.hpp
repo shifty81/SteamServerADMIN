@@ -18,6 +18,7 @@ struct ServerConfig {
     QString launchArgs;       // extra command-line arguments passed to the server executable
     RconInfo rcon;
     QList<int> mods;
+    QList<int> disabledMods;   // mods that are installed but not active on launch
     QString backupFolder;
     bool autoUpdate = true;
     int backupIntervalMinutes = 30;

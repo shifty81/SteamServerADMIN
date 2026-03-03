@@ -11,6 +11,7 @@
       "password": "changeme"
     },
     "mods": [731604991, 880454836],
+    "disabledMods": [],
     "backupFolder": "C:/Servers/Backups/ark_cluster1",
     "autoUpdate": true,
     "keepBackups": 10,
@@ -29,6 +30,7 @@
       "password": "changeme"
     },
     "mods": [],
+    "disabledMods": [],
     "backupFolder": "C:/Servers/Backups/cs2",
     "autoUpdate": true,
     "keepBackups": 10,

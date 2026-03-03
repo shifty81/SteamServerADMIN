@@ -158,8 +158,8 @@ void ServerTabWidget::buildModsTab(QTabWidget *tabs)
     auto *w      = new QWidget(tabs);
     auto *layout = new QVBoxLayout(w);
 
-    m_modTable = new QTableWidget(0, 2, w);
-    m_modTable->setHorizontalHeaderLabels({ tr("Workshop Mod ID"), tr("Status") });
+    m_modTable = new QTableWidget(0, 3, w);
+    m_modTable->setHorizontalHeaderLabels({ tr("Workshop Mod ID"), tr("Status"), tr("Enabled") });
     m_modTable->horizontalHeader()->setStretchLastSection(true);
     m_modTable->setSelectionBehavior(QAbstractItemView::SelectRows);
     layout->addWidget(m_modTable);
@@ -392,7 +392,21 @@ void ServerTabWidget::populateModTable()
         int row = m_modTable->rowCount();
         m_modTable->insertRow(row);
         m_modTable->setItem(row, 0, new QTableWidgetItem(QString::number(modId)));
-        m_modTable->setItem(row, 1, new QTableWidgetItem(tr("Installed")));
+
+        bool disabled = m_server.disabledMods.contains(modId);
+        m_modTable->setItem(row, 1, new QTableWidgetItem(
+            disabled ? tr("Disabled") : tr("Installed")));
+
+        auto *toggleBtn = new QPushButton(disabled ? tr("Enable") : tr("Disable"));
+        connect(toggleBtn, &QPushButton::clicked, this, [this, modId]() {
+            if (m_server.disabledMods.contains(modId))
+                m_server.disabledMods.removeAll(modId);
+            else
+                m_server.disabledMods << modId;
+            m_manager->saveConfig();
+            populateModTable();
+        });
+        m_modTable->setCellWidget(row, 2, toggleBtn);
     }
 }
 

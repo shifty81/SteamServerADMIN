@@ -59,6 +59,16 @@ private slots:
 
     // ---- Broadcast RCON tests ----
     void testBroadcastRconCommand();
+
+    // ---- Export/Import tests ----
+    void testExportServerConfig();
+    void testExportServerNotFound();
+    void testImportServerConfig();
+    void testImportServerDuplicateName();
+
+    // ---- Disabled mods tests ----
+    void testDisabledModsPersistence();
+    void testDisabledModsDefaultEmpty();
 };
 
 void TestServerConfig::testSaveAndLoad()
@@ -775,4 +785,151 @@ void TestServerConfig::testBroadcastRconCommand()
 }
 
 QTEST_MAIN(TestServerConfig)
+
+// ---------------------------------------------------------------------------
+// Export/Import tests
+// ---------------------------------------------------------------------------
+
+void TestServerConfig::testExportServerConfig()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+
+    ServerManager mgr(tmp.filePath(QStringLiteral("servers.json")));
+
+    ServerConfig s;
+    s.name  = QStringLiteral("ExportMe");
+    s.appid = 730;
+    s.dir   = QStringLiteral("/srv/export");
+    s.executable = QStringLiteral("server.exe");
+    s.mods  = { 111, 222 };
+    s.disabledMods = { 222 };
+    s.rcon.port = 27020;
+    mgr.servers() << s;
+
+    QString exportPath = tmp.filePath(QStringLiteral("exported.json"));
+    QVERIFY(mgr.exportServerConfig(QStringLiteral("ExportMe"), exportPath));
+
+    // Verify the file exists and contains expected data
+    QFile f(exportPath);
+    QVERIFY(f.open(QIODevice::ReadOnly));
+    QJsonDocument doc = QJsonDocument::fromJson(f.readAll());
+    QVERIFY(doc.isObject());
+
+    QJsonObject obj = doc.object();
+    QCOMPARE(obj[QStringLiteral("name")].toString(), QStringLiteral("ExportMe"));
+    QCOMPARE(obj[QStringLiteral("appid")].toInt(), 730);
+    QCOMPARE(obj[QStringLiteral("dir")].toString(), QStringLiteral("/srv/export"));
+
+    // Verify mods and disabledMods are present
+    QJsonArray mods = obj[QStringLiteral("mods")].toArray();
+    QCOMPARE(mods.size(), 2);
+    QJsonArray disabled = obj[QStringLiteral("disabledMods")].toArray();
+    QCOMPARE(disabled.size(), 1);
+    QCOMPARE(disabled.at(0).toInt(), 222);
+}
+
+void TestServerConfig::testExportServerNotFound()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+
+    ServerManager mgr(tmp.filePath(QStringLiteral("servers.json")));
+    QString exportPath = tmp.filePath(QStringLiteral("exported.json"));
+
+    // No servers loaded – export should fail
+    QVERIFY(!mgr.exportServerConfig(QStringLiteral("NonExistent"), exportPath));
+    QVERIFY(!QFile::exists(exportPath));
+}
+
+void TestServerConfig::testImportServerConfig()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+
+    // First create and export a server
+    ServerManager mgr1(tmp.filePath(QStringLiteral("servers1.json")));
+    ServerConfig s;
+    s.name  = QStringLiteral("Imported");
+    s.appid = 2430930;
+    s.dir   = QStringLiteral("/srv/import");
+    s.mods  = { 333, 444 };
+    s.disabledMods = { 444 };
+    mgr1.servers() << s;
+
+    QString exportPath = tmp.filePath(QStringLiteral("to_import.json"));
+    QVERIFY(mgr1.exportServerConfig(QStringLiteral("Imported"), exportPath));
+
+    // Import into a fresh manager
+    ServerManager mgr2(tmp.filePath(QStringLiteral("servers2.json")));
+    QString error = mgr2.importServerConfig(exportPath);
+    QVERIFY2(error.isEmpty(), qPrintable(QStringLiteral("Import failed: ") + error));
+
+    QCOMPARE(mgr2.servers().size(), 1);
+    const ServerConfig &imported = mgr2.servers().first();
+    QCOMPARE(imported.name,  QStringLiteral("Imported"));
+    QCOMPARE(imported.appid, 2430930);
+    QCOMPARE(imported.mods,  QList<int>({ 333, 444 }));
+    QCOMPARE(imported.disabledMods, QList<int>({ 444 }));
+}
+
+void TestServerConfig::testImportServerDuplicateName()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+
+    // Create a server and export it
+    ServerManager mgr(tmp.filePath(QStringLiteral("servers.json")));
+    ServerConfig s;
+    s.name  = QStringLiteral("DupeImport");
+    s.appid = 730;
+    s.dir   = QStringLiteral("/srv/dupe");
+    mgr.servers() << s;
+
+    QString exportPath = tmp.filePath(QStringLiteral("dupe.json"));
+    QVERIFY(mgr.exportServerConfig(QStringLiteral("DupeImport"), exportPath));
+
+    // Try to import – should fail because the name already exists
+    QString error = mgr.importServerConfig(exportPath);
+    QVERIFY(!error.isEmpty());
+    QVERIFY(error.contains(QStringLiteral("Duplicate")));
+    QCOMPARE(mgr.servers().size(), 1);  // should not have added
+}
+
+// ---------------------------------------------------------------------------
+// Disabled mods tests
+// ---------------------------------------------------------------------------
+
+void TestServerConfig::testDisabledModsPersistence()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    ServerManager mgr(configPath);
+
+    ServerConfig s;
+    s.name  = QStringLiteral("ModToggle");
+    s.appid = 730;
+    s.dir   = QStringLiteral("/srv/mods");
+    s.mods  = { 100, 200, 300 };
+    s.disabledMods = { 200 };
+    mgr.servers() << s;
+    QVERIFY(mgr.saveConfig());
+
+    // Reload and verify
+    ServerManager mgr2(configPath);
+    QVERIFY(mgr2.loadConfig());
+    QCOMPARE(mgr2.servers().size(), 1);
+
+    const ServerConfig &loaded = mgr2.servers().first();
+    QCOMPARE(loaded.mods, QList<int>({ 100, 200, 300 }));
+    QCOMPARE(loaded.disabledMods, QList<int>({ 200 }));
+}
+
+void TestServerConfig::testDisabledModsDefaultEmpty()
+{
+    ServerConfig s;
+    QVERIFY(s.disabledMods.isEmpty());
+}
 #include "test_serverconfig.moc"
