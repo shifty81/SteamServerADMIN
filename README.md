@@ -50,10 +50,53 @@ A cross-platform Qt6 desktop application for managing SteamCMD-based game server
 - `zip` / `unzip` (Linux/macOS) **or** PowerShell (Windows) for backup compression
 - [SteamCMD](https://developer.valvesoftware.com/wiki/SteamCMD) on your `PATH` (or configure the path inside the app)
 
-### Build
+### Automated Build (recommended)
+
+The build scripts automatically detect or install Qt6 and compile the project:
+
+**Linux / macOS:**
+
+```bash
+./scripts/build.sh            # Release build (default)
+./scripts/build.sh Debug      # Debug build
+```
+
+**Windows (PowerShell):**
+
+```powershell
+.\scripts\build.ps1                  # Release build (default)
+.\scripts\build.ps1 -BuildType Debug # Debug build
+```
+
+The scripts will:
+1. Check for CMake
+2. Detect Qt6 — install it automatically if missing (apt/dnf/pacman/brew)
+3. Configure and build the project
+4. Run tests if available
+
+### Manual Build
+
+If you prefer to build manually, or the scripts do not suit your setup:
 
 ```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+```
+
+On Windows, if Qt6 is not on the default search path, pass its location:
+
+```powershell
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="C:\Qt\6.x.x\msvc20xx_64"
+cmake --build build --config Release
+```
+
+### CMake Presets
+
+CMake presets are provided for common configurations:
+
+```bash
+cmake --preset default    # Release build
+cmake --preset debug      # Debug build
 cmake --build build
 ```
 
