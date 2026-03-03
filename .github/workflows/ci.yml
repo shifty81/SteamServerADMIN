@@ -11,24 +11,48 @@ permissions:
 
 jobs:
   build-and-test:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: Linux
+          - os: windows-latest
+            name: Windows
+          - os: macos-latest
+            name: macOS
+
+    runs-on: ${{ matrix.os }}
+    name: Build (${{ matrix.name }})
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Qt6
+      - name: Install Qt6 (Linux)
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y qt6-base-dev libgl1-mesa-dev
+
+      - name: Install Qt6 (macOS)
+        if: runner.os == 'macOS'
+        run: brew install qt@6
+
+      - name: Install Qt6 (Windows)
+        if: runner.os == 'Windows'
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: '6.7.*'
+          modules: 'qtbase'
 
       - name: Configure
         run: cmake -B build -DCMAKE_BUILD_TYPE=Debug
 
       - name: Build application
-        run: cmake --build build --target SSA
+        run: cmake --build build --config Debug --target SSA
 
       - name: Build tests
-        run: cmake --build build --target SSA_Tests
+        run: cmake --build build --config Debug --target SSA_Tests
 
       - name: Run tests
-        run: ctest --test-dir build --output-on-failure
+        run: ctest --test-dir build --build-config Debug --output-on-failure

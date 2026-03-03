@@ -8,7 +8,24 @@ set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 
 # Qt6 components required
-find_package(Qt6 REQUIRED COMPONENTS Core Widgets Network)
+find_package(Qt6 COMPONENTS Core Widgets Network)
+if(NOT Qt6_FOUND)
+    message(FATAL_ERROR
+        "Qt6 was not found.\n"
+        "  Linux  : sudo apt-get install qt6-base-dev   (or dnf/pacman equivalent)\n"
+        "  macOS  : brew install qt@6\n"
+        "  Windows: install Qt 6.4+ from https://www.qt.io/download\n"
+        "\n"
+        "Then either:\n"
+        "  • Re-run cmake so it can discover Qt automatically, or\n"
+        "  • Pass the install location explicitly:\n"
+        "      cmake -B build -DCMAKE_PREFIX_PATH=\"/path/to/Qt/6.x.x/gcc_64\"\n"
+        "\n"
+        "Alternatively, use the provided build scripts which handle this automatically:\n"
+        "  Linux/macOS : scripts/build.sh\n"
+        "  Windows     : scripts/build.ps1\n"
+    )
+endif()
 
 # ---------- Main application ----------
 set(APP_SOURCES
