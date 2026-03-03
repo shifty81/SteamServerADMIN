@@ -86,7 +86,7 @@ cmake --build build
 On Windows, if Qt6 is not on the default search path, pass its location:
 
 ```powershell
-cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="C:\Qt\6.7.0\msvc2019_64"
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="C:\Qt\6.x.x\msvc20xx_64"
 cmake --build build --config Release
 ```
 

@@ -87,8 +87,9 @@ cmake -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
     ${CMAKE_PREFIX_PATH:+-DCMAKE_PREFIX_PATH="$CMAKE_PREFIX_PATH"}
 
 # ── 4. Build ─────────────────────────────────────────────────
-info "Building …"
-cmake --build "$BUILD_DIR" --parallel "$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)"
+NPROC="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)"
+info "Building with $NPROC parallel jobs …"
+cmake --build "$BUILD_DIR" --parallel "$NPROC"
 
 # ── 5. Run tests (if test binary was built) ──────────────────
 if [ -f "$BUILD_DIR/SSA_Tests" ]; then

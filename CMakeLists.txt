@@ -12,9 +12,9 @@ find_package(Qt6 COMPONENTS Core Widgets Network)
 if(NOT Qt6_FOUND)
     message(FATAL_ERROR
         "Qt6 was not found.\n"
-        "  Linux  : sudo apt-get install qt6-base-dev   (or dnf/pacman equivalent)\n"
-        "  macOS  : brew install qt@6\n"
-        "  Windows: install Qt 6.4+ from https://www.qt.io/download\n"
+        "  Linux   : sudo apt-get install qt6-base-dev   (or dnf/pacman equivalent)\n"
+        "  macOS   : brew install qt@6\n"
+        "  Windows : install Qt 6.4+ from https://www.qt.io/download\n"
         "\n"
         "Then either:\n"
         "  • Re-run cmake so it can discover Qt automatically, or\n"

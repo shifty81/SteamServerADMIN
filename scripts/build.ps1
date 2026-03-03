@@ -50,16 +50,16 @@ function Install-Qt6 {
     # Try winget first, then chocolatey
     if (Get-Command winget -ErrorAction SilentlyContinue) {
         Info "Attempting to install Qt via winget …"
-        winget install --id=qt.qt --accept-source-agreements --accept-package-agreements 2>$null
+        $output = winget install --id=qt.qt --accept-source-agreements --accept-package-agreements 2>&1
         if ($LASTEXITCODE -eq 0) { return $true }
-        Warn "winget install did not succeed."
+        Warn "winget install did not succeed: $output"
     }
 
     if (Get-Command choco -ErrorAction SilentlyContinue) {
         Info "Attempting to install Qt via Chocolatey …"
-        choco install qt6-base-dev -y 2>$null
+        $output = choco install qt6-base-dev -y 2>&1
         if ($LASTEXITCODE -eq 0) { return $true }
-        Warn "Chocolatey install did not succeed."
+        Warn "Chocolatey install did not succeed: $output"
     }
 
     return $false
