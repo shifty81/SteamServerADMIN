@@ -478,16 +478,19 @@ void ServerTabWidget::populateModTable()
 
 void ServerTabWidget::populateBackupList()
 {
+    static constexpr qint64 kBytesPerKB = 1024;
+    static constexpr qint64 kBytesPerMB = 1024 * 1024;
+
     m_backupList->clear();
     QStringList snapshots = m_manager->listSnapshots(m_server);
     for (const QString &path : std::as_const(snapshots)) {
         QFileInfo fi(path);
         QString sizeStr;
         qint64 bytes = fi.size();
-        if (bytes >= 1024 * 1024)
-            sizeStr = QStringLiteral("%1 MB").arg(bytes / (1024.0 * 1024.0), 0, 'f', 1);
-        else if (bytes >= 1024)
-            sizeStr = QStringLiteral("%1 KB").arg(bytes / 1024.0, 0, 'f', 1);
+        if (bytes >= kBytesPerMB)
+            sizeStr = QStringLiteral("%1 MB").arg(bytes / static_cast<double>(kBytesPerMB), 0, 'f', 1);
+        else if (bytes >= kBytesPerKB)
+            sizeStr = QStringLiteral("%1 KB").arg(bytes / static_cast<double>(kBytesPerKB), 0, 'f', 1);
         else
             sizeStr = QStringLiteral("%1 B").arg(bytes);
 
