@@ -7,6 +7,8 @@
 #include <QString>
 #include <QProcess>
 #include <QMap>
+#include <QDateTime>
+#include <QElapsedTimer>
 
 /**
  * @brief Central backend for managing all servers.
@@ -77,6 +79,22 @@ public:
     void setSteamCmdPath(const QString &path);
     QString steamCmdPath() const;
 
+    // ---- Uptime tracking ----
+    /** Return the server start time, or an invalid QDateTime if not running. */
+    QDateTime serverStartTime(const QString &serverName) const;
+    /** Return the server uptime in seconds, or -1 if not running. */
+    qint64 serverUptimeSeconds(const QString &serverName) const;
+
+    // ---- Crash backoff ----
+    /** Maximum consecutive crash restarts before giving up. */
+    static constexpr int kMaxCrashRestarts = 5;
+    /** Base delay in milliseconds between crash restarts (doubled each time). */
+    static constexpr int kCrashBackoffBaseMs = 2000;
+    /** Return the current crash count for a server (0 = no recent crashes). */
+    int crashCount(const QString &serverName) const;
+    /** Reset the crash counter for a server (e.g. after a manual start). */
+    void resetCrashCount(const QString &serverName);
+
 signals:
     void logMessage(const QString &serverName, const QString &message);
     void serverCrashed(const QString &serverName);
@@ -89,6 +107,12 @@ private:
     QMap<QString, QProcess *> m_processes;                // keyed by server name
     QMap<QString, QMetaObject::Connection> m_crashConns;  // crash-detection connections
     QString m_steamCmdPath;
+
+    // Uptime: stores when each server was started
+    QMap<QString, QDateTime> m_startTimes;
+
+    // Crash backoff: consecutive crash count per server
+    QMap<QString, int> m_crashCounts;
 
     QProcess *processFor(const ServerConfig &server) const;
 };

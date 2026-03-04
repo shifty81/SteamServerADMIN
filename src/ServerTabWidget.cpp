@@ -19,6 +19,7 @@
 #include <QTimer>
 #include <QScrollBar>
 #include <QGroupBox>
+#include <QKeyEvent>
 
 // ---------------------------------------------------------------------------
 
@@ -70,9 +71,12 @@ void ServerTabWidget::buildOverviewTab(QTabWidget *tabs)
     m_statusLight->setStyleSheet(QStringLiteral("font-size:24px;"));
     m_playersLabel = new QLabel(tr("Players: –"), statusBox);
     m_playersLabel->setStyleSheet(QStringLiteral("font-size:14px;"));
+    m_uptimeLabel  = new QLabel(tr("Uptime: –"), statusBox);
+    m_uptimeLabel->setStyleSheet(QStringLiteral("font-size:14px;"));
 
     sbLayout->addWidget(m_statusLight);
     sbLayout->addWidget(m_playersLabel);
+    sbLayout->addWidget(m_uptimeLabel);
     sbLayout->addStretch();
     layout->addWidget(statusBox);
 
@@ -230,6 +234,9 @@ void ServerTabWidget::buildConsoleTab(QTabWidget *tabs)
     lineEdit->setPlaceholderText(tr("Enter RCON command…"));
     m_consoleInput = lineEdit;
 
+    // Install event filter for command history (Up/Down arrow keys)
+    lineEdit->installEventFilter(this);
+
     auto *sendBtn = new QPushButton(tr("Send"), w);
     inputRow->addWidget(lineEdit);
     inputRow->addWidget(sendBtn);
@@ -253,6 +260,11 @@ void ServerTabWidget::onSendCommand()
     QString cmd = lineEdit->text().trimmed();
     lineEdit->clear();
     appendConsole(QStringLiteral("> ") + cmd);
+
+    // Add to command history (avoid consecutive duplicates)
+    if (m_commandHistory.isEmpty() || m_commandHistory.last() != cmd)
+        m_commandHistory << cmd;
+    m_historyIndex = -1;
 
     QString resp = m_manager->sendRconCommand(m_server, cmd);
     if (!resp.isEmpty())
@@ -355,6 +367,42 @@ void ServerTabWidget::onDeployServer()
 }
 
 // ---------------------------------------------------------------------------
+// Event filter (RCON command history with Up/Down arrows)
+// ---------------------------------------------------------------------------
+
+bool ServerTabWidget::eventFilter(QObject *obj, QEvent *event)
+{
+    if (obj == m_consoleInput && event->type() == QEvent::KeyPress) {
+        auto *keyEvent = static_cast<QKeyEvent *>(event);
+        auto *lineEdit = qobject_cast<QLineEdit *>(m_consoleInput);
+        if (!lineEdit || m_commandHistory.isEmpty())
+            return QWidget::eventFilter(obj, event);
+
+        if (keyEvent->key() == Qt::Key_Up) {
+            if (m_historyIndex < 0)
+                m_historyIndex = m_commandHistory.size() - 1;
+            else if (m_historyIndex > 0)
+                --m_historyIndex;
+            lineEdit->setText(m_commandHistory.at(m_historyIndex));
+            return true;
+        }
+        if (keyEvent->key() == Qt::Key_Down) {
+            if (m_historyIndex < 0)
+                return QWidget::eventFilter(obj, event);
+            if (m_historyIndex < m_commandHistory.size() - 1) {
+                ++m_historyIndex;
+                lineEdit->setText(m_commandHistory.at(m_historyIndex));
+            } else {
+                m_historyIndex = -1;
+                lineEdit->clear();
+            }
+            return true;
+        }
+    }
+    return QWidget::eventFilter(obj, event);
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -374,6 +422,24 @@ void ServerTabWidget::refreshStatus()
     } else {
         m_statusLight->setText(QStringLiteral("🟡"));
         m_playersLabel->setText(tr("Players: 0  (Idle)"));
+    }
+
+    // Update uptime
+    if (m_uptimeLabel) {
+        qint64 secs = m_manager->serverUptimeSeconds(m_server.name);
+        if (secs < 0) {
+            m_uptimeLabel->setText(tr("Uptime: –"));
+        } else {
+            int days  = static_cast<int>(secs / 86400);
+            int hours = static_cast<int>((secs % 86400) / 3600);
+            int mins  = static_cast<int>((secs % 3600) / 60);
+            if (days > 0)
+                m_uptimeLabel->setText(tr("Uptime: %1d %2h %3m").arg(days).arg(hours).arg(mins));
+            else if (hours > 0)
+                m_uptimeLabel->setText(tr("Uptime: %1h %2m").arg(hours).arg(mins));
+            else
+                m_uptimeLabel->setText(tr("Uptime: %1m").arg(mins));
+        }
     }
 }
 
@@ -415,7 +481,18 @@ void ServerTabWidget::populateBackupList()
     m_backupList->clear();
     QStringList snapshots = m_manager->listSnapshots(m_server);
     for (const QString &path : std::as_const(snapshots)) {
-        auto *item = new QListWidgetItem(QFileInfo(path).fileName(), m_backupList);
+        QFileInfo fi(path);
+        QString sizeStr;
+        qint64 bytes = fi.size();
+        if (bytes >= 1024 * 1024)
+            sizeStr = QStringLiteral("%1 MB").arg(bytes / (1024.0 * 1024.0), 0, 'f', 1);
+        else if (bytes >= 1024)
+            sizeStr = QStringLiteral("%1 KB").arg(bytes / 1024.0, 0, 'f', 1);
+        else
+            sizeStr = QStringLiteral("%1 B").arg(bytes);
+
+        QString label = QStringLiteral("%1  (%2)").arg(fi.fileName(), sizeStr);
+        auto *item = new QListWidgetItem(label, m_backupList);
         item->setData(Qt::UserRole, path);
     }
 }
