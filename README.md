@@ -37,6 +37,11 @@ A cross-platform Qt6 desktop application for managing SteamCMD-based game server
 | **Cluster summary** | Home Dashboard shows total / online / offline server counts at a glance |
 | **Broadcast command** | Send an RCON command to all managed servers simultaneously |
 | **Tab status indicators** | Server tabs display 🟢/🔴 status indicators that update in real time |
+| **Game server templates** | Pre-defined profiles for popular games (ARK:SA, CS2, Rust, Valheim, Palworld, Satisfactory, Project Zomboid) with pre-filled AppID, executable, and launch arguments when adding a server |
+| **RCON command history** | Up/Down arrow keys in the RCON console recall previously sent commands |
+| **Server uptime display** | Overview tab shows how long each server has been running |
+| **Crash restart backoff** | Exponential backoff on crash auto-restart (up to 5 attempts) prevents infinite restart loops |
+| **Backup file sizes** | Backup list shows the size of each snapshot file |
 
 ---
 
@@ -148,6 +153,7 @@ SSA/
 │   ├── ServerTabWidget.*     # Per-server tabs (Overview/Config/Mods/Backups/Console)
 │   ├── ServerManager.*       # Core backend (start/stop/deploy/backup/RCON)
 │   ├── ServerConfig.hpp      # Server data structures
+│   ├── GameTemplates.hpp     # Pre-defined game server profiles
 │   ├── BackupModule.*        # Versioned zip snapshots
 │   ├── SteamCmdModule.*      # SteamCMD wrapper
 │   ├── RconClient.*          # Source RCON protocol (TCP)

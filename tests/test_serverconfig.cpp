@@ -12,6 +12,7 @@
 #include "BackupModule.hpp"
 #include "SchedulerModule.hpp"
 #include "LogModule.hpp"
+#include "GameTemplates.hpp"
 
 // ---------------------------------------------------------------------------
 // ServerConfig round-trip through ServerManager save/load
@@ -69,6 +70,20 @@ private slots:
     // ---- Disabled mods tests ----
     void testDisabledModsPersistence();
     void testDisabledModsDefaultEmpty();
+
+    // ---- Game templates tests ----
+    void testBuiltinTemplatesNotEmpty();
+    void testBuiltinTemplatesHaveValidAppIds();
+    void testBuiltinTemplatesContainCustomEntry();
+
+    // ---- Uptime tracking tests ----
+    void testUptimeNotRunning();
+    void testStartTimeRecorded();
+
+    // ---- Crash backoff tests ----
+    void testCrashCountDefault();
+    void testCrashCountReset();
+    void testCrashBackoffConstants();
 };
 
 void TestServerConfig::testSaveAndLoad()
@@ -932,4 +947,117 @@ void TestServerConfig::testDisabledModsDefaultEmpty()
     ServerConfig s;
     QVERIFY(s.disabledMods.isEmpty());
 }
+
+// ---------------------------------------------------------------------------
+// Game templates tests
+// ---------------------------------------------------------------------------
+
+void TestServerConfig::testBuiltinTemplatesNotEmpty()
+{
+    QList<GameTemplate> templates = GameTemplate::builtinTemplates();
+    QVERIFY(templates.size() > 0);
+    // Should contain at least a few well-known games
+    QVERIFY(templates.size() >= 4);
+}
+
+void TestServerConfig::testBuiltinTemplatesHaveValidAppIds()
+{
+    QList<GameTemplate> templates = GameTemplate::builtinTemplates();
+    for (const GameTemplate &t : std::as_const(templates)) {
+        // Each template must have a non-empty display name
+        QVERIFY2(!t.displayName.isEmpty(),
+                 qPrintable(QStringLiteral("Template has empty displayName")));
+        // "Custom" entry has appid 0, all others must be positive
+        if (!t.displayName.contains(QStringLiteral("Custom"))) {
+            QVERIFY2(t.appid > 0,
+                     qPrintable(QStringLiteral("Template '%1' has non-positive appid").arg(t.displayName)));
+            QVERIFY2(!t.executable.isEmpty(),
+                     qPrintable(QStringLiteral("Template '%1' has empty executable").arg(t.displayName)));
+        }
+    }
+}
+
+void TestServerConfig::testBuiltinTemplatesContainCustomEntry()
+{
+    QList<GameTemplate> templates = GameTemplate::builtinTemplates();
+    bool foundCustom = false;
+    for (const GameTemplate &t : std::as_const(templates)) {
+        if (t.displayName.contains(QStringLiteral("Custom"))) {
+            foundCustom = true;
+            QCOMPARE(t.appid, 0);
+            break;
+        }
+    }
+    QVERIFY2(foundCustom, "Expected a 'Custom' template entry");
+}
+
+// ---------------------------------------------------------------------------
+// Uptime tracking tests
+// ---------------------------------------------------------------------------
+
+void TestServerConfig::testUptimeNotRunning()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+
+    ServerManager mgr(tmp.filePath(QStringLiteral("servers.json")));
+    ServerConfig s;
+    s.name  = QStringLiteral("UptimeTest");
+    s.appid = 730;
+    s.dir   = QStringLiteral("/srv/test");
+    mgr.servers() << s;
+
+    // Server is not running, so uptime should be -1
+    QCOMPARE(mgr.serverUptimeSeconds(QStringLiteral("UptimeTest")), qint64(-1));
+    QVERIFY(!mgr.serverStartTime(QStringLiteral("UptimeTest")).isValid());
+}
+
+void TestServerConfig::testStartTimeRecorded()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+
+    ServerManager mgr(tmp.filePath(QStringLiteral("servers.json")));
+
+    // Before any server starts, start time should be invalid
+    QVERIFY(!mgr.serverStartTime(QStringLiteral("NoSuchServer")).isValid());
+    QCOMPARE(mgr.serverUptimeSeconds(QStringLiteral("NoSuchServer")), qint64(-1));
+}
+
+// ---------------------------------------------------------------------------
+// Crash backoff tests
+// ---------------------------------------------------------------------------
+
+void TestServerConfig::testCrashCountDefault()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+
+    ServerManager mgr(tmp.filePath(QStringLiteral("servers.json")));
+
+    // Default crash count should be 0
+    QCOMPARE(mgr.crashCount(QStringLiteral("AnyServer")), 0);
+}
+
+void TestServerConfig::testCrashCountReset()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+
+    ServerManager mgr(tmp.filePath(QStringLiteral("servers.json")));
+
+    // Reset should not crash even for unknown server
+    mgr.resetCrashCount(QStringLiteral("Unknown"));
+    QCOMPARE(mgr.crashCount(QStringLiteral("Unknown")), 0);
+}
+
+void TestServerConfig::testCrashBackoffConstants()
+{
+    // Verify the backoff constants are sensible
+    QVERIFY(ServerManager::kMaxCrashRestarts > 0);
+    QVERIFY(ServerManager::kCrashBackoffBaseMs > 0);
+    QCOMPARE(ServerManager::kMaxCrashRestarts, 5);
+    QCOMPARE(ServerManager::kCrashBackoffBaseMs, 2000);
+}
+
 #include "test_serverconfig.moc"

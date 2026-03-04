@@ -4,6 +4,7 @@
 #include "SchedulerModule.hpp"
 #include "LogModule.hpp"
 #include "TrayManager.hpp"
+#include "GameTemplates.hpp"
 
 #include <QHBoxLayout>
 #include <QVBoxLayout>
@@ -165,26 +166,53 @@ void MainWindow::onAddServer()
 {
     bool ok = false;
 
+    // Step 1: Let the user pick a game template
+    QList<GameTemplate> templates = GameTemplate::builtinTemplates();
+    QStringList templateNames;
+    for (const GameTemplate &t : std::as_const(templates))
+        templateNames << t.displayName;
+
+    QString chosen = QInputDialog::getItem(
+        this, tr("Add Server"), tr("Select game type:"),
+        templateNames, 0, false, &ok);
+    if (!ok) return;
+
+    // Find the selected template
+    GameTemplate tmpl;
+    for (const GameTemplate &t : std::as_const(templates)) {
+        if (t.displayName == chosen) { tmpl = t; break; }
+    }
+
+    // Step 2: Server name
     QString name = QInputDialog::getText(
         this, tr("Add Server"), tr("Server Name:"),
         QLineEdit::Normal, QString(), &ok);
     if (!ok || name.trimmed().isEmpty()) return;
     name = name.trimmed();
 
+    // Step 3: AppID (pre-filled from template)
     int appid = QInputDialog::getInt(
         this, tr("Add Server"), tr("Steam AppID:"),
-        0, 0, INT_MAX, 1, &ok);
+        tmpl.appid, 0, INT_MAX, 1, &ok);
     if (!ok) return;
 
+    // Step 4: Install directory
     QString dir = QFileDialog::getExistingDirectory(
         this, tr("Select Installation Directory"));
     if (dir.isEmpty()) return;
 
+    // Step 5: Executable (pre-filled from template)
     QString exe = QInputDialog::getText(
         this, tr("Add Server"),
         tr("Server executable (relative to install dir, e.g. ShooterGameServer.exe):"),
-        QLineEdit::Normal, QString(), &ok);
+        QLineEdit::Normal, tmpl.executable, &ok);
     if (!ok) return;
+
+    // Step 6: Launch args (pre-filled from template)
+    QString launchArgs = QInputDialog::getText(
+        this, tr("Add Server"), tr("Launch arguments:"),
+        QLineEdit::Normal, tmpl.defaultArgs, &ok);
+    if (!ok) launchArgs.clear();
 
     // RCON settings (optional – user can skip)
     QString rconHost = QInputDialog::getText(
@@ -206,6 +234,7 @@ void MainWindow::onAddServer()
     s.appid        = appid;
     s.dir          = dir;
     s.executable   = exe;
+    s.launchArgs   = launchArgs;
     s.backupFolder = dir + QStringLiteral("/Backups");
     s.rcon.host    = rconHost;
     s.rcon.port    = rconPort;

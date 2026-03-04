@@ -10,6 +10,7 @@
 #include <QJsonObject>
 #include <QSet>
 #include <QDebug>
+#include <QTimer>
 
 // ---------------------------------------------------------------------------
 // Constructor / config I/O
@@ -165,6 +166,9 @@ void ServerManager::startServer(ServerConfig &server)
         updateMods(server);
     }
 
+    // Reset crash counter on a fresh manual start
+    m_crashCounts.remove(server.name);
+
     QString exe = server.dir + QDir::separator() + server.executable;
     auto *proc  = new QProcess(this);
     connect(proc, &QProcess::readyReadStandardOutput, this, [this, &server, proc]() {
@@ -192,6 +196,7 @@ void ServerManager::startServer(ServerConfig &server)
     if (proc->waitForStarted(5000)) {
         m_processes[server.name] = proc;
         m_crashConns[server.name] = conn;
+        m_startTimes[server.name] = QDateTime::currentDateTime();
         emit logMessage(server.name, QStringLiteral("Server started (PID %1).").arg(proc->processId()));
     } else {
         emit logMessage(server.name, QStringLiteral("Failed to start server: ") + proc->errorString());
@@ -218,6 +223,8 @@ void ServerManager::stopServer(ServerConfig &server)
     if (!proc->waitForFinished(10000))
         proc->kill();
     m_processes.remove(server.name);
+    m_startTimes.remove(server.name);
+    m_crashCounts.remove(server.name);
     proc->deleteLater();
     emit logMessage(server.name, QStringLiteral("Server stopped."));
 }
@@ -249,21 +256,42 @@ void ServerManager::onProcessFinished(const QString &serverName, int exitCode,
         proc->deleteLater();
     }
     m_crashConns.remove(serverName);
+    m_startTimes.remove(serverName);
 
     if (exitStatus == QProcess::CrashExit) {
-        emit logMessage(serverName,
-                        QStringLiteral("Server crashed (exit code %1). Attempting auto-restart…")
-                            .arg(exitCode));
+        int crashes = m_crashCounts.value(serverName, 0) + 1;
+        m_crashCounts[serverName] = crashes;
+
         emit serverCrashed(serverName);
 
-        // Find the server config and restart
-        for (ServerConfig &s : m_servers) {
-            if (s.name == serverName) {
-                startServer(s);
-                break;
-            }
+        if (crashes > kMaxCrashRestarts) {
+            emit logMessage(serverName,
+                            QStringLiteral("Server crashed %1 times consecutively. "
+                                           "Auto-restart disabled until manual start.")
+                                .arg(crashes));
+            return;
         }
+
+        int delayMs = kCrashBackoffBaseMs * (1 << (crashes - 1));  // exponential backoff
+        emit logMessage(serverName,
+                        QStringLiteral("Server crashed (exit code %1, attempt %2/%3). "
+                                       "Auto-restarting in %4 s…")
+                            .arg(exitCode)
+                            .arg(crashes)
+                            .arg(kMaxCrashRestarts)
+                            .arg(delayMs / 1000));
+
+        // Find the server config and restart after delay
+        QTimer::singleShot(delayMs, this, [this, serverName]() {
+            for (ServerConfig &s : m_servers) {
+                if (s.name == serverName) {
+                    startServer(s);
+                    break;
+                }
+            }
+        });
     } else {
+        m_crashCounts.remove(serverName);
         emit logMessage(serverName, QStringLiteral("Server exited normally."));
     }
 }
@@ -505,4 +533,35 @@ QString ServerManager::importServerConfig(const QString &filePath)
 
     emit logMessage(s.name, QStringLiteral("Server imported from file."));
     return QString();
+}
+
+// ---------------------------------------------------------------------------
+// Uptime tracking
+// ---------------------------------------------------------------------------
+
+QDateTime ServerManager::serverStartTime(const QString &serverName) const
+{
+    return m_startTimes.value(serverName, QDateTime());
+}
+
+qint64 ServerManager::serverUptimeSeconds(const QString &serverName) const
+{
+    auto it = m_startTimes.constFind(serverName);
+    if (it == m_startTimes.constEnd() || !it->isValid())
+        return -1;
+    return it->secsTo(QDateTime::currentDateTime());
+}
+
+// ---------------------------------------------------------------------------
+// Crash backoff helpers
+// ---------------------------------------------------------------------------
+
+int ServerManager::crashCount(const QString &serverName) const
+{
+    return m_crashCounts.value(serverName, 0);
+}
+
+void ServerManager::resetCrashCount(const QString &serverName)
+{
+    m_crashCounts.remove(serverName);
 }

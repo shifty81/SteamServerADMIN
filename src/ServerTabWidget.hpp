@@ -13,11 +13,11 @@
  * @brief Per-server tabbed widget.
  *
  * Sub-tabs:
- *   Overview  – status light, quick actions (start/stop/restart/deploy)
+ *   Overview  – status light, quick actions (start/stop/restart/deploy), uptime
  *   Config    – text editor for the primary config file
  *   Mods      – mod list with add/remove/update
  *   Backups   – snapshot list with take/restore actions
- *   Console   – live RCON command console
+ *   Console   – live RCON command console with command history
  */
 class ServerTabWidget : public QWidget {
     Q_OBJECT
@@ -30,6 +30,9 @@ public:
 
     /** Update the status-light label in the Overview tab. */
     void refreshStatus();
+
+protected:
+    bool eventFilter(QObject *obj, QEvent *event) override;
 
 private slots:
     void onSendCommand();
@@ -58,6 +61,7 @@ private:
     // Overview
     QLabel  *m_statusLight  = nullptr;
     QLabel  *m_playersLabel = nullptr;
+    QLabel  *m_uptimeLabel  = nullptr;
 
     // Config
     QTextEdit *m_configEditor = nullptr;
@@ -72,6 +76,10 @@ private:
     // Console
     QTextEdit *m_consoleOutput = nullptr;
     QWidget   *m_consoleInput  = nullptr;   // QLineEdit stored via cast
+
+    // RCON command history
+    QStringList m_commandHistory;
+    int         m_historyIndex = -1;
 
     QTimer *m_statusTimer = nullptr;
 };
