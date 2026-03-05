@@ -45,7 +45,6 @@ private slots:
     void onSaveConfig();
     void onRevertConfig();
     void onDeployServer();
-    void onSaveNotes();
 
 private:
     void buildOverviewTab(QTabWidget *tabs);

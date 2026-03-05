@@ -457,12 +457,6 @@ void ServerTabWidget::onRevertConfig()
     appendConsole(tr("[SSA] Config reverted to last saved version."));
 }
 
-void ServerTabWidget::onSaveNotes()
-{
-    m_manager->saveConfig();
-    appendConsole(tr("[SSA] Notes saved."));
-}
-
 void ServerTabWidget::onDeployServer()
 {
     auto reply = QMessageBox::question(
@@ -611,15 +605,8 @@ void ServerTabWidget::populateBackupList()
 
 void ServerTabWidget::persistModOrder()
 {
-    // Read the current visual order from the table and update the server config
-    QList<int> newOrder;
-    for (int row = 0; row < m_modTable->rowCount(); ++row) {
-        // Respect the visual order (which may differ from logical due to drag)
-        int visualRow = m_modTable->verticalHeader()->visualIndex(row);
-        Q_UNUSED(visualRow);
-    }
-
     // Build the new order using the visual positions
+    QList<int> newOrder;
     QVector<QPair<int, int>> visualRows;   // (visualIndex, modId)
     for (int logicalRow = 0; logicalRow < m_modTable->rowCount(); ++logicalRow) {
         int vis = m_modTable->verticalHeader()->visualIndex(logicalRow);
