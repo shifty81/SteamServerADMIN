@@ -59,6 +59,7 @@ private:
     void populateBackupList();
     void persistModOrder();
     void refreshLogViewer();
+    QString computeDiff(const QString &original, const QString &modified) const;
 
     ServerManager *m_manager;
     ServerConfig  &m_server;

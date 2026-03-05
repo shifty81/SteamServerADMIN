@@ -14,10 +14,15 @@
     "disabledMods": [],
     "backupFolder": "C:/Servers/Backups/ark_cluster1",
     "notes": "",
+    "discordWebhookUrl": "",
     "autoUpdate": true,
+    "autoStartOnLaunch": false,
+    "favorite": false,
     "keepBackups": 10,
     "backupIntervalMinutes": 30,
-    "restartIntervalHours": 24
+    "restartIntervalHours": 24,
+    "scheduledRconCommands": [],
+    "rconCommandIntervalMinutes": 0
   },
   {
     "name": "CS2 Server",
@@ -34,9 +39,14 @@
     "disabledMods": [],
     "backupFolder": "C:/Servers/Backups/cs2",
     "notes": "",
+    "discordWebhookUrl": "",
     "autoUpdate": true,
+    "autoStartOnLaunch": false,
+    "favorite": false,
     "keepBackups": 10,
     "backupIntervalMinutes": 60,
-    "restartIntervalHours": 48
+    "restartIntervalHours": 48,
+    "scheduledRconCommands": [],
+    "rconCommandIntervalMinutes": 0
   }
 ]

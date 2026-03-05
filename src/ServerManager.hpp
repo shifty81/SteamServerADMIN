@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ServerConfig.hpp"
+#include "WebhookModule.hpp"
 
 #include <QObject>
 #include <QList>
@@ -42,6 +43,9 @@ public:
     void stopServer(ServerConfig &server);
     void restartServer(ServerConfig &server);
     bool isServerRunning(const ServerConfig &server) const;
+
+    /** Start all servers that have autoStartOnLaunch enabled. */
+    void autoStartServers();
 
     // ---- SteamCMD ----
     void deployServer(ServerConfig &server);
@@ -118,4 +122,6 @@ private:
     QMap<QString, int> m_crashCounts;
 
     QProcess *processFor(const ServerConfig &server) const;
+
+    WebhookModule *m_webhook;
 };

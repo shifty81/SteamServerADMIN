@@ -40,11 +40,13 @@ public:
 signals:
     void scheduledBackup(const QString &serverName);
     void scheduledRestart(const QString &serverName);
+    void scheduledRconCommand(const QString &serverName);
 
 private:
     struct Timers {
         QTimer *backupTimer  = nullptr;
         QTimer *restartTimer = nullptr;
+        QTimer *rconTimer    = nullptr;
     };
 
     ServerManager *m_manager;

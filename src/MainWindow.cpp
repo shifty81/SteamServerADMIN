@@ -124,6 +124,9 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     m_scheduler = new SchedulerModule(m_manager, this);
     m_scheduler->startAll();
 
+    // Auto-start servers that have autoStartOnLaunch enabled
+    m_manager->autoStartServers();
+
     // ---- Connections ----
     connect(addBtn,       &QPushButton::clicked, this, &MainWindow::onAddServer);
     connect(cloneBtn,     &QPushButton::clicked, this, &MainWindow::onCloneServer);
@@ -136,6 +139,19 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     connect(m_searchBox, &QLineEdit::textChanged, this, &MainWindow::onSearchChanged);
     connect(m_serverList, &QListWidget::itemClicked,
             this, &MainWindow::onServerListItemClicked);
+    connect(m_serverList, &QListWidget::itemDoubleClicked,
+            this, [this](QListWidgetItem *item) {
+                if (!item) return;
+                QString name = item->data(Qt::UserRole).toString();
+                for (ServerConfig &s : m_manager->servers()) {
+                    if (s.name == name) {
+                        s.favorite = !s.favorite;
+                        m_manager->saveConfig();
+                        rebuildSidebarList();
+                        break;
+                    }
+                }
+            });
 
     // Periodic tab-status update (every 5 seconds)
     auto *tabStatusTimer = new QTimer(this);
@@ -154,8 +170,23 @@ void MainWindow::addServerTab(ServerConfig &server)
 void MainWindow::rebuildSidebarList()
 {
     m_serverList->clear();
+
+    // Build a sorted list: favorites first, then alphabetical within each group
+    QList<const ServerConfig *> sorted;
     for (const ServerConfig &s : m_manager->servers())
-        m_serverList->addItem(s.name);
+        sorted << &s;
+    std::stable_sort(sorted.begin(), sorted.end(),
+                     [](const ServerConfig *a, const ServerConfig *b) {
+                         if (a->favorite != b->favorite)
+                             return a->favorite > b->favorite;
+                         return a->name.compare(b->name, Qt::CaseInsensitive) < 0;
+                     });
+
+    for (const ServerConfig *s : std::as_const(sorted)) {
+        QString label = s->favorite ? QStringLiteral("⭐ %1").arg(s->name) : s->name;
+        auto *item = new QListWidgetItem(label, m_serverList);
+        item->setData(Qt::UserRole, s->name);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -292,14 +323,15 @@ void MainWindow::onSearchChanged(const QString &text)
 {
     for (int i = 0; i < m_serverList->count(); ++i) {
         QListWidgetItem *item = m_serverList->item(i);
-        item->setHidden(!item->text().contains(text, Qt::CaseInsensitive));
+        QString name = item->data(Qt::UserRole).toString();
+        item->setHidden(!name.contains(text, Qt::CaseInsensitive));
     }
 }
 
 void MainWindow::onServerListItemClicked(QListWidgetItem *item)
 {
     if (!item) return;
-    QString name = item->text();
+    QString name = item->data(Qt::UserRole).toString();
     // Find matching tab (skip index 0 = Home Dashboard)
     for (int i = 1; i < m_tabs->count(); ++i) {
         auto *stw = qobject_cast<ServerTabWidget *>(m_tabs->widget(i));

@@ -95,6 +95,28 @@ private slots:
 
     // ---- Update rollback tests ----
     void testUpdateModsReturnsBool();
+
+    // ---- Discord webhook field tests ----
+    void testDiscordWebhookUrlPersistence();
+    void testDiscordWebhookUrlDefaultEmpty();
+    void testDiscordWebhookUrlExportImport();
+
+    // ---- Auto-start on launch tests ----
+    void testAutoStartOnLaunchPersistence();
+    void testAutoStartOnLaunchDefaultFalse();
+    void testAutoStartServersMethod();
+
+    // ---- Scheduled RCON commands tests ----
+    void testScheduledRconCommandsPersistence();
+    void testScheduledRconCommandsDefaultEmpty();
+    void testRconCommandIntervalValidation();
+    void testSchedulerRconTimer();
+    void testValidateRconIntervalNegative();
+
+    // ---- Favorite servers tests ----
+    void testFavoritePersistence();
+    void testFavoriteDefaultFalse();
+    void testFavoriteExportImport();
 };
 
 void TestServerConfig::testSaveAndLoad()
@@ -1187,6 +1209,287 @@ void TestServerConfig::testUpdateModsReturnsBool()
     // fail gracefully and return false
     bool result = mgr.updateMods(mgr.servers()[0]);
     QVERIFY(!result);  // Expected to fail since steamcmd is not available
+}
+
+// ---------------------------------------------------------------------------
+// Discord webhook URL field tests
+// ---------------------------------------------------------------------------
+
+void TestServerConfig::testDiscordWebhookUrlPersistence()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    ServerManager mgr(configPath);
+
+    ServerConfig s;
+    s.name  = QStringLiteral("WebhookServer");
+    s.appid = 730;
+    s.dir   = QStringLiteral("/srv/webhook");
+    s.discordWebhookUrl = QStringLiteral("https://discord.com/api/webhooks/123/abc");
+    mgr.servers() << s;
+    QVERIFY(mgr.saveConfig());
+
+    // Reload and verify
+    ServerManager mgr2(configPath);
+    QVERIFY(mgr2.loadConfig());
+    QCOMPARE(mgr2.servers().size(), 1);
+    QCOMPARE(mgr2.servers().first().discordWebhookUrl,
+             QStringLiteral("https://discord.com/api/webhooks/123/abc"));
+}
+
+void TestServerConfig::testDiscordWebhookUrlDefaultEmpty()
+{
+    ServerConfig s;
+    QVERIFY(s.discordWebhookUrl.isEmpty());
+}
+
+void TestServerConfig::testDiscordWebhookUrlExportImport()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+
+    ServerManager mgr1(tmp.filePath(QStringLiteral("servers1.json")));
+    ServerConfig s;
+    s.name  = QStringLiteral("WebhookExport");
+    s.appid = 730;
+    s.dir   = QStringLiteral("/srv/webhook");
+    s.discordWebhookUrl = QStringLiteral("https://discord.com/api/webhooks/456/def");
+    mgr1.servers() << s;
+
+    QString exportPath = tmp.filePath(QStringLiteral("exported.json"));
+    QVERIFY(mgr1.exportServerConfig(QStringLiteral("WebhookExport"), exportPath));
+
+    ServerManager mgr2(tmp.filePath(QStringLiteral("servers2.json")));
+    QString error = mgr2.importServerConfig(exportPath);
+    QVERIFY2(error.isEmpty(), qPrintable(QStringLiteral("Import failed: ") + error));
+
+    QCOMPARE(mgr2.servers().size(), 1);
+    QCOMPARE(mgr2.servers().first().discordWebhookUrl,
+             QStringLiteral("https://discord.com/api/webhooks/456/def"));
+}
+
+// ---------------------------------------------------------------------------
+// Auto-start on launch tests
+// ---------------------------------------------------------------------------
+
+void TestServerConfig::testAutoStartOnLaunchPersistence()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    ServerManager mgr(configPath);
+
+    ServerConfig s;
+    s.name  = QStringLiteral("AutoStartServer");
+    s.appid = 730;
+    s.dir   = QStringLiteral("/srv/autostart");
+    s.autoStartOnLaunch = true;
+    mgr.servers() << s;
+    QVERIFY(mgr.saveConfig());
+
+    ServerManager mgr2(configPath);
+    QVERIFY(mgr2.loadConfig());
+    QCOMPARE(mgr2.servers().size(), 1);
+    QCOMPARE(mgr2.servers().first().autoStartOnLaunch, true);
+}
+
+void TestServerConfig::testAutoStartOnLaunchDefaultFalse()
+{
+    ServerConfig s;
+    QCOMPARE(s.autoStartOnLaunch, false);
+}
+
+void TestServerConfig::testAutoStartServersMethod()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+
+    ServerManager mgr(tmp.filePath(QStringLiteral("servers.json")));
+
+    ServerConfig s1;
+    s1.name  = QStringLiteral("Server1");
+    s1.appid = 730;
+    s1.dir   = QStringLiteral("/srv/s1");
+    s1.autoStartOnLaunch = true;
+
+    ServerConfig s2;
+    s2.name  = QStringLiteral("Server2");
+    s2.appid = 730;
+    s2.dir   = QStringLiteral("/srv/s2");
+    s2.autoStartOnLaunch = false;
+
+    mgr.servers() << s1 << s2;
+
+    // autoStartServers should not crash even when executables don't exist
+    mgr.autoStartServers();
+
+    // Server1 should have had a start attempt (won't actually run, but
+    // autoStartServers should gracefully handle missing executables)
+    QVERIFY(!mgr.isServerRunning(mgr.servers()[0]));
+    QVERIFY(!mgr.isServerRunning(mgr.servers()[1]));
+}
+
+// ---------------------------------------------------------------------------
+// Scheduled RCON commands tests
+// ---------------------------------------------------------------------------
+
+void TestServerConfig::testScheduledRconCommandsPersistence()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    ServerManager mgr(configPath);
+
+    ServerConfig s;
+    s.name  = QStringLiteral("RconCmdServer");
+    s.appid = 730;
+    s.dir   = QStringLiteral("/srv/rconcmd");
+    s.scheduledRconCommands = { QStringLiteral("say Hello"), QStringLiteral("status") };
+    s.rconCommandIntervalMinutes = 15;
+    mgr.servers() << s;
+    QVERIFY(mgr.saveConfig());
+
+    ServerManager mgr2(configPath);
+    QVERIFY(mgr2.loadConfig());
+    QCOMPARE(mgr2.servers().size(), 1);
+    QCOMPARE(mgr2.servers().first().scheduledRconCommands,
+             QStringList({ QStringLiteral("say Hello"), QStringLiteral("status") }));
+    QCOMPARE(mgr2.servers().first().rconCommandIntervalMinutes, 15);
+}
+
+void TestServerConfig::testScheduledRconCommandsDefaultEmpty()
+{
+    ServerConfig s;
+    QVERIFY(s.scheduledRconCommands.isEmpty());
+    QCOMPARE(s.rconCommandIntervalMinutes, 0);
+}
+
+void TestServerConfig::testRconCommandIntervalValidation()
+{
+    ServerConfig s;
+    s.name  = QStringLiteral("ValidServer");
+    s.appid = 730;
+    s.dir   = QStringLiteral("/srv/valid");
+
+    // Valid interval
+    s.rconCommandIntervalMinutes = 10;
+    QVERIFY(s.validate().isEmpty());
+
+    // Zero is valid (disabled)
+    s.rconCommandIntervalMinutes = 0;
+    QVERIFY(s.validate().isEmpty());
+
+    // Negative is invalid
+    s.rconCommandIntervalMinutes = -5;
+    QVERIFY(!s.validate().isEmpty());
+    QVERIFY(s.validate().first().contains(QStringLiteral("RCON command interval")));
+}
+
+void TestServerConfig::testSchedulerRconTimer()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+
+    ServerManager mgr(tmp.filePath(QStringLiteral("servers.json")));
+    ServerConfig s;
+    s.name = QStringLiteral("RconTimerServer");
+    s.appid = 730;
+    s.dir = tmp.path();
+    s.rconCommandIntervalMinutes = 5;
+    s.scheduledRconCommands = { QStringLiteral("status") };
+    mgr.servers() << s;
+
+    SchedulerModule scheduler(&mgr);
+
+    // Start and stop should work without crashes
+    scheduler.startScheduler(QStringLiteral("RconTimerServer"));
+    scheduler.stopScheduler(QStringLiteral("RconTimerServer"));
+
+    // startAll / stopAll should also work
+    scheduler.startAll();
+    scheduler.stopAll();
+}
+
+// ---------------------------------------------------------------------------
+// Favorite servers tests
+// ---------------------------------------------------------------------------
+
+void TestServerConfig::testFavoritePersistence()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    ServerManager mgr(configPath);
+
+    ServerConfig s;
+    s.name  = QStringLiteral("FavServer");
+    s.appid = 730;
+    s.dir   = QStringLiteral("/srv/fav");
+    s.favorite = true;
+    mgr.servers() << s;
+    QVERIFY(mgr.saveConfig());
+
+    ServerManager mgr2(configPath);
+    QVERIFY(mgr2.loadConfig());
+    QCOMPARE(mgr2.servers().size(), 1);
+    QCOMPARE(mgr2.servers().first().favorite, true);
+}
+
+void TestServerConfig::testFavoriteDefaultFalse()
+{
+    ServerConfig s;
+    QCOMPARE(s.favorite, false);
+}
+
+void TestServerConfig::testFavoriteExportImport()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+
+    ServerManager mgr1(tmp.filePath(QStringLiteral("servers1.json")));
+    ServerConfig s;
+    s.name  = QStringLiteral("FavExport");
+    s.appid = 730;
+    s.dir   = QStringLiteral("/srv/fav");
+    s.favorite = true;
+    mgr1.servers() << s;
+
+    QString exportPath = tmp.filePath(QStringLiteral("exported.json"));
+    QVERIFY(mgr1.exportServerConfig(QStringLiteral("FavExport"), exportPath));
+
+    ServerManager mgr2(tmp.filePath(QStringLiteral("servers2.json")));
+    QString error = mgr2.importServerConfig(exportPath);
+    QVERIFY2(error.isEmpty(), qPrintable(QStringLiteral("Import failed: ") + error));
+
+    QCOMPARE(mgr2.servers().size(), 1);
+    QCOMPARE(mgr2.servers().first().favorite, true);
+}
+
+// ---------------------------------------------------------------------------
+// Validation: RCON command interval
+// ---------------------------------------------------------------------------
+
+void TestServerConfig::testValidateRconIntervalNegative()
+{
+    ServerConfig s;
+    s.name  = QStringLiteral("IntervalTest");
+    s.appid = 730;
+    s.dir   = QStringLiteral("/srv/interval");
+    s.rconCommandIntervalMinutes = -1;
+
+    QStringList errors = s.validate();
+    QVERIFY(!errors.isEmpty());
+    bool found = false;
+    for (const QString &e : errors) {
+        if (e.contains(QStringLiteral("RCON command interval")))
+            found = true;
+    }
+    QVERIFY(found);
 }
 
 #include "test_serverconfig.moc"

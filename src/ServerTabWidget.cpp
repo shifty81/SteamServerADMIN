@@ -20,6 +20,7 @@
 #include <QScrollBar>
 #include <QGroupBox>
 #include <QKeyEvent>
+#include <QCheckBox>
 
 // ---------------------------------------------------------------------------
 
@@ -110,6 +111,18 @@ void ServerTabWidget::buildOverviewTab(QTabWidget *tabs)
     auto *saveNotesBtn = new QPushButton(tr("Save Notes"), notesBox);
     notesLayout->addWidget(saveNotesBtn);
     layout->addWidget(notesBox);
+
+    // Auto-start on launch checkbox
+    auto *autoStartCheck = new QCheckBox(tr("Auto-start on launch"), w);
+    autoStartCheck->setChecked(m_server.autoStartOnLaunch);
+    layout->addWidget(autoStartCheck);
+
+    connect(autoStartCheck, &QCheckBox::toggled, this, [this](bool checked) {
+        m_server.autoStartOnLaunch = checked;
+        m_manager->saveConfig();
+        appendConsole(checked ? tr("[SSA] Auto-start on launch enabled.")
+                              : tr("[SSA] Auto-start on launch disabled."));
+    });
 
     connect(saveNotesBtn, &QPushButton::clicked, this, [this, notesEdit]() {
         m_server.notes = notesEdit->toPlainText();
@@ -429,6 +442,19 @@ void ServerTabWidget::onRestoreSnapshot()
 
 void ServerTabWidget::onSaveConfig()
 {
+    QString content = m_configEditor->toPlainText();
+
+    // Show diff preview if content has changed
+    if (content != m_originalConfigContent) {
+        QString diff = computeDiff(m_originalConfigContent, content);
+        auto reply = QMessageBox::question(
+            this, tr("Save Config – Changes Detected"),
+            tr("The following changes will be saved:\n\n%1\n\nProceed?").arg(diff),
+            QMessageBox::Yes | QMessageBox::No);
+        if (reply != QMessageBox::Yes)
+            return;
+    }
+
     QDir().mkpath(QFileInfo(m_configPath).absolutePath());
     QFile f(m_configPath);
     if (!f.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
@@ -436,7 +462,6 @@ void ServerTabWidget::onSaveConfig()
                              tr("Cannot write to:\n%1").arg(m_configPath));
         return;
     }
-    QString content = m_configEditor->toPlainText();
     f.write(content.toUtf8());
     m_originalConfigContent = content;   // update baseline after save
     appendConsole(tr("[SSA] Config saved: ") + m_configPath);
@@ -652,4 +677,27 @@ void ServerTabWidget::refreshLogViewer()
     // Scroll to bottom
     m_logViewer->verticalScrollBar()->setValue(
         m_logViewer->verticalScrollBar()->maximum());
+}
+
+QString ServerTabWidget::computeDiff(const QString &original, const QString &modified) const
+{
+    QStringList oldLines = original.split(QLatin1Char('\n'));
+    QStringList newLines = modified.split(QLatin1Char('\n'));
+
+    QStringList diff;
+    int maxLines = qMax(oldLines.size(), newLines.size());
+    for (int i = 0; i < maxLines; ++i) {
+        QString oldLine = (i < oldLines.size()) ? oldLines.at(i) : QString();
+        QString newLine = (i < newLines.size()) ? newLines.at(i) : QString();
+
+        if (oldLine == newLine)
+            continue;
+
+        if (i < oldLines.size())
+            diff << QStringLiteral("- %1").arg(oldLine);
+        if (i < newLines.size())
+            diff << QStringLiteral("+ %1").arg(newLine);
+    }
+
+    return diff.isEmpty() ? QStringLiteral("(no changes)") : diff.join(QLatin1Char('\n'));
 }

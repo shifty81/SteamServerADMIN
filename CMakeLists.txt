@@ -51,6 +51,8 @@ set(APP_SOURCES
     src/LogModule.hpp
     src/TrayManager.cpp
     src/TrayManager.hpp
+    src/WebhookModule.cpp
+    src/WebhookModule.hpp
 )
 
 qt_add_executable(SSA ${APP_SOURCES})
@@ -83,6 +85,8 @@ if(Qt6Test_FOUND)
         src/SchedulerModule.hpp
         src/LogModule.cpp
         src/LogModule.hpp
+        src/WebhookModule.cpp
+        src/WebhookModule.hpp
     )
 
     target_link_libraries(SSA_Tests PRIVATE

@@ -37,10 +37,12 @@ void SchedulerModule::startScheduler(const QString &serverName)
     // Find the server config and copy the interval values
     int backupMinutes = 0;
     int restartHours  = 0;
+    int rconMinutes   = 0;
     for (const ServerConfig &s : m_manager->servers()) {
         if (s.name == serverName) {
             backupMinutes = s.backupIntervalMinutes;
             restartHours  = s.restartIntervalHours;
+            rconMinutes   = s.rconCommandIntervalMinutes;
             break;
         }
     }
@@ -87,6 +89,19 @@ void SchedulerModule::startScheduler(const QString &serverName)
         t.restartTimer->start(restartHours * 60 * 60 * 1000);
     }
 
+    // --- Scheduled RCON command timer ---
+    if (rconMinutes > 0) {
+        t.rconTimer = new QTimer(this);
+        t.rconTimer->setTimerType(Qt::VeryCoarseTimer);
+
+        QString name = serverName;
+        connect(t.rconTimer, &QTimer::timeout, this, [this, name]() {
+            emit scheduledRconCommand(name);
+        });
+
+        t.rconTimer->start(rconMinutes * 60 * 1000);
+    }
+
     m_timers[serverName] = t;
 }
 
@@ -103,6 +118,10 @@ void SchedulerModule::stopScheduler(const QString &serverName)
     if (it->restartTimer) {
         it->restartTimer->stop();
         it->restartTimer->deleteLater();
+    }
+    if (it->rconTimer) {
+        it->rconTimer->stop();
+        it->rconTimer->deleteLater();
     }
 
     m_timers.erase(it);

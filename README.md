@@ -47,6 +47,11 @@ A cross-platform Qt6 desktop application for managing SteamCMD-based game server
 | **Drag & drop mod ordering** | Reorder mods by dragging rows in the Mods tab; saved order controls load priority |
 | **Mod update rollback** | Automatic rollback to the pre-update snapshot when a mod update via SteamCMD fails |
 | **Server log viewer** | Dedicated Logs tab per server that displays and tails the server log file |
+| **Discord webhook notifications** | Receive Discord notifications on server start/stop, crashes, and backup completions via configurable webhook URL |
+| **Auto-start on launch** | Servers with `autoStartOnLaunch` enabled start automatically when the SSA application opens |
+| **Scheduled RCON commands** | Run configured RCON commands at a repeating interval (e.g. broadcast messages, auto-save) |
+| **Config diff preview** | Before saving config editor changes, a diff dialog shows exactly what lines were added or removed |
+| **Favorite / pinned servers** | Mark servers as favorites (⭐); favorites sort to the top of the sidebar; double-click to toggle |
 
 ---
 
@@ -136,10 +141,15 @@ See `servers.json` in the repository root for an example configuration.
     "disabledMods": [],
     "backupFolder": "/srv/backups/ark_cluster1",
     "notes": "",
+    "discordWebhookUrl": "",
     "autoUpdate": true,
+    "autoStartOnLaunch": false,
+    "favorite": false,
     "keepBackups": 10,
     "backupIntervalMinutes": 30,
-    "restartIntervalHours": 24
+    "restartIntervalHours": 24,
+    "scheduledRconCommands": [],
+    "rconCommandIntervalMinutes": 0
   }
 ]
 ```
@@ -163,9 +173,10 @@ SSA/
 │   ├── BackupModule.*        # Versioned zip snapshots
 │   ├── SteamCmdModule.*      # SteamCMD wrapper
 │   ├── RconClient.*          # Source RCON protocol (TCP)
-│   ├── SchedulerModule.*     # Scheduled backups & restarts
+│   ├── SchedulerModule.*     # Scheduled backups, restarts & RCON commands
 │   ├── LogModule.*           # Centralized operation logging
-│   └── TrayManager.*         # System tray icon & notifications
+│   ├── TrayManager.*         # System tray icon & notifications
+│   └── WebhookModule.*       # Discord webhook event notifications
 ├── tests/
 │   └── test_serverconfig.cpp # Qt Test unit tests
 ├── CMakeLists.txt
