@@ -52,6 +52,7 @@ bool ServerManager::loadConfig()
         s.executable     = obj[QStringLiteral("executable")].toString();
         s.launchArgs     = obj[QStringLiteral("launchArgs")].toString();
         s.backupFolder   = obj[QStringLiteral("backupFolder")].toString();
+        s.notes          = obj[QStringLiteral("notes")].toString();
         s.autoUpdate     = obj[QStringLiteral("autoUpdate")].toBool(true);
         s.keepBackups    = obj[QStringLiteral("keepBackups")].toInt(10);
         s.backupIntervalMinutes  = obj[QStringLiteral("backupIntervalMinutes")].toInt(30);
@@ -115,6 +116,7 @@ bool ServerManager::saveConfig() const
         obj[QStringLiteral("executable")]    = s.executable;
         obj[QStringLiteral("launchArgs")]    = s.launchArgs;
         obj[QStringLiteral("backupFolder")]  = s.backupFolder;
+        obj[QStringLiteral("notes")]         = s.notes;
         obj[QStringLiteral("autoUpdate")]    = s.autoUpdate;
         obj[QStringLiteral("keepBackups")]   = s.keepBackups;
         obj[QStringLiteral("backupIntervalMinutes")] = s.backupIntervalMinutes;
@@ -311,11 +313,11 @@ void ServerManager::deployServer(ServerConfig &server)
     steamCmd.deployServer(server);
 }
 
-void ServerManager::updateMods(ServerConfig &server)
+bool ServerManager::updateMods(ServerConfig &server)
 {
     // Take a snapshot before updating mods so we can roll back if needed
     emit logMessage(server.name, QStringLiteral("Taking pre-update snapshot…"));
-    takeSnapshot(server);
+    QString snapshotTs = takeSnapshot(server);
 
     emit logMessage(server.name, QStringLiteral("Updating mods…"));
     SteamCmdModule steamCmd;
@@ -323,7 +325,24 @@ void ServerManager::updateMods(ServerConfig &server)
     connect(&steamCmd, &SteamCmdModule::outputLine, this, [this, &server](const QString &line) {
         emit logMessage(server.name, line);
     });
-    steamCmd.updateMods(server);
+    bool ok = steamCmd.updateMods(server);
+
+    if (!ok && !snapshotTs.isEmpty()) {
+        emit logMessage(server.name, QStringLiteral("Mod update failed – rolling back to pre-update snapshot…"));
+        // Find the mods snapshot from the pre-update timestamp and restore it
+        QStringList snapshots = listSnapshots(server);
+        for (const QString &snap : std::as_const(snapshots)) {
+            if (snap.contains(snapshotTs) && snap.endsWith(QStringLiteral("_mods.zip"))) {
+                restoreSnapshot(snap, server);
+                break;
+            }
+        }
+        emit logMessage(server.name, QStringLiteral("Rollback complete."));
+    } else if (!ok) {
+        emit logMessage(server.name, QStringLiteral("Mod update failed and no snapshot available for rollback."));
+    }
+
+    return ok;
 }
 
 // ---------------------------------------------------------------------------
@@ -461,6 +480,7 @@ bool ServerManager::exportServerConfig(const QString &serverName,
     obj[QStringLiteral("executable")]    = s.executable;
     obj[QStringLiteral("launchArgs")]    = s.launchArgs;
     obj[QStringLiteral("backupFolder")]  = s.backupFolder;
+    obj[QStringLiteral("notes")]         = s.notes;
     obj[QStringLiteral("autoUpdate")]    = s.autoUpdate;
     obj[QStringLiteral("keepBackups")]   = s.keepBackups;
     obj[QStringLiteral("backupIntervalMinutes")] = s.backupIntervalMinutes;
@@ -508,6 +528,7 @@ QString ServerManager::importServerConfig(const QString &filePath)
     s.executable     = obj[QStringLiteral("executable")].toString();
     s.launchArgs     = obj[QStringLiteral("launchArgs")].toString();
     s.backupFolder   = obj[QStringLiteral("backupFolder")].toString();
+    s.notes          = obj[QStringLiteral("notes")].toString();
     s.autoUpdate     = obj[QStringLiteral("autoUpdate")].toBool(true);
     s.keepBackups    = obj[QStringLiteral("keepBackups")].toInt(10);
     s.backupIntervalMinutes = obj[QStringLiteral("backupIntervalMinutes")].toInt(30);

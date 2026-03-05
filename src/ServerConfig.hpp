@@ -20,6 +20,7 @@ struct ServerConfig {
     QList<int> mods;
     QList<int> disabledMods;   // mods that are installed but not active on launch
     QString backupFolder;
+    QString notes;             // free-form user notes / description for this server
     bool autoUpdate = true;
     int backupIntervalMinutes = 30;
     int restartIntervalHours = 24;

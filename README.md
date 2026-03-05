@@ -42,6 +42,11 @@ A cross-platform Qt6 desktop application for managing SteamCMD-based game server
 | **Server uptime display** | Overview tab shows how long each server has been running |
 | **Crash restart backoff** | Exponential backoff on crash auto-restart (up to 5 attempts) prevents infinite restart loops |
 | **Backup file sizes** | Backup list shows the size of each snapshot file |
+| **Server notes** | Per-server free-form notes/description field, persisted in `servers.json` |
+| **Config editor revert** | Revert button discards unsaved config edits and restores the last saved version |
+| **Drag & drop mod ordering** | Reorder mods by dragging rows in the Mods tab; saved order controls load priority |
+| **Mod update rollback** | Automatic rollback to the pre-update snapshot when a mod update via SteamCMD fails |
+| **Server log viewer** | Dedicated Logs tab per server that displays and tails the server log file |
 
 ---
 
@@ -130,6 +135,7 @@ See `servers.json` in the repository root for an example configuration.
     "mods": [731604991, 880454836],
     "disabledMods": [],
     "backupFolder": "/srv/backups/ark_cluster1",
+    "notes": "",
     "autoUpdate": true,
     "keepBackups": 10,
     "backupIntervalMinutes": 30,
@@ -150,7 +156,7 @@ SSA/
 │   ├── main.cpp              # Qt entry point
 │   ├── MainWindow.*          # Main window, sidebar, tab management
 │   ├── HomeDashboard.*       # Landing dashboard with server health & players
-│   ├── ServerTabWidget.*     # Per-server tabs (Overview/Config/Mods/Backups/Console)
+│   ├── ServerTabWidget.*     # Per-server tabs (Overview/Config/Mods/Backups/Console/Logs)
 │   ├── ServerManager.*       # Core backend (start/stop/deploy/backup/RCON)
 │   ├── ServerConfig.hpp      # Server data structures
 │   ├── GameTemplates.hpp     # Pre-defined game server profiles
