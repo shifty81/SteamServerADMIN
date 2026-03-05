@@ -4,6 +4,7 @@
 #include <QJsonObject>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QDebug>
 
 WebhookModule::WebhookModule(QObject *parent)
     : QObject(parent), m_nam(new QNetworkAccessManager(this))
@@ -28,6 +29,10 @@ void WebhookModule::sendNotification(const QString &webhookUrl,
     QNetworkReply *reply =
         m_nam->post(request, QJsonDocument(payload).toJson(QJsonDocument::Compact));
 
-    // Clean up the reply when finished (fire-and-forget)
-    connect(reply, &QNetworkReply::finished, reply, &QNetworkReply::deleteLater);
+    // Log errors for debugging, then clean up (fire-and-forget)
+    connect(reply, &QNetworkReply::finished, reply, [reply]() {
+        if (reply->error() != QNetworkReply::NoError)
+            qWarning() << "WebhookModule: delivery failed:" << reply->errorString();
+        reply->deleteLater();
+    });
 }
