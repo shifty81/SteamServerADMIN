@@ -21,10 +21,15 @@ struct ServerConfig {
     QList<int> disabledMods;   // mods that are installed but not active on launch
     QString backupFolder;
     QString notes;             // free-form user notes / description for this server
+    QString discordWebhookUrl; // Discord webhook URL for event notifications
     bool autoUpdate = true;
+    bool autoStartOnLaunch = false;  // start this server when the SSA application launches
+    bool favorite = false;           // pinned / favorite server (appears first in sidebar)
     int backupIntervalMinutes = 30;
     int restartIntervalHours = 24;
     int keepBackups = 10;     // maximum number of versioned backups to retain
+    QStringList scheduledRconCommands; // RCON commands to run at a scheduled interval
+    int rconCommandIntervalMinutes = 0; // 0 = disabled
 
     /**
      * @brief Validate this server configuration.
@@ -54,6 +59,9 @@ struct ServerConfig {
 
         if (restartIntervalHours < 0)
             errors << QStringLiteral("Restart interval must not be negative.");
+
+        if (rconCommandIntervalMinutes < 0)
+            errors << QStringLiteral("RCON command interval must not be negative.");
 
         return errors;
     }
