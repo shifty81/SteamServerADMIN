@@ -27,20 +27,22 @@ public:
     /**
      * @brief Download/update all mods listed in server.mods via the Steam
      *        Workshop.  Emits outputLine() during execution.
+     *  @return true if all mods updated successfully.
      */
-    void updateMods(const ServerConfig &server);
+    bool updateMods(const ServerConfig &server);
 
     /**
      * @brief Download a single workshop mod.
+     * @return true on success.
      */
-    void downloadMod(int appid, int modId);
+    bool downloadMod(int appid, int modId);
 
 signals:
     void outputLine(const QString &line);
     void finished(bool success);
 
 private:
-    void runSteamCmd(const QStringList &args);
+    bool runSteamCmd(const QStringList &args);
 
     QString m_steamCmdPath;
 };

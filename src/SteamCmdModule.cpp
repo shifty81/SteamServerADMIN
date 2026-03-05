@@ -37,13 +37,17 @@ void SteamCmdModule::deployServer(const ServerConfig &server)
     runSteamCmd(args);
 }
 
-void SteamCmdModule::updateMods(const ServerConfig &server)
+bool SteamCmdModule::updateMods(const ServerConfig &server)
 {
-    for (int modId : server.mods)
-        downloadMod(server.appid, modId);
+    bool allOk = true;
+    for (int modId : server.mods) {
+        if (!downloadMod(server.appid, modId))
+            allOk = false;
+    }
+    return allOk;
 }
 
-void SteamCmdModule::downloadMod(int appid, int modId)
+bool SteamCmdModule::downloadMod(int appid, int modId)
 {
     QStringList args = {
         QStringLiteral("+login"),    QStringLiteral("anonymous"),
@@ -51,10 +55,10 @@ void SteamCmdModule::downloadMod(int appid, int modId)
         QString::number(appid), QString::number(modId),
         QStringLiteral("+quit")
     };
-    runSteamCmd(args);
+    return runSteamCmd(args);
 }
 
-void SteamCmdModule::runSteamCmd(const QStringList &args)
+bool SteamCmdModule::runSteamCmd(const QStringList &args)
 {
     QProcess process;
     process.setProgram(m_steamCmdPath);
@@ -74,5 +78,7 @@ void SteamCmdModule::runSteamCmd(const QStringList &args)
         emit outputLine(QString::fromLocal8Bit(remaining).trimmed());
 
     process.waitForFinished(-1);
-    emit finished(process.exitCode() == 0);
+    bool ok = process.exitCode() == 0;
+    emit finished(ok);
+    return ok;
 }

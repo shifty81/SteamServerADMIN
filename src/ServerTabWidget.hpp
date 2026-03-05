@@ -13,11 +13,12 @@
  * @brief Per-server tabbed widget.
  *
  * Sub-tabs:
- *   Overview  – status light, quick actions (start/stop/restart/deploy), uptime
- *   Config    – text editor for the primary config file
- *   Mods      – mod list with add/remove/update
+ *   Overview  – status light, quick actions (start/stop/restart/deploy), uptime, notes
+ *   Config    – text editor for the primary config file with revert support
+ *   Mods      – mod list with add/remove/update and drag & drop reordering
  *   Backups   – snapshot list with take/restore actions
  *   Console   – live RCON command console with command history
+ *   Logs      – live server log file viewer
  */
 class ServerTabWidget : public QWidget {
     Q_OBJECT
@@ -42,7 +43,9 @@ private slots:
     void onTakeSnapshot();
     void onRestoreSnapshot();
     void onSaveConfig();
+    void onRevertConfig();
     void onDeployServer();
+    void onSaveNotes();
 
 private:
     void buildOverviewTab(QTabWidget *tabs);
@@ -50,10 +53,13 @@ private:
     void buildModsTab(QTabWidget *tabs);
     void buildBackupsTab(QTabWidget *tabs);
     void buildConsoleTab(QTabWidget *tabs);
+    void buildLogsTab(QTabWidget *tabs);
 
     void appendConsole(const QString &text);
     void populateModTable();
     void populateBackupList();
+    void persistModOrder();
+    void refreshLogViewer();
 
     ServerManager *m_manager;
     ServerConfig  &m_server;
@@ -66,6 +72,7 @@ private:
     // Config
     QTextEdit *m_configEditor = nullptr;
     QString    m_configPath;
+    QString    m_originalConfigContent;   // track original for revert
 
     // Mods
     QTableWidget *m_modTable = nullptr;
@@ -80,6 +87,10 @@ private:
     // RCON command history
     QStringList m_commandHistory;
     int         m_historyIndex = -1;
+
+    // Logs
+    QTextEdit *m_logViewer     = nullptr;
+    QString    m_logFilePath;
 
     QTimer *m_statusTimer = nullptr;
 };

@@ -84,6 +84,17 @@ private slots:
     void testCrashCountDefault();
     void testCrashCountReset();
     void testCrashBackoffConstants();
+
+    // ---- Notes field tests ----
+    void testNotesPersistence();
+    void testNotesDefaultEmpty();
+    void testNotesExportImport();
+
+    // ---- Mod ordering tests ----
+    void testModOrderPreserved();
+
+    // ---- Update rollback tests ----
+    void testUpdateModsReturnsBool();
 };
 
 void TestServerConfig::testSaveAndLoad()
@@ -1058,6 +1069,124 @@ void TestServerConfig::testCrashBackoffConstants()
     QVERIFY(ServerManager::kCrashBackoffBaseMs > 0);
     QCOMPARE(ServerManager::kMaxCrashRestarts, 5);
     QCOMPARE(ServerManager::kCrashBackoffBaseMs, 2000);
+}
+
+// ---------------------------------------------------------------------------
+// Notes field tests
+// ---------------------------------------------------------------------------
+
+void TestServerConfig::testNotesPersistence()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    ServerManager mgr(configPath);
+
+    ServerConfig s;
+    s.name  = QStringLiteral("NotesServer");
+    s.appid = 730;
+    s.dir   = QStringLiteral("/srv/notes");
+    s.notes = QStringLiteral("This is a test note\nwith multiple lines.");
+    mgr.servers() << s;
+    QVERIFY(mgr.saveConfig());
+
+    // Reload and verify notes are preserved
+    ServerManager mgr2(configPath);
+    QVERIFY(mgr2.loadConfig());
+    QCOMPARE(mgr2.servers().size(), 1);
+    QCOMPARE(mgr2.servers().first().notes,
+             QStringLiteral("This is a test note\nwith multiple lines."));
+}
+
+void TestServerConfig::testNotesDefaultEmpty()
+{
+    ServerConfig s;
+    QVERIFY(s.notes.isEmpty());
+}
+
+void TestServerConfig::testNotesExportImport()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+
+    ServerManager mgr1(tmp.filePath(QStringLiteral("servers1.json")));
+    ServerConfig s;
+    s.name  = QStringLiteral("NotesExport");
+    s.appid = 730;
+    s.dir   = QStringLiteral("/srv/notes");
+    s.notes = QStringLiteral("Important server info");
+    mgr1.servers() << s;
+
+    QString exportPath = tmp.filePath(QStringLiteral("exported.json"));
+    QVERIFY(mgr1.exportServerConfig(QStringLiteral("NotesExport"), exportPath));
+
+    // Import into a fresh manager
+    ServerManager mgr2(tmp.filePath(QStringLiteral("servers2.json")));
+    QString error = mgr2.importServerConfig(exportPath);
+    QVERIFY2(error.isEmpty(), qPrintable(QStringLiteral("Import failed: ") + error));
+
+    QCOMPARE(mgr2.servers().size(), 1);
+    QCOMPARE(mgr2.servers().first().notes, QStringLiteral("Important server info"));
+}
+
+// ---------------------------------------------------------------------------
+// Mod ordering tests
+// ---------------------------------------------------------------------------
+
+void TestServerConfig::testModOrderPreserved()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    ServerManager mgr(configPath);
+
+    ServerConfig s;
+    s.name  = QStringLiteral("ModOrder");
+    s.appid = 730;
+    s.dir   = QStringLiteral("/srv/mods");
+    s.mods  = { 300, 100, 200 };   // specific order
+    mgr.servers() << s;
+    QVERIFY(mgr.saveConfig());
+
+    // Reload and verify order is preserved
+    ServerManager mgr2(configPath);
+    QVERIFY(mgr2.loadConfig());
+    QCOMPARE(mgr2.servers().first().mods, QList<int>({ 300, 100, 200 }));
+
+    // Reorder and save again
+    mgr2.servers()[0].mods = { 200, 300, 100 };
+    QVERIFY(mgr2.saveConfig());
+
+    ServerManager mgr3(configPath);
+    QVERIFY(mgr3.loadConfig());
+    QCOMPARE(mgr3.servers().first().mods, QList<int>({ 200, 300, 100 }));
+}
+
+// ---------------------------------------------------------------------------
+// Update rollback tests
+// ---------------------------------------------------------------------------
+
+void TestServerConfig::testUpdateModsReturnsBool()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+
+    ServerManager mgr(tmp.filePath(QStringLiteral("servers.json")));
+
+    ServerConfig s;
+    s.name  = QStringLiteral("RollbackTest");
+    s.appid = 730;
+    s.dir   = tmp.filePath(QStringLiteral("serverdir"));
+    s.backupFolder = tmp.filePath(QStringLiteral("backups"));
+    s.mods  = { 111 };
+    mgr.servers() << s;
+
+    // SteamCMD is not available in test environment, so updateMods should
+    // fail gracefully and return false
+    bool result = mgr.updateMods(mgr.servers()[0]);
+    QVERIFY(!result);  // Expected to fail since steamcmd is not available
 }
 
 #include "test_serverconfig.moc"

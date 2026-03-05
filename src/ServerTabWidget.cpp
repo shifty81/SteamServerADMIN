@@ -39,6 +39,7 @@ ServerTabWidget::ServerTabWidget(ServerManager *manager,
     buildModsTab(tabs);
     buildBackupsTab(tabs);
     buildConsoleTab(tabs);
+    buildLogsTab(tabs);
 
     // Connect log messages from manager to console
     connect(m_manager, &ServerManager::logMessage,
@@ -95,6 +96,27 @@ void ServerTabWidget::buildOverviewTab(QTabWidget *tabs)
     actLayout->addStretch();
     layout->addWidget(actBox);
 
+    // Server notes
+    auto *notesBox    = new QGroupBox(tr("Notes"), w);
+    auto *notesLayout = new QVBoxLayout(notesBox);
+
+    auto *notesEdit = new QTextEdit(notesBox);
+    notesEdit->setFont(QFont(QStringLiteral("Monospace"), 9));
+    notesEdit->setPlaceholderText(tr("Enter notes about this server…"));
+    notesEdit->setMaximumHeight(120);
+    notesEdit->setPlainText(m_server.notes);
+    notesLayout->addWidget(notesEdit);
+
+    auto *saveNotesBtn = new QPushButton(tr("Save Notes"), notesBox);
+    notesLayout->addWidget(saveNotesBtn);
+    layout->addWidget(notesBox);
+
+    connect(saveNotesBtn, &QPushButton::clicked, this, [this, notesEdit]() {
+        m_server.notes = notesEdit->toPlainText();
+        m_manager->saveConfig();
+        appendConsole(tr("[SSA] Notes saved."));
+    });
+
     layout->addStretch();
 
     connect(startBtn,   &QPushButton::clicked, this, [this]() { m_manager->startServer(m_server);   });
@@ -122,7 +144,8 @@ void ServerTabWidget::buildConfigTab(QTabWidget *tabs)
 
     QFile f(m_configPath);
     if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        m_configEditor->setPlainText(QString::fromUtf8(f.readAll()));
+        m_originalConfigContent = QString::fromUtf8(f.readAll());
+        m_configEditor->setPlainText(m_originalConfigContent);
         f.close();
     } else {
         m_configEditor->setPlaceholderText(
@@ -130,15 +153,18 @@ void ServerTabWidget::buildConfigTab(QTabWidget *tabs)
     }
     layout->addWidget(m_configEditor);
 
-    auto *btnRow  = new QHBoxLayout();
-    auto *saveBtn = new QPushButton(tr("Save Config"), w);
-    auto *openBtn = new QPushButton(tr("Open Different File…"), w);
+    auto *btnRow    = new QHBoxLayout();
+    auto *saveBtn   = new QPushButton(tr("Save Config"), w);
+    auto *revertBtn = new QPushButton(tr("Revert Changes"), w);
+    auto *openBtn   = new QPushButton(tr("Open Different File…"), w);
     btnRow->addWidget(saveBtn);
+    btnRow->addWidget(revertBtn);
     btnRow->addWidget(openBtn);
     btnRow->addStretch();
     layout->addLayout(btnRow);
 
-    connect(saveBtn, &QPushButton::clicked, this, &ServerTabWidget::onSaveConfig);
+    connect(saveBtn,   &QPushButton::clicked, this, &ServerTabWidget::onSaveConfig);
+    connect(revertBtn, &QPushButton::clicked, this, &ServerTabWidget::onRevertConfig);
     connect(openBtn, &QPushButton::clicked, this, [this, pathLabel]() {
         QString path = QFileDialog::getOpenFileName(
             this, tr("Open Config File"), m_server.dir,
@@ -148,7 +174,8 @@ void ServerTabWidget::buildConfigTab(QTabWidget *tabs)
             pathLabel->setText(tr("Editing: %1").arg(m_configPath));
             QFile f2(m_configPath);
             if (f2.open(QIODevice::ReadOnly | QIODevice::Text)) {
-                m_configEditor->setPlainText(QString::fromUtf8(f2.readAll()));
+                m_originalConfigContent = QString::fromUtf8(f2.readAll());
+                m_configEditor->setPlainText(m_originalConfigContent);
                 f2.close();
             }
         }
@@ -166,6 +193,13 @@ void ServerTabWidget::buildModsTab(QTabWidget *tabs)
     m_modTable->setHorizontalHeaderLabels({ tr("Workshop Mod ID"), tr("Status"), tr("Enabled") });
     m_modTable->horizontalHeader()->setStretchLastSection(true);
     m_modTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_modTable->setDragDropMode(QAbstractItemView::InternalMove);
+    m_modTable->setDragEnabled(true);
+    m_modTable->setAcceptDrops(true);
+    m_modTable->setDropIndicatorShown(true);
+    m_modTable->verticalHeader()->setSectionsMovable(true);
+    m_modTable->verticalHeader()->setDragEnabled(true);
+    m_modTable->verticalHeader()->setDragDropMode(QAbstractItemView::InternalMove);
     layout->addWidget(m_modTable);
 
     populateModTable();
@@ -174,15 +208,22 @@ void ServerTabWidget::buildModsTab(QTabWidget *tabs)
     auto *addModBtn   = new QPushButton(tr("Add Mod…"),       w);
     auto *removeModBtn= new QPushButton(tr("Remove Selected"),w);
     auto *updateBtn   = new QPushButton(tr("Update All Mods"),w);
+    auto *saveOrderBtn= new QPushButton(tr("Save Order"),     w);
     btnRow->addWidget(addModBtn);
     btnRow->addWidget(removeModBtn);
     btnRow->addWidget(updateBtn);
+    btnRow->addWidget(saveOrderBtn);
     btnRow->addStretch();
     layout->addLayout(btnRow);
+
+    auto *hint = new QLabel(tr("💡 Drag rows by their row-number header to reorder mods, then click Save Order."), w);
+    hint->setStyleSheet(QStringLiteral("color: gray; font-size: 11px;"));
+    layout->addWidget(hint);
 
     connect(addModBtn,    &QPushButton::clicked, this, &ServerTabWidget::onAddMod);
     connect(removeModBtn, &QPushButton::clicked, this, &ServerTabWidget::onRemoveMod);
     connect(updateBtn,    &QPushButton::clicked, this, &ServerTabWidget::onUpdateMods);
+    connect(saveOrderBtn, &QPushButton::clicked, this, [this]() { persistModOrder(); });
 
     tabs->addTab(w, tr("Mods"));
 }
@@ -246,6 +287,51 @@ void ServerTabWidget::buildConsoleTab(QTabWidget *tabs)
     connect(lineEdit, &QLineEdit::returnPressed, this, &ServerTabWidget::onSendCommand);
 
     tabs->addTab(w, tr("Console"));
+}
+
+void ServerTabWidget::buildLogsTab(QTabWidget *tabs)
+{
+    auto *w      = new QWidget(tabs);
+    auto *layout = new QVBoxLayout(w);
+
+    // Determine log file path – use a common log location relative to server dir
+    m_logFilePath = m_server.dir + QStringLiteral("/Logs/server.log");
+
+    auto *pathLabel = new QLabel(tr("Log file: %1").arg(m_logFilePath), w);
+    pathLabel->setWordWrap(true);
+    layout->addWidget(pathLabel);
+
+    m_logViewer = new QTextEdit(w);
+    m_logViewer->setReadOnly(true);
+    m_logViewer->setFont(QFont(QStringLiteral("Monospace"), 9));
+    m_logViewer->setStyleSheet(
+        QStringLiteral("background:#1e1e1e; color:#d4d4d4;"));
+    layout->addWidget(m_logViewer);
+
+    auto *btnRow     = new QHBoxLayout();
+    auto *refreshBtn = new QPushButton(tr("Refresh"), w);
+    auto *openBtn    = new QPushButton(tr("Open Different Log…"), w);
+    btnRow->addWidget(refreshBtn);
+    btnRow->addWidget(openBtn);
+    btnRow->addStretch();
+    layout->addLayout(btnRow);
+
+    connect(refreshBtn, &QPushButton::clicked, this, &ServerTabWidget::refreshLogViewer);
+    connect(openBtn,    &QPushButton::clicked, this, [this, pathLabel]() {
+        QString path = QFileDialog::getOpenFileName(
+            this, tr("Open Log File"), m_server.dir,
+            tr("Log files (*.log *.txt);;All files (*)"));
+        if (!path.isEmpty()) {
+            m_logFilePath = path;
+            pathLabel->setText(tr("Log file: %1").arg(m_logFilePath));
+            refreshLogViewer();
+        }
+    });
+
+    // Load initial content
+    refreshLogViewer();
+
+    tabs->addTab(w, tr("Logs"));
 }
 
 // ---------------------------------------------------------------------------
@@ -350,8 +436,31 @@ void ServerTabWidget::onSaveConfig()
                              tr("Cannot write to:\n%1").arg(m_configPath));
         return;
     }
-    f.write(m_configEditor->toPlainText().toUtf8());
+    QString content = m_configEditor->toPlainText();
+    f.write(content.toUtf8());
+    m_originalConfigContent = content;   // update baseline after save
     appendConsole(tr("[SSA] Config saved: ") + m_configPath);
+}
+
+void ServerTabWidget::onRevertConfig()
+{
+    if (m_configEditor->toPlainText() == m_originalConfigContent) {
+        QMessageBox::information(this, tr("Revert"), tr("No unsaved changes."));
+        return;
+    }
+    auto reply = QMessageBox::question(
+        this, tr("Revert Changes"),
+        tr("Discard all unsaved edits and revert to the last saved version?"));
+    if (reply != QMessageBox::Yes) return;
+
+    m_configEditor->setPlainText(m_originalConfigContent);
+    appendConsole(tr("[SSA] Config reverted to last saved version."));
+}
+
+void ServerTabWidget::onSaveNotes()
+{
+    m_manager->saveConfig();
+    appendConsole(tr("[SSA] Notes saved."));
 }
 
 void ServerTabWidget::onDeployServer()
@@ -498,4 +607,62 @@ void ServerTabWidget::populateBackupList()
         auto *item = new QListWidgetItem(label, m_backupList);
         item->setData(Qt::UserRole, path);
     }
+}
+
+void ServerTabWidget::persistModOrder()
+{
+    // Read the current visual order from the table and update the server config
+    QList<int> newOrder;
+    for (int row = 0; row < m_modTable->rowCount(); ++row) {
+        // Respect the visual order (which may differ from logical due to drag)
+        int visualRow = m_modTable->verticalHeader()->visualIndex(row);
+        Q_UNUSED(visualRow);
+    }
+
+    // Build the new order using the visual positions
+    QVector<QPair<int, int>> visualRows;   // (visualIndex, modId)
+    for (int logicalRow = 0; logicalRow < m_modTable->rowCount(); ++logicalRow) {
+        int vis = m_modTable->verticalHeader()->visualIndex(logicalRow);
+        bool ok = false;
+        int modId = m_modTable->item(logicalRow, 0)->text().toInt(&ok);
+        if (ok)
+            visualRows.append({ vis, modId });
+    }
+    std::sort(visualRows.begin(), visualRows.end(),
+              [](const QPair<int,int> &a, const QPair<int,int> &b) { return a.first < b.first; });
+
+    newOrder.reserve(visualRows.size());
+    for (const auto &pair : std::as_const(visualRows))
+        newOrder << pair.second;
+
+    m_server.mods = newOrder;
+    m_manager->saveConfig();
+    populateModTable();
+    appendConsole(tr("[SSA] Mod load order updated."));
+}
+
+void ServerTabWidget::refreshLogViewer()
+{
+    if (!m_logViewer) return;
+
+    QFile f(m_logFilePath);
+    if (!f.exists()) {
+        m_logViewer->setPlainText(tr("Log file not found:\n%1").arg(m_logFilePath));
+        return;
+    }
+    if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        m_logViewer->setPlainText(tr("Cannot open log file:\n%1").arg(m_logFilePath));
+        return;
+    }
+
+    // Read the last portion of the file (tail)
+    static constexpr qint64 kMaxTailBytes = 256 * 1024;   // 256 KB
+    if (f.size() > kMaxTailBytes)
+        f.seek(f.size() - kMaxTailBytes);
+
+    m_logViewer->setPlainText(QString::fromUtf8(f.readAll()));
+
+    // Scroll to bottom
+    m_logViewer->verticalScrollBar()->setValue(
+        m_logViewer->verticalScrollBar()->maximum());
 }

@@ -45,7 +45,10 @@ public:
 
     // ---- SteamCMD ----
     void deployServer(ServerConfig &server);
-    void updateMods(ServerConfig &server);
+    /** Update all mods via SteamCMD. Takes a pre-update snapshot and
+     *  automatically rolls back if the update fails.
+     *  @return true on success, false on failure (rollback attempted). */
+    bool updateMods(ServerConfig &server);
 
     // ---- Backup / restore ----
     QString takeSnapshot(const ServerConfig &server);
