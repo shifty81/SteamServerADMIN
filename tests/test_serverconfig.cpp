@@ -111,14 +111,12 @@ private slots:
     void testScheduledRconCommandsDefaultEmpty();
     void testRconCommandIntervalValidation();
     void testSchedulerRconTimer();
+    void testValidateRconIntervalNegative();
 
     // ---- Favorite servers tests ----
     void testFavoritePersistence();
     void testFavoriteDefaultFalse();
     void testFavoriteExportImport();
-
-    // ---- Config diff tests ----
-    void testValidateRconIntervalNegative();
 };
 
 void TestServerConfig::testSaveAndLoad()
