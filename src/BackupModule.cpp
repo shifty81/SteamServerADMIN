@@ -26,7 +26,8 @@ static QString escapePwshArg(const QString &path)
     return s;
 }
 
-bool BackupModule::createZip(const QString &sourceDir, const QString &destZip)
+bool BackupModule::createZip(const QString &sourceDir, const QString &destZip,
+                             int compressionLevel)
 {
     QFileInfo srcInfo(sourceDir);
     if (!srcInfo.exists() || !srcInfo.isDir()) {
@@ -34,17 +35,28 @@ bool BackupModule::createZip(const QString &sourceDir, const QString &destZip)
         return false;
     }
 
+    // Clamp to valid range
+    if (compressionLevel < 0) compressionLevel = 0;
+    if (compressionLevel > 9) compressionLevel = 9;
+
     // Ensure destination parent directory exists
     QDir().mkpath(QFileInfo(destZip).absolutePath());
 
     QProcess process;
 #ifdef Q_OS_WIN
     // Assign paths to PowerShell variables first to avoid injection.
+    // PowerShell Compress-Archive does not expose a compression level
+    // parameter, so we use the Optimal level when compressionLevel > 0
+    // and NoCompression (store only) when compressionLevel == 0.
+    QString levelArg = (compressionLevel == 0)
+                           ? QStringLiteral("NoCompression")
+                           : QStringLiteral("Optimal");
     QString script = QStringLiteral(
         "$src = \"%1\\*\"; $dst = \"%2\"; "
-        "Compress-Archive -LiteralPath $src -DestinationPath $dst -Force")
+        "Compress-Archive -LiteralPath $src -DestinationPath $dst -CompressionLevel %3 -Force")
         .arg(escapePwshArg(QDir::toNativeSeparators(sourceDir)),
-             escapePwshArg(QDir::toNativeSeparators(destZip)));
+             escapePwshArg(QDir::toNativeSeparators(destZip)),
+             levelArg);
     QString cmd = QStringLiteral("powershell");
     QStringList args = {
         QStringLiteral("-NoProfile"),
@@ -54,7 +66,12 @@ bool BackupModule::createZip(const QString &sourceDir, const QString &destZip)
     };
 #else
     QString cmd = QStringLiteral("zip");
-    QStringList args = { QStringLiteral("-r"), destZip, QStringLiteral(".") };
+    QStringList args = {
+        QStringLiteral("-r"),
+        QStringLiteral("-%1").arg(compressionLevel),
+        destZip,
+        QStringLiteral(".")
+    };
     process.setWorkingDirectory(sourceDir);
 #endif
     process.start(cmd, args);
@@ -116,15 +133,15 @@ QString BackupModule::takeSnapshot(const ServerConfig &server)
 
     QString configDir = server.dir + QStringLiteral("/Configs");
     if (QDir(configDir).exists())
-        ok &= createZip(configDir, base + QStringLiteral("_config.zip"));
+        ok &= createZip(configDir, base + QStringLiteral("_config.zip"), server.backupCompressionLevel);
 
     QString mapDir = server.dir + QStringLiteral("/Maps");
     if (QDir(mapDir).exists())
-        ok &= createZip(mapDir, base + QStringLiteral("_map.zip"));
+        ok &= createZip(mapDir, base + QStringLiteral("_map.zip"), server.backupCompressionLevel);
 
     QString modsDir = server.dir + QStringLiteral("/Mods");
     if (QDir(modsDir).exists())
-        ok &= createZip(modsDir, base + QStringLiteral("_mods.zip"));
+        ok &= createZip(modsDir, base + QStringLiteral("_mods.zip"), server.backupCompressionLevel);
 
     if (!ok) {
         qWarning() << "BackupModule::takeSnapshot: one or more parts failed for" << server.name;

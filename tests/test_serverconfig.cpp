@@ -13,6 +13,8 @@
 #include "SchedulerModule.hpp"
 #include "LogModule.hpp"
 #include "GameTemplates.hpp"
+#include "WebhookModule.hpp"
+#include "ConsoleLogWriter.hpp"
 
 // ---------------------------------------------------------------------------
 // ServerConfig round-trip through ServerManager save/load
@@ -117,6 +119,34 @@ private slots:
     void testFavoritePersistence();
     void testFavoriteDefaultFalse();
     void testFavoriteExportImport();
+
+    // ---- RCON password obfuscation tests ----
+    void testRconPasswordObfuscatedOnDisk();
+    void testRconPasswordLegacyPlaintext();
+    void testRconPasswordRoundTrip();
+
+    // ---- Console logging tests ----
+    void testConsoleLoggingPersistence();
+    void testConsoleLoggingDefaultFalse();
+    void testConsoleLogWriterAppend();
+
+    // ---- Webhook template tests ----
+    void testWebhookTemplatePersistence();
+    void testWebhookTemplateDefaultEmpty();
+    void testWebhookTemplateFormatMessage();
+    void testWebhookTemplateExportImport();
+
+    // ---- Maintenance window tests ----
+    void testMaintenanceWindowPersistence();
+    void testMaintenanceWindowDefaultDisabled();
+    void testMaintenanceWindowValidation();
+    void testMaintenanceWindowExportImport();
+
+    // ---- Backup compression level tests ----
+    void testBackupCompressionLevelPersistence();
+    void testBackupCompressionLevelDefault();
+    void testBackupCompressionLevelValidation();
+    void testBackupCompressionLevelExportImport();
 };
 
 void TestServerConfig::testSaveAndLoad()
@@ -1490,6 +1520,396 @@ void TestServerConfig::testValidateRconIntervalNegative()
             found = true;
     }
     QVERIFY(found);
+}
+
+// ---------------------------------------------------------------------------
+// RCON password obfuscation tests
+// ---------------------------------------------------------------------------
+
+void TestServerConfig::testRconPasswordObfuscatedOnDisk()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+
+    ServerManager mgr(configPath);
+    ServerConfig s;
+    s.name  = QStringLiteral("ObfTest");
+    s.appid = 730;
+    s.dir   = QStringLiteral("/srv/obf");
+    s.rcon.password = QStringLiteral("mySecret123");
+    mgr.servers() << s;
+    QVERIFY(mgr.saveConfig());
+
+    // Read raw JSON and verify password is not stored in plaintext
+    QFile file(configPath);
+    QVERIFY(file.open(QIODevice::ReadOnly));
+    QByteArray raw = file.readAll();
+    QVERIFY(!raw.contains("mySecret123"));
+    QVERIFY(raw.contains("obf:"));
+}
+
+void TestServerConfig::testRconPasswordLegacyPlaintext()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+
+    // Write legacy plaintext config
+    QJsonArray arr;
+    QJsonObject obj;
+    obj[QStringLiteral("name")]  = QStringLiteral("Legacy");
+    obj[QStringLiteral("appid")] = 730;
+    obj[QStringLiteral("dir")]   = QStringLiteral("/srv/legacy");
+    QJsonObject rcon;
+    rcon[QStringLiteral("host")]     = QStringLiteral("127.0.0.1");
+    rcon[QStringLiteral("port")]     = 27015;
+    rcon[QStringLiteral("password")] = QStringLiteral("plainPass");
+    obj[QStringLiteral("rcon")] = rcon;
+    arr << obj;
+
+    QFile file(configPath);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    file.write(QJsonDocument(arr).toJson());
+    file.close();
+
+    ServerManager mgr(configPath);
+    QVERIFY(mgr.loadConfig());
+    QCOMPARE(mgr.servers().first().rcon.password, QStringLiteral("plainPass"));
+}
+
+void TestServerConfig::testRconPasswordRoundTrip()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+
+    ServerManager mgr(configPath);
+    ServerConfig s;
+    s.name  = QStringLiteral("RoundTrip");
+    s.appid = 730;
+    s.dir   = QStringLiteral("/srv/rt");
+    s.rcon.password = QStringLiteral("p@$$w0rd!&<>\"");
+    mgr.servers() << s;
+    QVERIFY(mgr.saveConfig());
+
+    ServerManager mgr2(configPath);
+    QVERIFY(mgr2.loadConfig());
+    QCOMPARE(mgr2.servers().first().rcon.password, QStringLiteral("p@$$w0rd!&<>\""));
+}
+
+// ---------------------------------------------------------------------------
+// Console logging tests
+// ---------------------------------------------------------------------------
+
+void TestServerConfig::testConsoleLoggingPersistence()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+
+    ServerManager mgr(configPath);
+    ServerConfig s;
+    s.name  = QStringLiteral("ConsoleLogTest");
+    s.appid = 730;
+    s.dir   = QStringLiteral("/srv/cl");
+    s.consoleLogging = true;
+    mgr.servers() << s;
+    QVERIFY(mgr.saveConfig());
+
+    ServerManager mgr2(configPath);
+    QVERIFY(mgr2.loadConfig());
+    QCOMPARE(mgr2.servers().first().consoleLogging, true);
+}
+
+void TestServerConfig::testConsoleLoggingDefaultFalse()
+{
+    ServerConfig s;
+    QCOMPARE(s.consoleLogging, false);
+}
+
+void TestServerConfig::testConsoleLogWriterAppend()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+
+    ConsoleLogWriter::append(tmp.path(), QStringLiteral("TestSrv"),
+                             QStringLiteral("> status"));
+    ConsoleLogWriter::append(tmp.path(), QStringLiteral("TestSrv"),
+                             QStringLiteral("players: 5"));
+
+    QStringList logs = ConsoleLogWriter::listLogs(tmp.path());
+    QVERIFY(!logs.isEmpty());
+
+    QFile file(tmp.path() + QStringLiteral("/ConsoleLogs/") + logs.first());
+    QVERIFY(file.open(QIODevice::ReadOnly | QIODevice::Text));
+    QString content = QString::fromUtf8(file.readAll());
+    QVERIFY(content.contains(QStringLiteral("> status")));
+    QVERIFY(content.contains(QStringLiteral("players: 5")));
+    QVERIFY(content.contains(QStringLiteral("[TestSrv]")));
+}
+
+// ---------------------------------------------------------------------------
+// Webhook template tests
+// ---------------------------------------------------------------------------
+
+void TestServerConfig::testWebhookTemplatePersistence()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+
+    ServerManager mgr(configPath);
+    ServerConfig s;
+    s.name  = QStringLiteral("WHTpl");
+    s.appid = 730;
+    s.dir   = QStringLiteral("/srv/wh");
+    s.webhookTemplate = QStringLiteral("{server} just {event} at {timestamp}!");
+    mgr.servers() << s;
+    QVERIFY(mgr.saveConfig());
+
+    ServerManager mgr2(configPath);
+    QVERIFY(mgr2.loadConfig());
+    QCOMPARE(mgr2.servers().first().webhookTemplate,
+             QStringLiteral("{server} just {event} at {timestamp}!"));
+}
+
+void TestServerConfig::testWebhookTemplateDefaultEmpty()
+{
+    ServerConfig s;
+    QVERIFY(s.webhookTemplate.isEmpty());
+}
+
+void TestServerConfig::testWebhookTemplateFormatMessage()
+{
+    QString tpl = QStringLiteral("{server} - {event}");
+    QString result = WebhookModule::formatMessage(tpl,
+                                                  QStringLiteral("MyServer"),
+                                                  QStringLiteral("Server started."));
+    QCOMPARE(result, QStringLiteral("MyServer - Server started."));
+
+    // Verify timestamp placeholder is replaced
+    QString tpl2 = QStringLiteral("{timestamp}");
+    QString result2 = WebhookModule::formatMessage(tpl2,
+                                                   QStringLiteral("S"), QStringLiteral("E"));
+    QVERIFY(!result2.contains(QStringLiteral("{timestamp}")));
+    QVERIFY(!result2.isEmpty());
+}
+
+void TestServerConfig::testWebhookTemplateExportImport()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    QString exportPath = tmp.filePath(QStringLiteral("export.json"));
+
+    ServerManager mgr(configPath);
+    ServerConfig s;
+    s.name  = QStringLiteral("WHTplExp");
+    s.appid = 730;
+    s.dir   = QStringLiteral("/srv/whe");
+    s.webhookTemplate = QStringLiteral("Alert: {event}");
+    mgr.servers() << s;
+    QVERIFY(mgr.saveConfig());
+
+    QVERIFY(mgr.exportServerConfig(QStringLiteral("WHTplExp"), exportPath));
+
+    ServerManager mgr2(tmp.filePath(QStringLiteral("servers2.json")));
+    QString err = mgr2.importServerConfig(exportPath);
+    QVERIFY2(err.isEmpty(), qPrintable(err));
+    QCOMPARE(mgr2.servers().first().webhookTemplate, QStringLiteral("Alert: {event}"));
+}
+
+// ---------------------------------------------------------------------------
+// Maintenance window tests
+// ---------------------------------------------------------------------------
+
+void TestServerConfig::testMaintenanceWindowPersistence()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+
+    ServerManager mgr(configPath);
+    ServerConfig s;
+    s.name  = QStringLiteral("MaintTest");
+    s.appid = 730;
+    s.dir   = QStringLiteral("/srv/maint");
+    s.maintenanceStartHour = 2;
+    s.maintenanceEndHour   = 6;
+    mgr.servers() << s;
+    QVERIFY(mgr.saveConfig());
+
+    ServerManager mgr2(configPath);
+    QVERIFY(mgr2.loadConfig());
+    QCOMPARE(mgr2.servers().first().maintenanceStartHour, 2);
+    QCOMPARE(mgr2.servers().first().maintenanceEndHour,   6);
+}
+
+void TestServerConfig::testMaintenanceWindowDefaultDisabled()
+{
+    ServerConfig s;
+    QCOMPARE(s.maintenanceStartHour, -1);
+    QCOMPARE(s.maintenanceEndHour,   -1);
+}
+
+void TestServerConfig::testMaintenanceWindowValidation()
+{
+    ServerConfig s;
+    s.name  = QStringLiteral("MaintVal");
+    s.appid = 730;
+    s.dir   = QStringLiteral("/srv/mv");
+
+    // Valid: disabled
+    s.maintenanceStartHour = -1;
+    s.maintenanceEndHour   = -1;
+    QVERIFY(s.validate().isEmpty());
+
+    // Valid: normal range
+    s.maintenanceStartHour = 2;
+    s.maintenanceEndHour   = 6;
+    QVERIFY(s.validate().isEmpty());
+
+    // Invalid: hour out of range
+    s.maintenanceStartHour = 25;
+    QStringList errors = s.validate();
+    QVERIFY(!errors.isEmpty());
+    bool found = false;
+    for (const QString &e : errors) {
+        if (e.contains(QStringLiteral("Maintenance start hour")))
+            found = true;
+    }
+    QVERIFY(found);
+
+    // Invalid: end hour out of range
+    s.maintenanceStartHour = 2;
+    s.maintenanceEndHour   = 30;
+    errors = s.validate();
+    QVERIFY(!errors.isEmpty());
+    found = false;
+    for (const QString &e : errors) {
+        if (e.contains(QStringLiteral("Maintenance end hour")))
+            found = true;
+    }
+    QVERIFY(found);
+}
+
+void TestServerConfig::testMaintenanceWindowExportImport()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    QString exportPath = tmp.filePath(QStringLiteral("export.json"));
+
+    ServerManager mgr(configPath);
+    ServerConfig s;
+    s.name  = QStringLiteral("MaintExp");
+    s.appid = 730;
+    s.dir   = QStringLiteral("/srv/me");
+    s.maintenanceStartHour = 22;
+    s.maintenanceEndHour   = 4;
+    mgr.servers() << s;
+    QVERIFY(mgr.saveConfig());
+
+    QVERIFY(mgr.exportServerConfig(QStringLiteral("MaintExp"), exportPath));
+
+    ServerManager mgr2(tmp.filePath(QStringLiteral("servers2.json")));
+    QString err = mgr2.importServerConfig(exportPath);
+    QVERIFY2(err.isEmpty(), qPrintable(err));
+    QCOMPARE(mgr2.servers().first().maintenanceStartHour, 22);
+    QCOMPARE(mgr2.servers().first().maintenanceEndHour,    4);
+}
+
+// ---------------------------------------------------------------------------
+// Backup compression level tests
+// ---------------------------------------------------------------------------
+
+void TestServerConfig::testBackupCompressionLevelPersistence()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+
+    ServerManager mgr(configPath);
+    ServerConfig s;
+    s.name  = QStringLiteral("CompTest");
+    s.appid = 730;
+    s.dir   = QStringLiteral("/srv/comp");
+    s.backupCompressionLevel = 9;
+    mgr.servers() << s;
+    QVERIFY(mgr.saveConfig());
+
+    ServerManager mgr2(configPath);
+    QVERIFY(mgr2.loadConfig());
+    QCOMPARE(mgr2.servers().first().backupCompressionLevel, 9);
+}
+
+void TestServerConfig::testBackupCompressionLevelDefault()
+{
+    ServerConfig s;
+    QCOMPARE(s.backupCompressionLevel, 6);
+}
+
+void TestServerConfig::testBackupCompressionLevelValidation()
+{
+    ServerConfig s;
+    s.name  = QStringLiteral("CompVal");
+    s.appid = 730;
+    s.dir   = QStringLiteral("/srv/cv");
+
+    // Valid: 0
+    s.backupCompressionLevel = 0;
+    QVERIFY(s.validate().isEmpty());
+
+    // Valid: 9
+    s.backupCompressionLevel = 9;
+    QVERIFY(s.validate().isEmpty());
+
+    // Invalid: negative
+    s.backupCompressionLevel = -1;
+    QStringList errors = s.validate();
+    QVERIFY(!errors.isEmpty());
+    bool found = false;
+    for (const QString &e : errors) {
+        if (e.contains(QStringLiteral("Backup compression level")))
+            found = true;
+    }
+    QVERIFY(found);
+
+    // Invalid: too high
+    s.backupCompressionLevel = 10;
+    errors = s.validate();
+    QVERIFY(!errors.isEmpty());
+    found = false;
+    for (const QString &e : errors) {
+        if (e.contains(QStringLiteral("Backup compression level")))
+            found = true;
+    }
+    QVERIFY(found);
+}
+
+void TestServerConfig::testBackupCompressionLevelExportImport()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    QString exportPath = tmp.filePath(QStringLiteral("export.json"));
+
+    ServerManager mgr(configPath);
+    ServerConfig s;
+    s.name  = QStringLiteral("CompExp");
+    s.appid = 730;
+    s.dir   = QStringLiteral("/srv/ce");
+    s.backupCompressionLevel = 3;
+    mgr.servers() << s;
+    QVERIFY(mgr.saveConfig());
+
+    QVERIFY(mgr.exportServerConfig(QStringLiteral("CompExp"), exportPath));
+
+    ServerManager mgr2(tmp.filePath(QStringLiteral("servers2.json")));
+    QString err = mgr2.importServerConfig(exportPath);
+    QVERIFY2(err.isEmpty(), qPrintable(err));
+    QCOMPARE(mgr2.servers().first().backupCompressionLevel, 3);
 }
 
 #include "test_serverconfig.moc"

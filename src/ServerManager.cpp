@@ -2,6 +2,7 @@
 #include "BackupModule.hpp"
 #include "SteamCmdModule.hpp"
 #include "RconClient.hpp"
+#include "ConsoleLogWriter.hpp"
 
 #include <QFile>
 #include <QDir>
@@ -11,6 +12,31 @@
 #include <QSet>
 #include <QDebug>
 #include <QTimer>
+
+// ---------------------------------------------------------------------------
+// Simple XOR-based obfuscation for RCON passwords at rest.
+// NOT cryptographically secure – intended only to prevent casual reading
+// of plaintext passwords in servers.json.
+// ---------------------------------------------------------------------------
+static const QByteArray kObfuscationKey = QByteArrayLiteral("SSA_RCON_KEY_2026");
+
+static QString obfuscatePassword(const QString &plain)
+{
+    QByteArray data = plain.toUtf8();
+    for (int i = 0; i < data.size(); ++i)
+        data[i] = data[i] ^ kObfuscationKey[i % kObfuscationKey.size()];
+    return QStringLiteral("obf:") + QString::fromLatin1(data.toBase64());
+}
+
+static QString deobfuscatePassword(const QString &stored)
+{
+    if (!stored.startsWith(QStringLiteral("obf:")))
+        return stored;  // legacy plaintext value
+    QByteArray data = QByteArray::fromBase64(stored.mid(4).toLatin1());
+    for (int i = 0; i < data.size(); ++i)
+        data[i] = data[i] ^ kObfuscationKey[i % kObfuscationKey.size()];
+    return QString::fromUtf8(data);
+}
 
 // ---------------------------------------------------------------------------
 // Constructor / config I/O
@@ -55,6 +81,7 @@ bool ServerManager::loadConfig()
         s.backupFolder   = obj[QStringLiteral("backupFolder")].toString();
         s.notes          = obj[QStringLiteral("notes")].toString();
         s.discordWebhookUrl = obj[QStringLiteral("discordWebhookUrl")].toString();
+        s.webhookTemplate= obj[QStringLiteral("webhookTemplate")].toString();
         s.autoUpdate     = obj[QStringLiteral("autoUpdate")].toBool(true);
         s.autoStartOnLaunch = obj[QStringLiteral("autoStartOnLaunch")].toBool(false);
         s.favorite       = obj[QStringLiteral("favorite")].toBool(false);
@@ -62,6 +89,10 @@ bool ServerManager::loadConfig()
         s.backupIntervalMinutes  = obj[QStringLiteral("backupIntervalMinutes")].toInt(30);
         s.restartIntervalHours   = obj[QStringLiteral("restartIntervalHours")].toInt(24);
         s.rconCommandIntervalMinutes = obj[QStringLiteral("rconCommandIntervalMinutes")].toInt(0);
+        s.backupCompressionLevel = obj[QStringLiteral("backupCompressionLevel")].toInt(6);
+        s.maintenanceStartHour   = obj[QStringLiteral("maintenanceStartHour")].toInt(-1);
+        s.maintenanceEndHour     = obj[QStringLiteral("maintenanceEndHour")].toInt(-1);
+        s.consoleLogging = obj[QStringLiteral("consoleLogging")].toBool(false);
 
         for (const QJsonValue &v : obj[QStringLiteral("scheduledRconCommands")].toArray())
             s.scheduledRconCommands << v.toString();
@@ -69,7 +100,7 @@ bool ServerManager::loadConfig()
         QJsonObject rcon = obj[QStringLiteral("rcon")].toObject();
         s.rcon.host     = rcon[QStringLiteral("host")].toString(QStringLiteral("127.0.0.1"));
         s.rcon.port     = rcon[QStringLiteral("port")].toInt(27015);
-        s.rcon.password = rcon[QStringLiteral("password")].toString();
+        s.rcon.password = deobfuscatePassword(rcon[QStringLiteral("password")].toString());
 
         for (const QJsonValue &m : obj[QStringLiteral("mods")].toArray())
             s.mods << m.toInt();
@@ -126,6 +157,7 @@ bool ServerManager::saveConfig() const
         obj[QStringLiteral("backupFolder")]  = s.backupFolder;
         obj[QStringLiteral("notes")]         = s.notes;
         obj[QStringLiteral("discordWebhookUrl")] = s.discordWebhookUrl;
+        obj[QStringLiteral("webhookTemplate")] = s.webhookTemplate;
         obj[QStringLiteral("autoUpdate")]    = s.autoUpdate;
         obj[QStringLiteral("autoStartOnLaunch")] = s.autoStartOnLaunch;
         obj[QStringLiteral("favorite")]      = s.favorite;
@@ -133,11 +165,15 @@ bool ServerManager::saveConfig() const
         obj[QStringLiteral("backupIntervalMinutes")] = s.backupIntervalMinutes;
         obj[QStringLiteral("restartIntervalHours")]  = s.restartIntervalHours;
         obj[QStringLiteral("rconCommandIntervalMinutes")] = s.rconCommandIntervalMinutes;
+        obj[QStringLiteral("backupCompressionLevel")] = s.backupCompressionLevel;
+        obj[QStringLiteral("maintenanceStartHour")]   = s.maintenanceStartHour;
+        obj[QStringLiteral("maintenanceEndHour")]     = s.maintenanceEndHour;
+        obj[QStringLiteral("consoleLogging")] = s.consoleLogging;
 
         QJsonObject rcon;
         rcon[QStringLiteral("host")]     = s.rcon.host;
         rcon[QStringLiteral("port")]     = s.rcon.port;
-        rcon[QStringLiteral("password")] = s.rcon.password;
+        rcon[QStringLiteral("password")] = obfuscatePassword(s.rcon.password);
         obj[QStringLiteral("rcon")] = rcon;
 
         QJsonArray mods;
@@ -229,7 +265,8 @@ void ServerManager::startServer(ServerConfig &server)
         m_startTimes[server.name] = QDateTime::currentDateTime();
         emit logMessage(server.name, QStringLiteral("Server started (PID %1).").arg(proc->processId()));
         m_webhook->sendNotification(server.discordWebhookUrl, server.name,
-                                    QStringLiteral("Server started."));
+                                    QStringLiteral("Server started."),
+                                    server.webhookTemplate);
     } else {
         emit logMessage(server.name, QStringLiteral("Failed to start server: ") + proc->errorString());
         QObject::disconnect(conn);
@@ -260,7 +297,8 @@ void ServerManager::stopServer(ServerConfig &server)
     proc->deleteLater();
     emit logMessage(server.name, QStringLiteral("Server stopped."));
     m_webhook->sendNotification(server.discordWebhookUrl, server.name,
-                                QStringLiteral("Server stopped."));
+                                QStringLiteral("Server stopped."),
+                                server.webhookTemplate);
 }
 
 void ServerManager::restartServer(ServerConfig &server)
@@ -302,7 +340,8 @@ void ServerManager::onProcessFinished(const QString &serverName, int exitCode,
         for (const ServerConfig &s : std::as_const(m_servers)) {
             if (s.name == serverName) {
                 m_webhook->sendNotification(s.discordWebhookUrl, serverName,
-                                            QStringLiteral("Server crashed (exit code %1).").arg(exitCode));
+                                            QStringLiteral("Server crashed (exit code %1).").arg(exitCode),
+                                            s.webhookTemplate);
                 break;
             }
         }
@@ -399,7 +438,8 @@ QString ServerManager::takeSnapshot(const ServerConfig &server)
     else {
         emit logMessage(server.name, QStringLiteral("Snapshot created: ") + ts);
         m_webhook->sendNotification(server.discordWebhookUrl, server.name,
-                                    QStringLiteral("Backup completed."));
+                                    QStringLiteral("Backup completed."),
+                                    server.webhookTemplate);
     }
     return ts;
 }
@@ -443,10 +483,18 @@ int ServerManager::getPlayerCount(const ServerConfig &server)
 
 QString ServerManager::sendRconCommand(const ServerConfig &server, const QString &cmd)
 {
+    if (server.consoleLogging)
+        ConsoleLogWriter::append(server.dir, server.name, QStringLiteral("> ") + cmd);
+
     RconClient rcon;
     if (!rcon.connect(server.rcon.host, server.rcon.port, server.rcon.password, 3000))
         return QStringLiteral("[RCON] Connection failed.");
-    return rcon.sendCommand(cmd);
+    QString resp = rcon.sendCommand(cmd);
+
+    if (server.consoleLogging && !resp.isEmpty())
+        ConsoleLogWriter::append(server.dir, server.name, resp);
+
+    return resp;
 }
 
 // ---------------------------------------------------------------------------
@@ -526,6 +574,7 @@ bool ServerManager::exportServerConfig(const QString &serverName,
     obj[QStringLiteral("backupFolder")]  = s.backupFolder;
     obj[QStringLiteral("notes")]         = s.notes;
     obj[QStringLiteral("discordWebhookUrl")] = s.discordWebhookUrl;
+    obj[QStringLiteral("webhookTemplate")] = s.webhookTemplate;
     obj[QStringLiteral("autoUpdate")]    = s.autoUpdate;
     obj[QStringLiteral("autoStartOnLaunch")] = s.autoStartOnLaunch;
     obj[QStringLiteral("favorite")]      = s.favorite;
@@ -533,11 +582,15 @@ bool ServerManager::exportServerConfig(const QString &serverName,
     obj[QStringLiteral("backupIntervalMinutes")] = s.backupIntervalMinutes;
     obj[QStringLiteral("restartIntervalHours")]  = s.restartIntervalHours;
     obj[QStringLiteral("rconCommandIntervalMinutes")] = s.rconCommandIntervalMinutes;
+    obj[QStringLiteral("backupCompressionLevel")] = s.backupCompressionLevel;
+    obj[QStringLiteral("maintenanceStartHour")]   = s.maintenanceStartHour;
+    obj[QStringLiteral("maintenanceEndHour")]     = s.maintenanceEndHour;
+    obj[QStringLiteral("consoleLogging")] = s.consoleLogging;
 
     QJsonObject rcon;
     rcon[QStringLiteral("host")]     = s.rcon.host;
     rcon[QStringLiteral("port")]     = s.rcon.port;
-    rcon[QStringLiteral("password")] = s.rcon.password;
+    rcon[QStringLiteral("password")] = obfuscatePassword(s.rcon.password);
     obj[QStringLiteral("rcon")] = rcon;
 
     QJsonArray mods;
@@ -582,6 +635,7 @@ QString ServerManager::importServerConfig(const QString &filePath)
     s.backupFolder   = obj[QStringLiteral("backupFolder")].toString();
     s.notes          = obj[QStringLiteral("notes")].toString();
     s.discordWebhookUrl = obj[QStringLiteral("discordWebhookUrl")].toString();
+    s.webhookTemplate= obj[QStringLiteral("webhookTemplate")].toString();
     s.autoUpdate     = obj[QStringLiteral("autoUpdate")].toBool(true);
     s.autoStartOnLaunch = obj[QStringLiteral("autoStartOnLaunch")].toBool(false);
     s.favorite       = obj[QStringLiteral("favorite")].toBool(false);
@@ -589,11 +643,15 @@ QString ServerManager::importServerConfig(const QString &filePath)
     s.backupIntervalMinutes = obj[QStringLiteral("backupIntervalMinutes")].toInt(30);
     s.restartIntervalHours  = obj[QStringLiteral("restartIntervalHours")].toInt(24);
     s.rconCommandIntervalMinutes = obj[QStringLiteral("rconCommandIntervalMinutes")].toInt(0);
+    s.backupCompressionLevel = obj[QStringLiteral("backupCompressionLevel")].toInt(6);
+    s.maintenanceStartHour   = obj[QStringLiteral("maintenanceStartHour")].toInt(-1);
+    s.maintenanceEndHour     = obj[QStringLiteral("maintenanceEndHour")].toInt(-1);
+    s.consoleLogging = obj[QStringLiteral("consoleLogging")].toBool(false);
 
     QJsonObject rcon = obj[QStringLiteral("rcon")].toObject();
     s.rcon.host     = rcon[QStringLiteral("host")].toString(QStringLiteral("127.0.0.1"));
     s.rcon.port     = rcon[QStringLiteral("port")].toInt(27015);
-    s.rcon.password = rcon[QStringLiteral("password")].toString();
+    s.rcon.password = deobfuscatePassword(rcon[QStringLiteral("password")].toString());
 
     for (const QJsonValue &m : obj[QStringLiteral("mods")].toArray())
         s.mods << m.toInt();
