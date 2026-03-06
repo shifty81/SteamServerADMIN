@@ -31,7 +31,7 @@ struct ServerConfig {
     int keepBackups = 10;     // maximum number of versioned backups to retain
     QStringList scheduledRconCommands; // RCON commands to run at a scheduled interval
     int rconCommandIntervalMinutes = 0; // 0 = disabled
-    int backupCompressionLevel = 6;    // zip compression level (0=store, 1=fastest … 9=best)
+    int backupCompressionLevel = 6;    // zip compression level (0=store, 1=fastest … 9=best; on Windows only 0 vs 1-9 are distinguished)
     int maintenanceStartHour = -1;     // hour (0-23) when maintenance window starts; -1 = disabled
     int maintenanceEndHour   = -1;     // hour (0-23) when maintenance window ends;   -1 = disabled
     bool consoleLogging = false;       // save RCON console sessions to disk
