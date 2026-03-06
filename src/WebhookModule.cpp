@@ -1,5 +1,6 @@
 #include "WebhookModule.hpp"
 
+#include <QDateTime>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QNetworkReply>
@@ -11,16 +12,33 @@ WebhookModule::WebhookModule(QObject *parent)
 {
 }
 
+QString WebhookModule::formatMessage(const QString &tpl,
+                                     const QString &serverName,
+                                     const QString &event)
+{
+    QString msg = tpl;
+    msg.replace(QStringLiteral("{server}"),    serverName);
+    msg.replace(QStringLiteral("{event}"),     event);
+    msg.replace(QStringLiteral("{timestamp}"), QDateTime::currentDateTime().toString(Qt::ISODate));
+    return msg;
+}
+
 void WebhookModule::sendNotification(const QString &webhookUrl,
                                      const QString &serverName,
-                                     const QString &message)
+                                     const QString &message,
+                                     const QString &messageTemplate)
 {
     if (webhookUrl.trimmed().isEmpty())
         return;
 
+    QString content;
+    if (!messageTemplate.trimmed().isEmpty())
+        content = formatMessage(messageTemplate, serverName, message);
+    else
+        content = QStringLiteral("**[%1]** %2").arg(serverName, message);
+
     QJsonObject payload;
-    payload[QStringLiteral("content")]  =
-        QStringLiteral("**[%1]** %2").arg(serverName, message);
+    payload[QStringLiteral("content")] = content;
 
     QNetworkRequest request{QUrl(webhookUrl)};
     request.setHeader(QNetworkRequest::ContentTypeHeader,

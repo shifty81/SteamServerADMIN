@@ -2,6 +2,24 @@
 #include "ServerManager.hpp"
 
 #include <QDebug>
+#include <QTime>
+
+// Returns true when the current hour falls inside the per-server maintenance
+// window (meaning scheduled tasks should be suppressed).
+static bool inMaintenanceWindow(const ServerConfig &cfg)
+{
+    int startH = cfg.maintenanceStartHour;
+    int endH   = cfg.maintenanceEndHour;
+    if (startH < 0 || endH < 0)
+        return false;                       // disabled
+
+    int now = QTime::currentTime().hour();
+
+    if (startH <= endH)                     // e.g. 02-06
+        return now >= startH && now < endH;
+    else                                    // wraps midnight, e.g. 22-04
+        return now >= startH || now < endH;
+}
 
 SchedulerModule::SchedulerModule(ServerManager *manager, QObject *parent)
     : QObject(parent), m_manager(manager)
@@ -59,6 +77,8 @@ void SchedulerModule::startScheduler(const QString &serverName)
             // Look up the server fresh – the list may have been reallocated
             for (ServerConfig &s : m_manager->servers()) {
                 if (s.name == name) {
+                    if (inMaintenanceWindow(s))
+                        return;  // skip during maintenance
                     m_manager->takeSnapshot(s);
                     emit scheduledBackup(name);
                     break;
@@ -78,6 +98,8 @@ void SchedulerModule::startScheduler(const QString &serverName)
         connect(t.restartTimer, &QTimer::timeout, this, [this, name]() {
             for (ServerConfig &s : m_manager->servers()) {
                 if (s.name == name) {
+                    if (inMaintenanceWindow(s))
+                        return;  // skip during maintenance
                     if (m_manager->isServerRunning(s))
                         m_manager->restartServer(s);
                     emit scheduledRestart(name);

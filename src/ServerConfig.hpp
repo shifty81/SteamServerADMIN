@@ -22,6 +22,7 @@ struct ServerConfig {
     QString backupFolder;
     QString notes;             // free-form user notes / description for this server
     QString discordWebhookUrl; // Discord webhook URL for event notifications
+    QString webhookTemplate;   // custom webhook message template; placeholders: {server}, {event}, {timestamp}
     bool autoUpdate = true;
     bool autoStartOnLaunch = false;  // start this server when the SSA application launches
     bool favorite = false;           // pinned / favorite server (appears first in sidebar)
@@ -30,6 +31,10 @@ struct ServerConfig {
     int keepBackups = 10;     // maximum number of versioned backups to retain
     QStringList scheduledRconCommands; // RCON commands to run at a scheduled interval
     int rconCommandIntervalMinutes = 0; // 0 = disabled
+    int backupCompressionLevel = 6;    // zip compression level (0=store, 1=fastest … 9=best; on Windows only 0 vs 1-9 are distinguished)
+    int maintenanceStartHour = -1;     // hour (0-23) when maintenance window starts; -1 = disabled
+    int maintenanceEndHour   = -1;     // hour (0-23) when maintenance window ends;   -1 = disabled
+    bool consoleLogging = false;       // save RCON console sessions to disk
 
     /**
      * @brief Validate this server configuration.
@@ -62,6 +67,15 @@ struct ServerConfig {
 
         if (rconCommandIntervalMinutes < 0)
             errors << QStringLiteral("RCON command interval must not be negative.");
+
+        if (backupCompressionLevel < 0 || backupCompressionLevel > 9)
+            errors << QStringLiteral("Backup compression level must be between 0 and 9.");
+
+        if (maintenanceStartHour != -1 && (maintenanceStartHour < 0 || maintenanceStartHour > 23))
+            errors << QStringLiteral("Maintenance start hour must be between 0 and 23 (or -1 to disable).");
+
+        if (maintenanceEndHour != -1 && (maintenanceEndHour < 0 || maintenanceEndHour > 23))
+            errors << QStringLiteral("Maintenance end hour must be between 0 and 23 (or -1 to disable).");
 
         return errors;
     }

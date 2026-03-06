@@ -15,9 +15,11 @@ class BackupModule {
 public:
     /**
      * @brief Create a zip of sourceDir and write it to destZip.
+     * @param compressionLevel  0-9 where 0=store, 1=fastest, 9=best (default 6).
      * @return true on success.
      */
-    static bool createZip(const QString &sourceDir, const QString &destZip);
+    static bool createZip(const QString &sourceDir, const QString &destZip,
+                          int compressionLevel = 6);
 
     /**
      * @brief Extract a zip archive into destDir.
