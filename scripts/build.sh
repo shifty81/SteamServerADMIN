@@ -83,17 +83,73 @@ install_qt6_macos() {
     fi
 }
 
+find_qt6_windows() {
+    # Search common Windows Qt6 installation paths
+    local search_dirs=(
+        "${QT_DIR:-}" "${Qt6_DIR:-}" "${QTDIR:-}"
+        "/c/Qt" "/d/Qt"
+        "$USERPROFILE/Qt" "$HOME/Qt"
+    )
+    for base in "${search_dirs[@]}"; do
+        [ -z "$base" ] && continue
+        [ -d "$base" ] || continue
+        # Look for versioned directories like 6.x.x/msvc*_64 or 6.x.x/mingw*_64
+        for ver_dir in "$base"/6*/msvc*_64 "$base"/6*/mingw*_64; do
+            if [ -f "$ver_dir/lib/cmake/Qt6/Qt6Config.cmake" ]; then
+                echo "$ver_dir"
+                return 0
+            fi
+        done
+    done
+    return 1
+}
+
 install_qt6_msys() {
+    # 1) MSYS2 with pacman
     if command -v pacman &>/dev/null; then
         info "Installing Qt6 development packages via MSYS2 pacman …"
-        if ! pacman -S --noconfirm "${MINGW_PACKAGE_PREFIX:-mingw-w64-x86_64}"-qt6-base; then
-            err "MSYS2 pacman failed to install Qt6. Please install it manually or use scripts/build.ps1."
-            return 1
+        if pacman -S --noconfirm "${MINGW_PACKAGE_PREFIX:-mingw-w64-x86_64}"-qt6-base; then
+            return 0
         fi
-    else
-        err "On Windows, please use scripts/build.ps1 (PowerShell) or install Qt6 manually."
-        return 1
+        warn "MSYS2 pacman failed to install Qt6."
     fi
+
+    # 2) Check common Windows installation paths
+    local qt_path
+    qt_path="$(find_qt6_windows)" && {
+        info "Qt6 found at: $qt_path"
+        export CMAKE_PREFIX_PATH="${qt_path}${CMAKE_PREFIX_PATH:+;$CMAKE_PREFIX_PATH}"
+        return 0
+    }
+
+    # 3) Try winget / chocolatey (available from Git Bash as .exe)
+    if command -v winget.exe &>/dev/null; then
+        info "Attempting to install Qt via winget …"
+        if winget.exe install --id=qt.qt --accept-source-agreements --accept-package-agreements 2>&1; then
+            qt_path="$(find_qt6_windows)" && {
+                export CMAKE_PREFIX_PATH="${qt_path}${CMAKE_PREFIX_PATH:+;$CMAKE_PREFIX_PATH}"
+                return 0
+            }
+        fi
+        warn "winget install did not succeed."
+    fi
+
+    if command -v choco.exe &>/dev/null; then
+        info "Attempting to install Qt via Chocolatey …"
+        if choco.exe install qt6-base-dev -y 2>&1; then
+            qt_path="$(find_qt6_windows)" && {
+                export CMAKE_PREFIX_PATH="${qt_path}${CMAKE_PREFIX_PATH:+;$CMAKE_PREFIX_PATH}"
+                return 0
+            }
+        fi
+        warn "Chocolatey install did not succeed."
+    fi
+
+    err "Qt6 could not be found or installed automatically."
+    err "Please install Qt 6.4+ from https://www.qt.io/download and either:"
+    err "  • Set CMAKE_PREFIX_PATH to the Qt6 directory, or"
+    err "  • Use scripts/build.ps1 (PowerShell) which searches additional paths."
+    return 1
 }
 
 check_qt6() {
