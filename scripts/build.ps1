@@ -7,7 +7,7 @@ param(
     [string]$BuildType = "Release"
 )
 
-$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Continue'
 $BuildDir = "build"
 
 # ── 0. Set up logging ────────────────────────────────────────
@@ -21,13 +21,31 @@ $TestLog      = Join-Path $LogDir "test.log"
 
 function Info  { param([string]$msg) Write-Host ">> $msg" -ForegroundColor Cyan }
 function Warn  { param([string]$msg) Write-Host "!! $msg" -ForegroundColor Yellow }
-function Fatal { param([string]$msg) Write-Host "!! $msg" -ForegroundColor Red; exit 1 }
+function Fatal { param([string]$msg, [string]$LogFile)
+    Write-Host "!! $msg" -ForegroundColor Red
+    if ($LogFile -and (Test-Path $LogFile)) {
+        Add-Content -Path $LogFile -Value $msg
+    }
+}
+
+# Initialize every log file with a header so they are never empty
+$Timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+foreach ($lf in @($ConfigureLog, $BuildLog, $TestLog)) {
+    Set-Content -Path $lf -Value "=== SSA Build - $Timestamp - $BuildType ==="
+}
+
+$ExitCode = 0
+
+try {
 
 Info "Logs will be written to: $LogDir"
 
 # ── 1. Check for cmake ───────────────────────────────────────
 if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) {
-    Fatal "CMake is not installed. Please install CMake 3.22+ and re-run this script."
+    $msg = "CMake is not installed. Please install CMake 3.22+ and re-run this script."
+    Fatal $msg $ConfigureLog
+    $ExitCode = 1
+    throw $msg
 }
 
 # ── 2. Locate or install Qt6 ─────────────────────────────────
@@ -83,19 +101,14 @@ if (-not $qt6Path) {
     $qt6Path = Find-Qt6
 
     if (-not $qt6Path) {
+        $msg = "Qt6 could not be found or installed automatically. Please install Qt 6.4+ from https://www.qt.io/download"
         Write-Host ""
-        Write-Host "╔══════════════════════════════════════════════════════════════╗" -ForegroundColor Yellow
-        Write-Host "║  Qt6 could not be found or installed automatically.         ║" -ForegroundColor Yellow
-        Write-Host "║                                                              ║" -ForegroundColor Yellow
-        Write-Host "║  Please install Qt 6.4+ from https://www.qt.io/download     ║" -ForegroundColor Yellow
-        Write-Host "║  Then re-run this script, or set the environment variable:   ║" -ForegroundColor Yellow
-        Write-Host "║                                                              ║" -ForegroundColor Yellow
-        Write-Host '║    $env:CMAKE_PREFIX_PATH = "C:\Qt\6.x.x\msvc20xx_64"      ║' -ForegroundColor Yellow
-        Write-Host "║                                                              ║" -ForegroundColor Yellow
-        Write-Host "║  Alternatively, pass the path via cmake directly:            ║" -ForegroundColor Yellow
-        Write-Host '║    cmake -B build -DCMAKE_PREFIX_PATH="C:\Qt\6.x.x\..."    ║' -ForegroundColor Yellow
-        Write-Host "╚══════════════════════════════════════════════════════════════╝" -ForegroundColor Yellow
-        exit 1
+        Write-Host "=== $msg ===" -ForegroundColor Yellow
+        Write-Host '  Set: $env:CMAKE_PREFIX_PATH = "C:\Qt\6.x.x\msvc20xx_64"' -ForegroundColor Yellow
+        Write-Host '  Or:  cmake -B build -DCMAKE_PREFIX_PATH="C:\Qt\6.x.x\..."' -ForegroundColor Yellow
+        Fatal $msg $ConfigureLog
+        $ExitCode = 1
+        throw $msg
     }
 }
 
@@ -108,16 +121,25 @@ if ($qt6Path) {
 }
 
 Info "Configuring ($BuildType) …"
-cmake @cmakeArgs 2>&1 | Tee-Object -FilePath $ConfigureLog
-if ($LASTEXITCODE -ne 0) { Fatal "CMake configuration failed." }
+cmake @cmakeArgs 2>&1 | Tee-Object -FilePath $ConfigureLog -Append
+if ($LASTEXITCODE -ne 0) {
+    Fatal "CMake configuration failed. See $ConfigureLog" $ConfigureLog
+    $ExitCode = 1
+    throw "CMake configuration failed."
+}
 
 # ── 4. Build ─────────────────────────────────────────────────
-$cpuCount = (Get-CimInstance Win32_Processor).NumberOfLogicalProcessors
-if (-not $cpuCount) { $cpuCount = 2 }
+$cpuCount = 2
+try { $cpuCount = (Get-CimInstance Win32_Processor -ErrorAction SilentlyContinue).NumberOfLogicalProcessors } catch {}
+if (-not $cpuCount -or $cpuCount -lt 1) { $cpuCount = 2 }
 
 Info "Building with $cpuCount parallel jobs …"
-cmake --build $BuildDir --config $BuildType --parallel $cpuCount 2>&1 | Tee-Object -FilePath $BuildLog
-if ($LASTEXITCODE -ne 0) { Fatal "Build failed." }
+cmake --build $BuildDir --config $BuildType --parallel $cpuCount 2>&1 | Tee-Object -FilePath $BuildLog -Append
+if ($LASTEXITCODE -ne 0) {
+    Fatal "Build failed. See $BuildLog" $BuildLog
+    $ExitCode = 1
+    throw "Build failed."
+}
 
 # ── 5. Run tests ─────────────────────────────────────────────
 $testBin = Join-Path $BuildDir "$BuildType\SSA_Tests.exe"
@@ -126,9 +148,15 @@ if (-not (Test-Path $testBin)) {
 }
 if (Test-Path $testBin) {
     Info "Running tests …"
-    ctest --test-dir $BuildDir --build-config $BuildType --output-on-failure 2>&1 | Tee-Object -FilePath $TestLog
+    ctest --test-dir $BuildDir --build-config $BuildType --output-on-failure 2>&1 | Tee-Object -FilePath $TestLog -Append
+    if ($LASTEXITCODE -ne 0) {
+        Fatal "Tests failed. See $TestLog" $TestLog
+        $ExitCode = 1
+        throw "Tests failed."
+    }
 } else {
     Warn "Test binary not found — skipping tests."
+    Add-Content -Path $TestLog -Value "Test binary not found - tests skipped."
 }
 
 Info "Build complete!  Binary: $BuildDir\$BuildType\SSA.exe  (or $BuildDir\SSA.exe)"
@@ -136,3 +164,18 @@ Info "Log files:"
 Info "  Configure : $ConfigureLog"
 Info "  Build     : $BuildLog"
 Info "  Test      : $TestLog"
+
+} catch {
+    # Error already reported by Fatal — nothing extra to do
+} finally {
+    # Keep the window open so the user can read the output
+    if ($ExitCode -ne 0) {
+        Write-Host ""
+        Write-Host "!! Build failed. Check the log files above for details." -ForegroundColor Red
+    }
+    Write-Host ""
+    if (-not $env:CI) {
+        Read-Host "Press Enter to close"
+    }
+    exit $ExitCode
+}
