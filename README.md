@@ -58,6 +58,9 @@ A cross-platform Qt6 desktop application for managing SteamCMD-based game server
 | **Restart warning broadcasts** | Configurable in-game RCON warnings before scheduled restarts; customisable message template with `{minutes}` placeholder |
 | **Max players display** | `maxPlayers` field shows capacity alongside live player count on the dashboard |
 | **Pending update indicators** | Dashboard badges highlight servers with pending game or mod updates |
+| **Resource monitoring** | Track CPU and memory usage per server process with configurable alert thresholds (`cpuAlertThreshold`, `memAlertThresholdMB`); `resourceAlert` signal fires when a threshold is exceeded |
+| **Event hook scripts** | Run custom shell / script on server lifecycle events (`onStart`, `onStop`, `onCrash`, `onBackup`, `onUpdate`); scripts receive `SSA_SERVER_NAME`, `SSA_EVENT`, `SSA_SERVER_DIR` environment variables |
+| **Server tags** | Assign user-defined tags per server for categorisation and filtering; persisted in `servers.json` with full export/import support |
 
 ---
 
@@ -158,7 +161,13 @@ See `servers.json` in the repository root for an example configuration.
     "rconCommandIntervalMinutes": 0,
     "maxPlayers": 70,
     "restartWarningMinutes": 15,
-    "restartWarningMessage": ""
+    "restartWarningMessage": "",
+    "cpuAlertThreshold": 90.0,
+    "memAlertThresholdMB": 0,
+    "eventHooks": {
+      "onCrash": "/srv/scripts/notify_crash.sh"
+    },
+    "tags": ["production", "ark"]
   }
 ]
 ```
@@ -185,7 +194,9 @@ SSA/
 │   ├── SchedulerModule.*     # Scheduled backups, restarts & RCON commands
 │   ├── LogModule.*           # Centralized operation logging
 │   ├── TrayManager.*         # System tray icon & notifications
-│   └── WebhookModule.*       # Discord webhook event notifications
+│   ├── WebhookModule.*       # Discord webhook event notifications
+│   ├── ResourceMonitor.*     # Per-process CPU/memory usage monitoring
+│   └── EventHookManager.*    # Custom script execution on server events
 ├── tests/
 │   └── test_serverconfig.cpp # Qt Test unit tests
 ├── CMakeLists.txt

@@ -2,6 +2,8 @@
 
 #include "ServerConfig.hpp"
 #include "WebhookModule.hpp"
+#include "ResourceMonitor.hpp"
+#include "EventHookManager.hpp"
 
 #include <QObject>
 #include <QList>
@@ -116,9 +118,19 @@ public:
      *  @param minutesRemaining  minutes until the restart happens. */
     void sendRestartWarning(ServerConfig &server, int minutesRemaining);
 
+    // ---- Resource monitoring ----
+    /** Return the shared ResourceMonitor instance. */
+    ResourceMonitor *resourceMonitor();
+
+    // ---- Event hooks ----
+    /** Return the shared EventHookManager instance. */
+    EventHookManager *eventHookManager();
+
 signals:
     void logMessage(const QString &serverName, const QString &message);
     void serverCrashed(const QString &serverName);
+    /** Emitted when a server's resource usage exceeds its configured thresholds. */
+    void resourceAlert(const QString &serverName, const QString &detail);
 
 private:
     void onProcessFinished(const QString &serverName, int exitCode,
@@ -142,4 +154,6 @@ private:
     QProcess *processFor(const ServerConfig &server) const;
 
     WebhookModule *m_webhook;
+    ResourceMonitor *m_resourceMonitor;
+    EventHookManager *m_eventHookManager;
 };

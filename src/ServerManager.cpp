@@ -44,13 +44,44 @@ static QString deobfuscatePassword(const QString &stored)
 
 ServerManager::ServerManager(const QString &configFile, QObject *parent)
     : QObject(parent), m_configFile(configFile),
-      m_webhook(new WebhookModule(this))
+      m_webhook(new WebhookModule(this)),
+      m_resourceMonitor(new ResourceMonitor(this)),
+      m_eventHookManager(new EventHookManager(this))
 {
 #ifdef Q_OS_WIN
     m_steamCmdPath = QStringLiteral("steamcmd.exe");
 #else
     m_steamCmdPath = QStringLiteral("steamcmd");
 #endif
+
+    // Check resource thresholds when usage is updated
+    connect(m_resourceMonitor, &ResourceMonitor::usageUpdated,
+            this, [this](const QMap<QString, ResourceUsage> &usage) {
+        constexpr double kBytesPerMB = 1024.0 * 1024.0;
+        for (auto it = usage.constBegin(); it != usage.constEnd(); ++it) {
+            const QString &name = it.key();
+            const ResourceUsage &ru = it.value();
+            // Find the server config for threshold comparison
+            for (const ServerConfig &s : std::as_const(m_servers)) {
+                if (s.name != name)
+                    continue;
+                if (s.cpuAlertThreshold > 0 && ru.cpuPercent > s.cpuAlertThreshold) {
+                    emit resourceAlert(name,
+                        QStringLiteral("CPU usage %.1f%% exceeds threshold %.1f%%")
+                            .arg(ru.cpuPercent).arg(s.cpuAlertThreshold));
+                }
+                if (s.memAlertThresholdMB > 0) {
+                    double memMB = static_cast<double>(ru.memoryBytes) / kBytesPerMB;
+                    if (memMB > s.memAlertThresholdMB) {
+                        emit resourceAlert(name,
+                            QStringLiteral("Memory usage %.1f MB exceeds threshold %.1f MB")
+                                .arg(memMB).arg(s.memAlertThresholdMB));
+                    }
+                }
+                break;
+            }
+        }
+    });
 }
 
 bool ServerManager::loadConfig()
@@ -96,6 +127,18 @@ bool ServerManager::loadConfig()
         s.maxPlayers     = obj[QStringLiteral("maxPlayers")].toInt(0);
         s.restartWarningMinutes = obj[QStringLiteral("restartWarningMinutes")].toInt(15);
         s.restartWarningMessage = obj[QStringLiteral("restartWarningMessage")].toString();
+
+        s.cpuAlertThreshold    = obj[QStringLiteral("cpuAlertThreshold")].toDouble(90.0);
+        s.memAlertThresholdMB  = obj[QStringLiteral("memAlertThresholdMB")].toDouble(0.0);
+
+        // Event hooks
+        QJsonObject hooks = obj[QStringLiteral("eventHooks")].toObject();
+        for (auto hIt = hooks.begin(); hIt != hooks.end(); ++hIt)
+            s.eventHooks[hIt.key()] = hIt.value().toString();
+
+        // Tags
+        for (const QJsonValue &v : obj[QStringLiteral("tags")].toArray())
+            s.tags << v.toString();
 
         for (const QJsonValue &v : obj[QStringLiteral("scheduledRconCommands")].toArray())
             s.scheduledRconCommands << v.toString();
@@ -175,6 +218,20 @@ bool ServerManager::saveConfig() const
         obj[QStringLiteral("maxPlayers")]     = s.maxPlayers;
         obj[QStringLiteral("restartWarningMinutes")] = s.restartWarningMinutes;
         obj[QStringLiteral("restartWarningMessage")]  = s.restartWarningMessage;
+
+        obj[QStringLiteral("cpuAlertThreshold")]   = s.cpuAlertThreshold;
+        obj[QStringLiteral("memAlertThresholdMB")] = s.memAlertThresholdMB;
+
+        // Event hooks
+        QJsonObject hooks;
+        for (auto hIt = s.eventHooks.constBegin(); hIt != s.eventHooks.constEnd(); ++hIt)
+            hooks[hIt.key()] = hIt.value();
+        obj[QStringLiteral("eventHooks")] = hooks;
+
+        // Tags
+        QJsonArray tagsArr;
+        for (const QString &tag : s.tags) tagsArr << tag;
+        obj[QStringLiteral("tags")] = tagsArr;
 
         QJsonObject rcon;
         rcon[QStringLiteral("host")]     = s.rcon.host;
@@ -270,6 +327,15 @@ void ServerManager::startServer(ServerConfig &server)
         m_crashConns[server.name] = conn;
         m_startTimes[server.name] = QDateTime::currentDateTime();
         emit logMessage(server.name, QStringLiteral("Server started (PID %1).").arg(proc->processId()));
+
+        // Track resource usage for this server process
+        m_resourceMonitor->trackProcess(server.name, proc->processId());
+
+        // Fire onStart event hook
+        m_eventHookManager->fireHook(server.name, server.dir,
+                                     QStringLiteral("onStart"),
+                                     server.eventHooks.value(QStringLiteral("onStart")));
+
         m_webhook->sendNotification(server.discordWebhookUrl, server.name,
                                     QStringLiteral("Server started."),
                                     server.webhookTemplate);
@@ -300,8 +366,15 @@ void ServerManager::stopServer(ServerConfig &server)
     m_processes.remove(server.name);
     m_startTimes.remove(server.name);
     m_crashCounts.remove(server.name);
+    m_resourceMonitor->untrackProcess(server.name);
     proc->deleteLater();
     emit logMessage(server.name, QStringLiteral("Server stopped."));
+
+    // Fire onStop event hook
+    m_eventHookManager->fireHook(server.name, server.dir,
+                                 QStringLiteral("onStop"),
+                                 server.eventHooks.value(QStringLiteral("onStop")));
+
     m_webhook->sendNotification(server.discordWebhookUrl, server.name,
                                 QStringLiteral("Server stopped."),
                                 server.webhookTemplate);
@@ -335,12 +408,23 @@ void ServerManager::onProcessFinished(const QString &serverName, int exitCode,
     }
     m_crashConns.remove(serverName);
     m_startTimes.remove(serverName);
+    m_resourceMonitor->untrackProcess(serverName);
 
     if (exitStatus == QProcess::CrashExit) {
         int crashes = m_crashCounts.value(serverName, 0) + 1;
         m_crashCounts[serverName] = crashes;
 
         emit serverCrashed(serverName);
+
+        // Fire onCrash event hook
+        for (const ServerConfig &s : std::as_const(m_servers)) {
+            if (s.name == serverName) {
+                m_eventHookManager->fireHook(s.name, s.dir,
+                                             QStringLiteral("onCrash"),
+                                             s.eventHooks.value(QStringLiteral("onCrash")));
+                break;
+            }
+        }
 
         // Send Discord webhook notification for crash
         for (const ServerConfig &s : std::as_const(m_servers)) {
@@ -413,6 +497,13 @@ bool ServerManager::updateMods(ServerConfig &server)
     });
     bool ok = steamCmd.updateMods(server);
 
+    if (ok) {
+        // Fire onUpdate event hook on success
+        m_eventHookManager->fireHook(server.name, server.dir,
+                                     QStringLiteral("onUpdate"),
+                                     server.eventHooks.value(QStringLiteral("onUpdate")));
+    }
+
     if (!ok && !snapshotTs.isEmpty()) {
         emit logMessage(server.name, QStringLiteral("Mod update failed – rolling back to pre-update snapshot…"));
         // Find the mods snapshot from the pre-update timestamp and restore it
@@ -443,6 +534,12 @@ QString ServerManager::takeSnapshot(const ServerConfig &server)
         emit logMessage(server.name, QStringLiteral("Snapshot failed."));
     else {
         emit logMessage(server.name, QStringLiteral("Snapshot created: ") + ts);
+
+        // Fire onBackup event hook
+        m_eventHookManager->fireHook(server.name, server.dir,
+                                     QStringLiteral("onBackup"),
+                                     server.eventHooks.value(QStringLiteral("onBackup")));
+
         m_webhook->sendNotification(server.discordWebhookUrl, server.name,
                                     QStringLiteral("Backup completed."),
                                     server.webhookTemplate);
@@ -596,6 +693,20 @@ bool ServerManager::exportServerConfig(const QString &serverName,
     obj[QStringLiteral("restartWarningMinutes")] = s.restartWarningMinutes;
     obj[QStringLiteral("restartWarningMessage")]  = s.restartWarningMessage;
 
+    obj[QStringLiteral("cpuAlertThreshold")]   = s.cpuAlertThreshold;
+    obj[QStringLiteral("memAlertThresholdMB")] = s.memAlertThresholdMB;
+
+    // Event hooks
+    QJsonObject hooks;
+    for (auto hIt = s.eventHooks.constBegin(); hIt != s.eventHooks.constEnd(); ++hIt)
+        hooks[hIt.key()] = hIt.value();
+    obj[QStringLiteral("eventHooks")] = hooks;
+
+    // Tags
+    QJsonArray tagsArr;
+    for (const QString &tag : s.tags) tagsArr << tag;
+    obj[QStringLiteral("tags")] = tagsArr;
+
     QJsonObject rcon;
     rcon[QStringLiteral("host")]     = s.rcon.host;
     rcon[QStringLiteral("port")]     = s.rcon.port;
@@ -659,6 +770,18 @@ QString ServerManager::importServerConfig(const QString &filePath)
     s.maxPlayers     = obj[QStringLiteral("maxPlayers")].toInt(0);
     s.restartWarningMinutes = obj[QStringLiteral("restartWarningMinutes")].toInt(15);
     s.restartWarningMessage = obj[QStringLiteral("restartWarningMessage")].toString();
+
+    s.cpuAlertThreshold    = obj[QStringLiteral("cpuAlertThreshold")].toDouble(90.0);
+    s.memAlertThresholdMB  = obj[QStringLiteral("memAlertThresholdMB")].toDouble(0.0);
+
+    // Event hooks
+    QJsonObject hooks = obj[QStringLiteral("eventHooks")].toObject();
+    for (auto hIt = hooks.begin(); hIt != hooks.end(); ++hIt)
+        s.eventHooks[hIt.key()] = hIt.value().toString();
+
+    // Tags
+    for (const QJsonValue &v : obj[QStringLiteral("tags")].toArray())
+        s.tags << v.toString();
 
     QJsonObject rcon = obj[QStringLiteral("rcon")].toObject();
     s.rcon.host     = rcon[QStringLiteral("host")].toString(QStringLiteral("127.0.0.1"));
@@ -762,3 +885,10 @@ void ServerManager::sendRestartWarning(ServerConfig &server, int minutesRemainin
     // Send via RCON broadcast; common commands: "say", "broadcast", "ServerChat"
     sendRconCommand(server, QStringLiteral("broadcast %1").arg(msg));
 }
+
+// ---------------------------------------------------------------------------
+// Resource monitor / Event hooks accessors
+// ---------------------------------------------------------------------------
+
+ResourceMonitor *ServerManager::resourceMonitor() { return m_resourceMonitor; }
+EventHookManager *ServerManager::eventHookManager() { return m_eventHookManager; }
