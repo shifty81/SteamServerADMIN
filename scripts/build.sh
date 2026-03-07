@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ──────────────────────────────────────────────────────────────
-# SSA – Steam Server ADMIN  ·  Automated build script (Linux / macOS)
+# SSA – Steam Server ADMIN  ·  Automated build script (Linux / macOS / MSYS2)
 # ──────────────────────────────────────────────────────────────
 set -uo pipefail
 
@@ -83,6 +83,19 @@ install_qt6_macos() {
     fi
 }
 
+install_qt6_msys() {
+    if command -v pacman &>/dev/null; then
+        info "Installing Qt6 development packages via MSYS2 pacman …"
+        if ! pacman -S --noconfirm "${MINGW_PACKAGE_PREFIX:-mingw-w64-x86_64}"-qt6-base; then
+            err "MSYS2 pacman failed to install Qt6. Please install it manually or use scripts/build.ps1."
+            return 1
+        fi
+    else
+        err "On Windows, please use scripts/build.ps1 (PowerShell) or install Qt6 manually."
+        return 1
+    fi
+}
+
 check_qt6() {
     # Quick check: see if cmake can find Qt6
     local tmp
@@ -105,11 +118,13 @@ EOF
 
 if ! check_qt6; then
     warn "Qt6 not found — attempting automatic installation …"
-    case "$(uname -s)" in
+    _uname="$(uname -s)"
+    case "$_uname" in
         Linux)  install_qt6_linux ;;
         Darwin) install_qt6_macos ;;
+        MINGW*|MSYS*|CYGWIN*) install_qt6_msys ;;
         *)
-            msg="Unsupported OS. Please install Qt6 manually."
+            msg="Unsupported OS ($_uname). Please install Qt6 manually."
             err "$msg"
             echo "$msg" >> "$CONFIGURE_LOG"
             exit 1
