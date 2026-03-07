@@ -86,7 +86,11 @@ function Install-Qt6 {
 
     if ($pipCmd) {
         Info "Attempting to install Qt via aqtinstall (pip) …"
-        & $pipCmd.Source install aqtinstall 2>&1 | Out-Null
+        $pipOutput = & $pipCmd.Source install aqtinstall 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            Warn "pip install aqtinstall failed: $pipOutput"
+            return $false
+        }
         $aqtCmd = Get-Command aqt -ErrorAction SilentlyContinue
         if ($aqtCmd) {
             $qtVer  = if ($env:SSA_QT_VERSION) { $env:SSA_QT_VERSION } else { "6.7.2" }
@@ -109,7 +113,7 @@ if (-not $qt6Path) {
     $qt6Path = Find-Qt6
 
     if (-not $qt6Path) {
-        $msg = "Qt6 could not be found or installed automatically. Please install Qt 6.4+ from https://www.qt.io/download or via: pip install aqtinstall && aqt install-qt windows desktop 6.7.2 win64_msvc2019_64 --outputdir %USERPROFILE%\Qt"
+        $msg = "Qt6 could not be found or installed automatically. Please install Qt 6.4+ from https://www.qt.io/download or via: pip install aqtinstall && aqt install-qt windows desktop 6.7.2 win64_msvc2019_64 --outputdir `$env:USERPROFILE\Qt"
         Write-Host ""
         Write-Host "=== $msg ===" -ForegroundColor Yellow
         Write-Host '  Set: $env:CMAKE_PREFIX_PATH = "C:\Qt\6.x.x\msvc20xx_64"' -ForegroundColor Yellow
