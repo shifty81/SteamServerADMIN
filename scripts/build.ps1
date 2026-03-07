@@ -9,6 +9,18 @@ param(
 
 $ErrorActionPreference = 'Continue'
 $BuildDir = "build"
+$ExitCode = 0
+
+function Info  { param([string]$msg) Write-Host ">> $msg" -ForegroundColor Cyan }
+function Warn  { param([string]$msg) Write-Host "!! $msg" -ForegroundColor Yellow }
+function Fatal { param([string]$msg, [string]$LogFile)
+    Write-Host "!! $msg" -ForegroundColor Red
+    if ($LogFile -and $LogFile -ne "" -and (Test-Path $LogFile)) {
+        Add-Content -Path $LogFile -Value $msg
+    }
+}
+
+try {
 
 # ── 0. Set up logging ────────────────────────────────────────
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
@@ -19,24 +31,11 @@ $ConfigureLog = Join-Path $LogDir "configure.log"
 $BuildLog     = Join-Path $LogDir "build.log"
 $TestLog      = Join-Path $LogDir "test.log"
 
-function Info  { param([string]$msg) Write-Host ">> $msg" -ForegroundColor Cyan }
-function Warn  { param([string]$msg) Write-Host "!! $msg" -ForegroundColor Yellow }
-function Fatal { param([string]$msg, [string]$LogFile)
-    Write-Host "!! $msg" -ForegroundColor Red
-    if ($LogFile -and (Test-Path $LogFile)) {
-        Add-Content -Path $LogFile -Value $msg
-    }
-}
-
 # Initialize every log file with a header so they are never empty
 $Timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
 foreach ($lf in @($ConfigureLog, $BuildLog, $TestLog)) {
     Set-Content -Path $lf -Value "=== SSA Build - $Timestamp - $BuildType ==="
 }
-
-$ExitCode = 0
-
-try {
 
 Info "Logs will be written to: $LogDir"
 
@@ -166,7 +165,9 @@ Info "  Build     : $BuildLog"
 Info "  Test      : $TestLog"
 
 } catch {
-    # Error already reported by Fatal — nothing extra to do
+    if ($ExitCode -eq 0) { $ExitCode = 1 }
+    Write-Host ""
+    Write-Host "!! Error: $($_.Exception.Message)" -ForegroundColor Red
 } finally {
     # Keep the window open so the user can read the output
     if ($ExitCode -ne 0) {
@@ -175,7 +176,7 @@ Info "  Test      : $TestLog"
     }
     Write-Host ""
     if (-not $env:CI) {
-        Read-Host "Press Enter to close"
+        Read-Host "Press Enter to close …"
     }
     exit $ExitCode
 }
