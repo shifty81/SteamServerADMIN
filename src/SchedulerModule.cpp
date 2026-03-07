@@ -109,6 +109,15 @@ void SchedulerModule::startScheduler(const QString &serverName)
         // (restartHours * 60 - warningMinutes) minutes after the restart timer
         // begins, then fires every minute to broadcast the countdown.
         if (warningMinutes > 0) {
+            // Clamp warning to the restart interval so it doesn't exceed it
+            int restartTotalMinutes = restartHours * 60;
+            if (warningMinutes > restartTotalMinutes) {
+                qWarning() << "Restart warning" << warningMinutes
+                           << "min exceeds restart interval" << restartTotalMinutes
+                           << "min for" << serverName << "; clamping.";
+                warningMinutes = restartTotalMinutes;
+            }
+
             int restartMs     = restartHours * 60 * 60 * 1000;
             int warningStartMs = restartMs - warningMinutes * 60 * 1000;
             if (warningStartMs < 0) warningStartMs = 0;
