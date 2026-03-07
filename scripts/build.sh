@@ -7,9 +7,26 @@ set -euo pipefail
 BUILD_TYPE="${1:-Release}"
 BUILD_DIR="build"
 
+# ── 0. Set up logging ────────────────────────────────────────
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+LOG_DIR="$PROJECT_ROOT/logs"
+mkdir -p "$LOG_DIR"
+
+CONFIGURE_LOG="$LOG_DIR/configure.log"
+BUILD_LOG="$LOG_DIR/build.log"
+TEST_LOG="$LOG_DIR/test.log"
+
+# Truncate previous logs for this run
+: > "$CONFIGURE_LOG"
+: > "$BUILD_LOG"
+: > "$TEST_LOG"
+
 info()  { printf '\033[1;34m>> %s\033[0m\n' "$*"; }
 warn()  { printf '\033[1;33m!! %s\033[0m\n' "$*"; }
 err()   { printf '\033[1;31m!! %s\033[0m\n' "$*"; exit 1; }
+
+info "Logs will be written to: $LOG_DIR"
 
 # ── 1. Check for cmake ───────────────────────────────────────
 if ! command -v cmake &>/dev/null; then
@@ -84,19 +101,23 @@ info "Qt6 found ✓"
 # ── 3. Configure ─────────────────────────────────────────────
 info "Configuring ($BUILD_TYPE) …"
 cmake -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
-    ${CMAKE_PREFIX_PATH:+-DCMAKE_PREFIX_PATH="$CMAKE_PREFIX_PATH"}
+    ${CMAKE_PREFIX_PATH:+-DCMAKE_PREFIX_PATH="$CMAKE_PREFIX_PATH"} 2>&1 | tee -a "$CONFIGURE_LOG"
 
 # ── 4. Build ─────────────────────────────────────────────────
 NPROC="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)"
 info "Building with $NPROC parallel jobs …"
-cmake --build "$BUILD_DIR" --parallel "$NPROC"
+cmake --build "$BUILD_DIR" --parallel "$NPROC" 2>&1 | tee -a "$BUILD_LOG"
 
 # ── 5. Run tests (if test binary was built) ──────────────────
 if [ -f "$BUILD_DIR/SSA_Tests" ]; then
     info "Running tests …"
-    ctest --test-dir "$BUILD_DIR" --output-on-failure
+    ctest --test-dir "$BUILD_DIR" --output-on-failure 2>&1 | tee -a "$TEST_LOG"
 else
     warn "Test binary not found — skipping tests."
 fi
 
 info "Build complete!  Binary: $BUILD_DIR/SSA"
+info "Log files:"
+info "  Configure : $CONFIGURE_LOG"
+info "  Build     : $BUILD_LOG"
+info "  Test      : $TEST_LOG"

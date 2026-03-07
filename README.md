@@ -97,6 +97,19 @@ The scripts will:
 2. Detect Qt6 — install it automatically if missing (apt/dnf/pacman/brew)
 3. Configure and build the project
 4. Run tests if available
+5. Write all output to the `logs/` directory in the project root
+
+### Build Logs
+
+The build scripts automatically create a `logs/` directory in the project root and write:
+
+| Log file | Contents |
+|---|---|
+| `logs/configure.log` | CMake configuration output |
+| `logs/build.log` | Compilation output |
+| `logs/test.log` | Test runner output |
+
+All output is also displayed on the console in real time. Log files are truncated at the start of each build so they always reflect the most recent run.
 
 ### Manual Build
 
@@ -213,6 +226,8 @@ cmake -B build -DCMAKE_BUILD_TYPE=Debug
 cmake --build build --target SSA_Tests
 ctest --test-dir build --output-on-failure
 ```
+
+When run via the build scripts (`scripts/build.sh` or `scripts/build.ps1`), test output is automatically logged to `logs/test.log`.
 
 ---
 
