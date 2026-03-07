@@ -17,11 +17,6 @@ CONFIGURE_LOG="$LOG_DIR/configure.log"
 BUILD_LOG="$LOG_DIR/build.log"
 TEST_LOG="$LOG_DIR/test.log"
 
-# Truncate previous logs for this run
-: > "$CONFIGURE_LOG"
-: > "$BUILD_LOG"
-: > "$TEST_LOG"
-
 info()  { printf '\033[1;34m>> %s\033[0m\n' "$*"; }
 warn()  { printf '\033[1;33m!! %s\033[0m\n' "$*"; }
 err()   { printf '\033[1;31m!! %s\033[0m\n' "$*"; exit 1; }
@@ -101,17 +96,17 @@ info "Qt6 found ✓"
 # ── 3. Configure ─────────────────────────────────────────────
 info "Configuring ($BUILD_TYPE) …"
 cmake -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
-    ${CMAKE_PREFIX_PATH:+-DCMAKE_PREFIX_PATH="$CMAKE_PREFIX_PATH"} 2>&1 | tee -a "$CONFIGURE_LOG"
+    ${CMAKE_PREFIX_PATH:+-DCMAKE_PREFIX_PATH="$CMAKE_PREFIX_PATH"} 2>&1 | tee "$CONFIGURE_LOG"
 
 # ── 4. Build ─────────────────────────────────────────────────
 NPROC="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)"
 info "Building with $NPROC parallel jobs …"
-cmake --build "$BUILD_DIR" --parallel "$NPROC" 2>&1 | tee -a "$BUILD_LOG"
+cmake --build "$BUILD_DIR" --parallel "$NPROC" 2>&1 | tee "$BUILD_LOG"
 
 # ── 5. Run tests (if test binary was built) ──────────────────
 if [ -f "$BUILD_DIR/SSA_Tests" ]; then
     info "Running tests …"
-    ctest --test-dir "$BUILD_DIR" --output-on-failure 2>&1 | tee -a "$TEST_LOG"
+    ctest --test-dir "$BUILD_DIR" --output-on-failure 2>&1 | tee "$TEST_LOG"
 else
     warn "Test binary not found — skipping tests."
 fi
