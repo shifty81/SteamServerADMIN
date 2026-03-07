@@ -28,17 +28,16 @@ for _log in "$CONFIGURE_LOG" "$BUILD_LOG" "$TEST_LOG"; do
 done
 
 # Pause before exiting so the terminal window stays visible
-EXIT_CODE=0
 cleanup() {
-    if [ "$EXIT_CODE" -ne 0 ]; then
-        err "Build failed (exit code $EXIT_CODE)."
+    local code=$?
+    if [ "$code" -ne 0 ]; then
+        err "Build failed (exit code $code)."
     fi
     # Only pause when running in an interactive terminal (not CI)
     if [ -t 0 ] && [ -z "${CI:-}" ]; then
         printf '\n'
         read -rp "Press Enter to close …"
     fi
-    exit "$EXIT_CODE"
 }
 trap cleanup EXIT
 
@@ -49,7 +48,7 @@ if ! command -v cmake &>/dev/null; then
     msg="CMake is not installed. Please install CMake 3.22+ and re-run this script."
     err "$msg"
     echo "$msg" >> "$CONFIGURE_LOG"
-    EXIT_CODE=1; exit 1
+    exit 1
 fi
 
 # ── 2. Install Qt6 if needed ─────────────────────────────────
@@ -113,7 +112,7 @@ if ! check_qt6; then
             msg="Unsupported OS. Please install Qt6 manually."
             err "$msg"
             echo "$msg" >> "$CONFIGURE_LOG"
-            EXIT_CODE=1; exit 1
+            exit 1
             ;;
     esac
     # Re-check
@@ -121,7 +120,7 @@ if ! check_qt6; then
         msg="Qt6 still not found after installation attempt. Please install Qt6 (Core, Widgets, Network) manually."
         err "$msg"
         echo "$msg" >> "$CONFIGURE_LOG"
-        EXIT_CODE=1; exit 1
+        exit 1
     fi
 fi
 
@@ -132,7 +131,7 @@ info "Configuring ($BUILD_TYPE) …"
 if ! cmake -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
     ${CMAKE_PREFIX_PATH:+-DCMAKE_PREFIX_PATH="$CMAKE_PREFIX_PATH"} 2>&1 | tee -a "$CONFIGURE_LOG"; then
     err "CMake configuration failed. See $CONFIGURE_LOG"
-    EXIT_CODE=1; exit 1
+    exit 1
 fi
 
 # ── 4. Build ─────────────────────────────────────────────────
@@ -140,7 +139,7 @@ NPROC="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)"
 info "Building with $NPROC parallel jobs …"
 if ! cmake --build "$BUILD_DIR" --parallel "$NPROC" 2>&1 | tee -a "$BUILD_LOG"; then
     err "Build failed. See $BUILD_LOG"
-    EXIT_CODE=1; exit 1
+    exit 1
 fi
 
 # ── 5. Run tests (if test binary was built) ──────────────────
@@ -148,7 +147,7 @@ if [ -f "$BUILD_DIR/SSA_Tests" ]; then
     info "Running tests …"
     if ! ctest --test-dir "$BUILD_DIR" --output-on-failure 2>&1 | tee -a "$TEST_LOG"; then
         err "Tests failed. See $TEST_LOG"
-        EXIT_CODE=1; exit 1
+        exit 1
     fi
 else
     warn "Test binary not found — skipping tests."

@@ -45,7 +45,7 @@ if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) {
     $msg = "CMake is not installed. Please install CMake 3.22+ and re-run this script."
     Fatal $msg $ConfigureLog
     $ExitCode = 1
-    return
+    throw $msg
 }
 
 # ── 2. Locate or install Qt6 ─────────────────────────────────
@@ -108,7 +108,7 @@ if (-not $qt6Path) {
         Write-Host '  Or:  cmake -B build -DCMAKE_PREFIX_PATH="C:\Qt\6.x.x\..."' -ForegroundColor Yellow
         Fatal $msg $ConfigureLog
         $ExitCode = 1
-        return
+        throw $msg
     }
 }
 
@@ -125,7 +125,7 @@ cmake @cmakeArgs 2>&1 | Tee-Object -FilePath $ConfigureLog -Append
 if ($LASTEXITCODE -ne 0) {
     Fatal "CMake configuration failed. See $ConfigureLog" $ConfigureLog
     $ExitCode = 1
-    return
+    throw "CMake configuration failed."
 }
 
 # ── 4. Build ─────────────────────────────────────────────────
@@ -138,7 +138,7 @@ cmake --build $BuildDir --config $BuildType --parallel $cpuCount 2>&1 | Tee-Obje
 if ($LASTEXITCODE -ne 0) {
     Fatal "Build failed. See $BuildLog" $BuildLog
     $ExitCode = 1
-    return
+    throw "Build failed."
 }
 
 # ── 5. Run tests ─────────────────────────────────────────────
@@ -152,7 +152,7 @@ if (Test-Path $testBin) {
     if ($LASTEXITCODE -ne 0) {
         Fatal "Tests failed. See $TestLog" $TestLog
         $ExitCode = 1
-        return
+        throw "Tests failed."
     }
 } else {
     Warn "Test binary not found — skipping tests."
@@ -165,6 +165,8 @@ Info "  Configure : $ConfigureLog"
 Info "  Build     : $BuildLog"
 Info "  Test      : $TestLog"
 
+} catch {
+    # Error already reported by Fatal — nothing extra to do
 } finally {
     # Keep the window open so the user can read the output
     if ($ExitCode -ne 0) {
