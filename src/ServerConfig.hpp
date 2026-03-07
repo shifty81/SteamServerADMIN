@@ -3,6 +3,7 @@
 #include <QString>
 #include <QList>
 #include <QStringList>
+#include <QMap>
 
 struct RconInfo {
     QString host;
@@ -38,6 +39,16 @@ struct ServerConfig {
     int maxPlayers = 0;                // max player slots; 0 = unset / unlimited
     int restartWarningMinutes = 15;    // minutes before scheduled restart to start in-game warnings; 0 = disabled
     QString restartWarningMessage;     // custom RCON warning template; placeholder: {minutes}. Empty = default message
+
+    // ---- Resource monitoring alert thresholds ----
+    double cpuAlertThreshold = 90.0;   // alert when CPU% exceeds this (0 = disabled)
+    double memAlertThresholdMB = 0.0;  // alert when RSS exceeds this in MB (0 = disabled)
+
+    // ---- Event hook scripts (per-event shell / script paths) ----
+    QMap<QString, QString> eventHooks; // key = event name (e.g. "onStart"), value = script path
+
+    // ---- User-defined tags for categorization / filtering ----
+    QStringList tags;
 
     /**
      * @brief Format a restart warning message with the given minutes remaining.
@@ -98,6 +109,12 @@ struct ServerConfig {
 
         if (restartWarningMinutes < 0)
             errors << QStringLiteral("Restart warning minutes must not be negative.");
+
+        if (cpuAlertThreshold < 0.0)
+            errors << QStringLiteral("CPU alert threshold must not be negative.");
+
+        if (memAlertThresholdMB < 0.0)
+            errors << QStringLiteral("Memory alert threshold must not be negative.");
 
         return errors;
     }

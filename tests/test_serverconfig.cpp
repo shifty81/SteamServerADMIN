@@ -15,6 +15,8 @@
 #include "GameTemplates.hpp"
 #include "WebhookModule.hpp"
 #include "ConsoleLogWriter.hpp"
+#include "ResourceMonitor.hpp"
+#include "EventHookManager.hpp"
 
 // ---------------------------------------------------------------------------
 // ServerConfig round-trip through ServerManager save/load
@@ -169,6 +171,37 @@ private slots:
     void testPendingUpdateSetClear();
     void testPendingModUpdateDefault();
     void testPendingModUpdateSetClear();
+
+    // ---- Resource monitoring tests ----
+    void testResourceMonitorTrackUntrack();
+    void testResourceMonitorUsageDefault();
+    void testResourceMonitorPollInterval();
+    void testResourceMonitorStartStop();
+    void testResourceMonitorReadUsageInvalidPid();
+    void testCpuAlertThresholdDefault();
+    void testCpuAlertThresholdPersistence();
+    void testCpuAlertThresholdValidation();
+    void testMemAlertThresholdDefault();
+    void testMemAlertThresholdPersistence();
+    void testMemAlertThresholdValidation();
+    void testResourceAlertThresholdsExportImport();
+    void testResourceAlertSignal();
+
+    // ---- Event hook tests ----
+    void testEventHookKnownEvents();
+    void testEventHookFireEmpty();
+    void testEventHookFireMissing();
+    void testEventHookFireScript();
+    void testEventHookTimeout();
+    void testEventHooksPersistence();
+    void testEventHooksDefaultEmpty();
+    void testEventHooksExportImport();
+
+    // ---- Tags tests ----
+    void testTagsDefault();
+    void testTagsPersistence();
+    void testTagsExportImport();
+    void testTagsMultiple();
 };
 
 void TestServerConfig::testSaveAndLoad()
@@ -2190,6 +2223,391 @@ void TestServerConfig::testPendingModUpdateSetClear()
 
     mgr.setPendingModUpdate(QStringLiteral("Server1"), false);
     QVERIFY(!mgr.hasPendingModUpdate(QStringLiteral("Server1")));
+}
+
+// ---------------------------------------------------------------------------
+// Resource monitoring tests
+// ---------------------------------------------------------------------------
+
+void TestServerConfig::testResourceMonitorTrackUntrack()
+{
+    ResourceMonitor mon;
+    mon.trackProcess(QStringLiteral("S1"), 12345);
+    QCOMPARE(mon.allUsage().size(), 0); // no poll yet
+
+    mon.untrackProcess(QStringLiteral("S1"));
+    QCOMPARE(mon.allUsage().size(), 0);
+}
+
+void TestServerConfig::testResourceMonitorUsageDefault()
+{
+    ResourceMonitor mon;
+    ResourceUsage ru = mon.usage(QStringLiteral("NonExistent"));
+    QCOMPARE(ru.cpuPercent, 0.0);
+    QCOMPARE(ru.memoryBytes, static_cast<qint64>(0));
+}
+
+void TestServerConfig::testResourceMonitorPollInterval()
+{
+    ResourceMonitor mon;
+    QCOMPARE(mon.pollIntervalMs(), 5000); // default
+    mon.setPollIntervalMs(2000);
+    QCOMPARE(mon.pollIntervalMs(), 2000);
+    mon.setPollIntervalMs(-1);
+    QCOMPARE(mon.pollIntervalMs(), 1000); // clamped to 1s
+}
+
+void TestServerConfig::testResourceMonitorStartStop()
+{
+    ResourceMonitor mon;
+    mon.start();
+    // Just verify it doesn't crash; timer is running
+    mon.stop();
+    // Starting again should be fine
+    mon.start();
+    mon.stop();
+}
+
+void TestServerConfig::testResourceMonitorReadUsageInvalidPid()
+{
+    ResourceUsage ru = ResourceMonitor::readUsage(-1);
+    QCOMPARE(ru.cpuPercent, 0.0);
+    QCOMPARE(ru.memoryBytes, static_cast<qint64>(0));
+
+    ru = ResourceMonitor::readUsage(0);
+    QCOMPARE(ru.cpuPercent, 0.0);
+    QCOMPARE(ru.memoryBytes, static_cast<qint64>(0));
+}
+
+void TestServerConfig::testCpuAlertThresholdDefault()
+{
+    ServerConfig s;
+    QCOMPARE(s.cpuAlertThreshold, 90.0);
+}
+
+void TestServerConfig::testCpuAlertThresholdPersistence()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+
+    ServerManager mgr(configPath);
+    ServerConfig s;
+    s.name = QStringLiteral("CpuTest");
+    s.appid = 1;
+    s.dir = QStringLiteral("/srv/cpu");
+    s.cpuAlertThreshold = 75.5;
+    mgr.servers() << s;
+    QVERIFY(mgr.saveConfig());
+
+    ServerManager mgr2(configPath);
+    QVERIFY(mgr2.loadConfig());
+    QCOMPARE(mgr2.servers().size(), 1);
+    QCOMPARE(mgr2.servers().at(0).cpuAlertThreshold, 75.5);
+}
+
+void TestServerConfig::testCpuAlertThresholdValidation()
+{
+    ServerConfig s;
+    s.name = QStringLiteral("V");
+    s.appid = 1;
+    s.dir = QStringLiteral("/d");
+    s.cpuAlertThreshold = -10.0;
+    QStringList errors = s.validate();
+    QVERIFY(errors.size() >= 1);
+    bool found = false;
+    for (const QString &e : errors) {
+        if (e.contains(QStringLiteral("CPU alert")))
+            found = true;
+    }
+    QVERIFY(found);
+}
+
+void TestServerConfig::testMemAlertThresholdDefault()
+{
+    ServerConfig s;
+    QCOMPARE(s.memAlertThresholdMB, 0.0);
+}
+
+void TestServerConfig::testMemAlertThresholdPersistence()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+
+    ServerManager mgr(configPath);
+    ServerConfig s;
+    s.name = QStringLiteral("MemTest");
+    s.appid = 1;
+    s.dir = QStringLiteral("/srv/mem");
+    s.memAlertThresholdMB = 2048.0;
+    mgr.servers() << s;
+    QVERIFY(mgr.saveConfig());
+
+    ServerManager mgr2(configPath);
+    QVERIFY(mgr2.loadConfig());
+    QCOMPARE(mgr2.servers().at(0).memAlertThresholdMB, 2048.0);
+}
+
+void TestServerConfig::testMemAlertThresholdValidation()
+{
+    ServerConfig s;
+    s.name = QStringLiteral("V");
+    s.appid = 1;
+    s.dir = QStringLiteral("/d");
+    s.memAlertThresholdMB = -100.0;
+    QStringList errors = s.validate();
+    bool found = false;
+    for (const QString &e : errors) {
+        if (e.contains(QStringLiteral("Memory alert")))
+            found = true;
+    }
+    QVERIFY(found);
+}
+
+void TestServerConfig::testResourceAlertThresholdsExportImport()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    QString exportPath = tmp.filePath(QStringLiteral("export.json"));
+
+    ServerManager mgr(configPath);
+    ServerConfig s;
+    s.name = QStringLiteral("ResExp");
+    s.appid = 1;
+    s.dir = QStringLiteral("/srv/res");
+    s.cpuAlertThreshold = 80.0;
+    s.memAlertThresholdMB = 4096.0;
+    mgr.servers() << s;
+    QVERIFY(mgr.exportServerConfig(QStringLiteral("ResExp"), exportPath));
+
+    ServerManager mgr2(tmp.filePath(QStringLiteral("servers2.json")));
+    QVERIFY(mgr2.importServerConfig(exportPath).isEmpty());
+    QCOMPARE(mgr2.servers().at(0).cpuAlertThreshold, 80.0);
+    QCOMPARE(mgr2.servers().at(0).memAlertThresholdMB, 4096.0);
+}
+
+void TestServerConfig::testResourceAlertSignal()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    ServerManager mgr(tmp.filePath(QStringLiteral("servers.json")));
+
+    // Verify signal exists by connecting to it
+    QSignalSpy spy(&mgr, &ServerManager::resourceAlert);
+    QVERIFY(spy.isValid());
+}
+
+// ---------------------------------------------------------------------------
+// Event hook tests
+// ---------------------------------------------------------------------------
+
+void TestServerConfig::testEventHookKnownEvents()
+{
+    QStringList events = EventHookManager::knownEvents();
+    QVERIFY(events.contains(QStringLiteral("onStart")));
+    QVERIFY(events.contains(QStringLiteral("onStop")));
+    QVERIFY(events.contains(QStringLiteral("onCrash")));
+    QVERIFY(events.contains(QStringLiteral("onBackup")));
+    QVERIFY(events.contains(QStringLiteral("onUpdate")));
+    QCOMPARE(events.size(), 5);
+}
+
+void TestServerConfig::testEventHookFireEmpty()
+{
+    EventHookManager ehm;
+    QSignalSpy spy(&ehm, &EventHookManager::hookFinished);
+    // Firing with empty script should do nothing
+    ehm.fireHook(QStringLiteral("S"), QStringLiteral("/tmp"), QStringLiteral("onStart"), QString());
+    QCOMPARE(spy.count(), 0);
+}
+
+void TestServerConfig::testEventHookFireMissing()
+{
+    EventHookManager ehm;
+    QSignalSpy spy(&ehm, &EventHookManager::hookFinished);
+    ehm.fireHook(QStringLiteral("S"), QStringLiteral("/tmp"),
+                 QStringLiteral("onStart"),
+                 QStringLiteral("/nonexistent_script_12345.sh"));
+    QCOMPARE(spy.count(), 1);
+    // Exit code should be -1 for not found
+    QCOMPARE(spy.at(0).at(2).toInt(), -1);
+}
+
+void TestServerConfig::testEventHookFireScript()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+
+    // Create a simple test script
+    QString scriptPath = tmp.filePath(QStringLiteral("hook.sh"));
+    QFile f(scriptPath);
+    QVERIFY(f.open(QIODevice::WriteOnly));
+    f.write("#!/bin/sh\necho \"hook ran: $SSA_SERVER_NAME $SSA_EVENT\"\n");
+    f.close();
+    f.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
+
+    EventHookManager ehm;
+    QSignalSpy spy(&ehm, &EventHookManager::hookFinished);
+    ehm.fireHook(QStringLiteral("TestSrv"), tmp.path(),
+                 QStringLiteral("onStart"), scriptPath);
+
+    // Wait for the script to finish
+    QVERIFY(spy.wait(5000));
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(spy.at(0).at(0).toString(), QStringLiteral("TestSrv"));
+    QCOMPARE(spy.at(0).at(1).toString(), QStringLiteral("onStart"));
+    QCOMPARE(spy.at(0).at(2).toInt(), 0); // exit code 0
+    QVERIFY(spy.at(0).at(3).toString().contains(QStringLiteral("hook ran: TestSrv onStart")));
+}
+
+void TestServerConfig::testEventHookTimeout()
+{
+    EventHookManager ehm;
+    QCOMPARE(ehm.timeoutSeconds(), 0); // default = fire-and-forget
+    ehm.setTimeoutSeconds(10);
+    QCOMPARE(ehm.timeoutSeconds(), 10);
+    ehm.setTimeoutSeconds(-5);
+    QCOMPARE(ehm.timeoutSeconds(), 0); // clamped to 0
+}
+
+void TestServerConfig::testEventHooksPersistence()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+
+    ServerManager mgr(configPath);
+    ServerConfig s;
+    s.name = QStringLiteral("HookTest");
+    s.appid = 1;
+    s.dir = QStringLiteral("/srv/hook");
+    s.eventHooks[QStringLiteral("onStart")] = QStringLiteral("/scripts/start.sh");
+    s.eventHooks[QStringLiteral("onCrash")] = QStringLiteral("/scripts/crash.sh");
+    mgr.servers() << s;
+    QVERIFY(mgr.saveConfig());
+
+    ServerManager mgr2(configPath);
+    QVERIFY(mgr2.loadConfig());
+    const ServerConfig &loaded = mgr2.servers().at(0);
+    QCOMPARE(loaded.eventHooks.size(), 2);
+    QCOMPARE(loaded.eventHooks.value(QStringLiteral("onStart")),
+             QStringLiteral("/scripts/start.sh"));
+    QCOMPARE(loaded.eventHooks.value(QStringLiteral("onCrash")),
+             QStringLiteral("/scripts/crash.sh"));
+}
+
+void TestServerConfig::testEventHooksDefaultEmpty()
+{
+    ServerConfig s;
+    QVERIFY(s.eventHooks.isEmpty());
+}
+
+void TestServerConfig::testEventHooksExportImport()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    QString exportPath = tmp.filePath(QStringLiteral("export.json"));
+
+    ServerManager mgr(configPath);
+    ServerConfig s;
+    s.name = QStringLiteral("HookExp");
+    s.appid = 1;
+    s.dir = QStringLiteral("/srv/hookexp");
+    s.eventHooks[QStringLiteral("onBackup")] = QStringLiteral("hooks/backup.sh");
+    mgr.servers() << s;
+    QVERIFY(mgr.exportServerConfig(QStringLiteral("HookExp"), exportPath));
+
+    ServerManager mgr2(tmp.filePath(QStringLiteral("servers2.json")));
+    QVERIFY(mgr2.importServerConfig(exportPath).isEmpty());
+    QCOMPARE(mgr2.servers().at(0).eventHooks.value(QStringLiteral("onBackup")),
+             QStringLiteral("hooks/backup.sh"));
+}
+
+// ---------------------------------------------------------------------------
+// Tags tests
+// ---------------------------------------------------------------------------
+
+void TestServerConfig::testTagsDefault()
+{
+    ServerConfig s;
+    QVERIFY(s.tags.isEmpty());
+}
+
+void TestServerConfig::testTagsPersistence()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+
+    ServerManager mgr(configPath);
+    ServerConfig s;
+    s.name = QStringLiteral("TagTest");
+    s.appid = 1;
+    s.dir = QStringLiteral("/srv/tag");
+    s.tags << QStringLiteral("production") << QStringLiteral("ark");
+    mgr.servers() << s;
+    QVERIFY(mgr.saveConfig());
+
+    ServerManager mgr2(configPath);
+    QVERIFY(mgr2.loadConfig());
+    QCOMPARE(mgr2.servers().at(0).tags.size(), 2);
+    QCOMPARE(mgr2.servers().at(0).tags.at(0), QStringLiteral("production"));
+    QCOMPARE(mgr2.servers().at(0).tags.at(1), QStringLiteral("ark"));
+}
+
+void TestServerConfig::testTagsExportImport()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    QString exportPath = tmp.filePath(QStringLiteral("export.json"));
+
+    ServerManager mgr(configPath);
+    ServerConfig s;
+    s.name = QStringLiteral("TagExp");
+    s.appid = 1;
+    s.dir = QStringLiteral("/srv/tagexp");
+    s.tags << QStringLiteral("cluster-a") << QStringLiteral("pvp");
+    mgr.servers() << s;
+    QVERIFY(mgr.exportServerConfig(QStringLiteral("TagExp"), exportPath));
+
+    ServerManager mgr2(tmp.filePath(QStringLiteral("servers2.json")));
+    QVERIFY(mgr2.importServerConfig(exportPath).isEmpty());
+    QCOMPARE(mgr2.servers().at(0).tags.size(), 2);
+    QCOMPARE(mgr2.servers().at(0).tags.at(0), QStringLiteral("cluster-a"));
+    QCOMPARE(mgr2.servers().at(0).tags.at(1), QStringLiteral("pvp"));
+}
+
+void TestServerConfig::testTagsMultiple()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+
+    ServerManager mgr(configPath);
+    ServerConfig s1;
+    s1.name = QStringLiteral("S1");
+    s1.appid = 1;
+    s1.dir = QStringLiteral("/srv/s1");
+    s1.tags << QStringLiteral("pve") << QStringLiteral("eu");
+
+    ServerConfig s2;
+    s2.name = QStringLiteral("S2");
+    s2.appid = 2;
+    s2.dir = QStringLiteral("/srv/s2");
+    s2.tags << QStringLiteral("pvp") << QStringLiteral("us");
+
+    mgr.servers() << s1 << s2;
+    QVERIFY(mgr.saveConfig());
+
+    ServerManager mgr2(configPath);
+    QVERIFY(mgr2.loadConfig());
+    QCOMPARE(mgr2.servers().size(), 2);
+    QCOMPARE(mgr2.servers().at(0).tags, QStringList({QStringLiteral("pve"), QStringLiteral("eu")}));
+    QCOMPARE(mgr2.servers().at(1).tags, QStringList({QStringLiteral("pvp"), QStringLiteral("us")}));
 }
 
 #include "test_serverconfig.moc"
