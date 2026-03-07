@@ -16,6 +16,7 @@ mkdir -p "$LOG_DIR"
 CONFIGURE_LOG="$LOG_DIR/configure.log"
 BUILD_LOG="$LOG_DIR/build.log"
 TEST_LOG="$LOG_DIR/test.log"
+FULL_LOG="$LOG_DIR/full.log"
 
 info()  { printf '\033[1;34m>> %s\033[0m\n' "$*"; }
 warn()  { printf '\033[1;33m!! %s\033[0m\n' "$*"; }
@@ -23,32 +24,19 @@ err()   { printf '\033[1;31m!! %s\033[0m\n' "$*"; }
 
 # Initialize every log file with a header so they are never empty
 TIMESTAMP="$(date '+%Y-%m-%d %H:%M:%S')"
-for _log in "$CONFIGURE_LOG" "$BUILD_LOG" "$TEST_LOG"; do
+for _log in "$CONFIGURE_LOG" "$BUILD_LOG" "$TEST_LOG" "$FULL_LOG"; do
     printf '=== SSA Build — %s — %s ===\n' "$TIMESTAMP" "$BUILD_TYPE" > "$_log"
 done
 
-# Pause before exiting so the terminal window stays visible
-cleanup() {
-    local code=$?
-    if [ "$code" -ne 0 ]; then
-        err "Build failed (exit code $code)."
-    fi
-    # Only pause when running in an interactive terminal (not CI)
-    if [ -t 0 ] && [ -z "${CI:-}" ]; then
-        printf '\n'
-        read -rp "Press Enter to close …"
-    fi
-}
-trap cleanup EXIT
+# ── Build logic (all output captured via tee) ─────────────────
+build_main() {
 
 info "Logs will be written to: $LOG_DIR"
 
 # ── 1. Check for cmake ───────────────────────────────────────
 if ! command -v cmake &>/dev/null; then
-    msg="CMake is not installed. Please install CMake 3.22+ and re-run this script."
-    err "$msg"
-    echo "$msg" >> "$CONFIGURE_LOG"
-    exit 1
+    err "CMake is not installed. Please install CMake 3.22+ and re-run this script."
+    return 1
 fi
 
 # ── 2. Install Qt6 if needed ─────────────────────────────────
@@ -88,10 +76,10 @@ find_qt6_windows() {
     local search_dirs=(
         "${QT_DIR:-}" "${Qt6_DIR:-}" "${QTDIR:-}"
         "/c/Qt" "/d/Qt"
-        "$USERPROFILE/Qt" "$HOME/Qt"
+        "${USERPROFILE:-}/Qt" "$HOME/Qt"
     )
     for base in "${search_dirs[@]}"; do
-        [ -z "$base" ] && continue
+        { [ -z "$base" ] || [ "$base" = "/Qt" ]; } && continue
         [ -d "$base" ] || continue
         # Look for versioned directories like 6.x.x/msvc*_64 or 6.x.x/mingw*_64
         for ver_dir in "$base"/6*/msvc*_64 "$base"/6*/mingw*_64; do
@@ -180,18 +168,14 @@ if ! check_qt6; then
         Darwin) install_qt6_macos ;;
         MINGW*|MSYS*|CYGWIN*) install_qt6_msys ;;
         *)
-            msg="Unsupported OS ($_uname). Please install Qt6 manually."
-            err "$msg"
-            echo "$msg" >> "$CONFIGURE_LOG"
-            exit 1
+            err "Unsupported OS ($_uname). Please install Qt6 manually."
+            return 1
             ;;
     esac
     # Re-check
     if ! check_qt6; then
-        msg="Qt6 still not found after installation attempt. Please install Qt6 (Core, Widgets, Network) manually."
-        err "$msg"
-        echo "$msg" >> "$CONFIGURE_LOG"
-        exit 1
+        err "Qt6 still not found after installation attempt. Please install Qt6 (Core, Widgets, Network) manually."
+        return 1
     fi
 fi
 
@@ -199,26 +183,29 @@ info "Qt6 found ✓"
 
 # ── 3. Configure ─────────────────────────────────────────────
 info "Configuring ($BUILD_TYPE) …"
-if ! cmake -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
-    ${CMAKE_PREFIX_PATH:+-DCMAKE_PREFIX_PATH="$CMAKE_PREFIX_PATH"} 2>&1 | tee -a "$CONFIGURE_LOG"; then
+cmake -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+    ${CMAKE_PREFIX_PATH:+-DCMAKE_PREFIX_PATH="$CMAKE_PREFIX_PATH"} 2>&1 | tee -a "$CONFIGURE_LOG"
+if [ "${PIPESTATUS[0]}" -ne 0 ]; then
     err "CMake configuration failed. See $CONFIGURE_LOG"
-    exit 1
+    return 1
 fi
 
 # ── 4. Build ─────────────────────────────────────────────────
 NPROC="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)"
 info "Building with $NPROC parallel jobs …"
-if ! cmake --build "$BUILD_DIR" --parallel "$NPROC" 2>&1 | tee -a "$BUILD_LOG"; then
+cmake --build "$BUILD_DIR" --parallel "$NPROC" 2>&1 | tee -a "$BUILD_LOG"
+if [ "${PIPESTATUS[0]}" -ne 0 ]; then
     err "Build failed. See $BUILD_LOG"
-    exit 1
+    return 1
 fi
 
 # ── 5. Run tests (if test binary was built) ──────────────────
 if [ -f "$BUILD_DIR/SSA_Tests" ]; then
     info "Running tests …"
-    if ! ctest --test-dir "$BUILD_DIR" --output-on-failure 2>&1 | tee -a "$TEST_LOG"; then
+    ctest --test-dir "$BUILD_DIR" --output-on-failure 2>&1 | tee -a "$TEST_LOG"
+    if [ "${PIPESTATUS[0]}" -ne 0 ]; then
         err "Tests failed. See $TEST_LOG"
-        exit 1
+        return 1
     fi
 else
     warn "Test binary not found — skipping tests."
@@ -230,3 +217,23 @@ info "Log files:"
 info "  Configure : $CONFIGURE_LOG"
 info "  Build     : $BUILD_LOG"
 info "  Test      : $TEST_LOG"
+info "  Full      : $FULL_LOG"
+
+} # end build_main
+
+# ── Run build_main, capturing ALL output to full.log ──────────
+build_main 2>&1 | tee -a "$FULL_LOG"
+BUILD_EXIT="${PIPESTATUS[0]}"
+
+# ── Post-build: report result and pause ───────────────────────
+if [ "$BUILD_EXIT" -ne 0 ]; then
+    err "Build failed (exit code $BUILD_EXIT)."
+    echo "Build failed (exit code $BUILD_EXIT)." >> "$FULL_LOG"
+fi
+# Only pause when running in an interactive terminal (not CI)
+if [ -t 0 ] && [ -z "${CI:-}" ]; then
+    printf '\n'
+    read -rp "Press Enter to close …"
+fi
+
+exit "$BUILD_EXIT"

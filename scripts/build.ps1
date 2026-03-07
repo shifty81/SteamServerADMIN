@@ -20,8 +20,6 @@ function Fatal { param([string]$msg, [string]$LogFile)
     }
 }
 
-try {
-
 # ── 0. Set up logging ────────────────────────────────────────
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $LogDir      = Join-Path $ProjectRoot "logs"
@@ -30,12 +28,19 @@ if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir | Out
 $ConfigureLog = Join-Path $LogDir "configure.log"
 $BuildLog     = Join-Path $LogDir "build.log"
 $TestLog      = Join-Path $LogDir "test.log"
+$FullLog      = Join-Path $LogDir "full.log"
 
 # Initialize every log file with a header so they are never empty
 $Timestamp = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-foreach ($lf in @($ConfigureLog, $BuildLog, $TestLog)) {
+foreach ($lf in @($ConfigureLog, $BuildLog, $TestLog, $FullLog)) {
     Set-Content -Path $lf -Value "=== SSA Build - $Timestamp - $BuildType ==="
 }
+
+# Start a transcript to capture ALL console output to full.log
+try { Stop-Transcript -ErrorAction SilentlyContinue } catch {}
+Start-Transcript -Path $FullLog -Append
+
+try {
 
 Info "Logs will be written to: $LogDir"
 
@@ -163,12 +168,16 @@ Info "Log files:"
 Info "  Configure : $ConfigureLog"
 Info "  Build     : $BuildLog"
 Info "  Test      : $TestLog"
+Info "  Full      : $FullLog"
 
 } catch {
     if ($ExitCode -eq 0) { $ExitCode = 1 }
     Write-Host ""
     Write-Host "!! Error: $($_.Exception.Message)" -ForegroundColor Red
 } finally {
+    # Stop transcript so full.log is flushed
+    try { Stop-Transcript -ErrorAction SilentlyContinue } catch {}
+
     # Keep the window open so the user can read the output
     if ($ExitCode -ne 0) {
         Write-Host ""
