@@ -47,6 +47,8 @@ private:
         QTimer *backupTimer  = nullptr;
         QTimer *restartTimer = nullptr;
         QTimer *rconTimer    = nullptr;
+        QTimer *restartWarningTimer = nullptr;
+        int     restartWarningCountdown = 0;  // minutes remaining until restart
     };
 
     ServerManager *m_manager;

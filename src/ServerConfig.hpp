@@ -35,6 +35,22 @@ struct ServerConfig {
     int maintenanceStartHour = -1;     // hour (0-23) when maintenance window starts; -1 = disabled
     int maintenanceEndHour   = -1;     // hour (0-23) when maintenance window ends;   -1 = disabled
     bool consoleLogging = false;       // save RCON console sessions to disk
+    int maxPlayers = 0;                // max player slots; 0 = unset / unlimited
+    int restartWarningMinutes = 15;    // minutes before scheduled restart to start in-game warnings; 0 = disabled
+    QString restartWarningMessage;     // custom RCON warning template; placeholder: {minutes}. Empty = default message
+
+    /**
+     * @brief Format a restart warning message with the given minutes remaining.
+     * @param minutes Minutes until the server restarts.
+     * @return The formatted message string.
+     */
+    QString formatRestartWarning(int minutes) const
+    {
+        QString tpl = restartWarningMessage.trimmed().isEmpty()
+            ? QStringLiteral("Server will restart in {minutes} minute(s). Please save your progress.")
+            : restartWarningMessage;
+        return QString(tpl).replace(QStringLiteral("{minutes}"), QString::number(minutes));
+    }
 
     /**
      * @brief Validate this server configuration.
@@ -76,6 +92,12 @@ struct ServerConfig {
 
         if (maintenanceEndHour != -1 && (maintenanceEndHour < 0 || maintenanceEndHour > 23))
             errors << QStringLiteral("Maintenance end hour must be between 0 and 23 (or -1 to disable).");
+
+        if (maxPlayers < 0)
+            errors << QStringLiteral("Max players must not be negative.");
+
+        if (restartWarningMinutes < 0)
+            errors << QStringLiteral("Restart warning minutes must not be negative.");
 
         return errors;
     }

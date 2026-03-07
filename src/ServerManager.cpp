@@ -93,6 +93,9 @@ bool ServerManager::loadConfig()
         s.maintenanceStartHour   = obj[QStringLiteral("maintenanceStartHour")].toInt(-1);
         s.maintenanceEndHour     = obj[QStringLiteral("maintenanceEndHour")].toInt(-1);
         s.consoleLogging = obj[QStringLiteral("consoleLogging")].toBool(false);
+        s.maxPlayers     = obj[QStringLiteral("maxPlayers")].toInt(0);
+        s.restartWarningMinutes = obj[QStringLiteral("restartWarningMinutes")].toInt(15);
+        s.restartWarningMessage = obj[QStringLiteral("restartWarningMessage")].toString();
 
         for (const QJsonValue &v : obj[QStringLiteral("scheduledRconCommands")].toArray())
             s.scheduledRconCommands << v.toString();
@@ -169,6 +172,9 @@ bool ServerManager::saveConfig() const
         obj[QStringLiteral("maintenanceStartHour")]   = s.maintenanceStartHour;
         obj[QStringLiteral("maintenanceEndHour")]     = s.maintenanceEndHour;
         obj[QStringLiteral("consoleLogging")] = s.consoleLogging;
+        obj[QStringLiteral("maxPlayers")]     = s.maxPlayers;
+        obj[QStringLiteral("restartWarningMinutes")] = s.restartWarningMinutes;
+        obj[QStringLiteral("restartWarningMessage")]  = s.restartWarningMessage;
 
         QJsonObject rcon;
         rcon[QStringLiteral("host")]     = s.rcon.host;
@@ -586,6 +592,9 @@ bool ServerManager::exportServerConfig(const QString &serverName,
     obj[QStringLiteral("maintenanceStartHour")]   = s.maintenanceStartHour;
     obj[QStringLiteral("maintenanceEndHour")]     = s.maintenanceEndHour;
     obj[QStringLiteral("consoleLogging")] = s.consoleLogging;
+    obj[QStringLiteral("maxPlayers")]     = s.maxPlayers;
+    obj[QStringLiteral("restartWarningMinutes")] = s.restartWarningMinutes;
+    obj[QStringLiteral("restartWarningMessage")]  = s.restartWarningMessage;
 
     QJsonObject rcon;
     rcon[QStringLiteral("host")]     = s.rcon.host;
@@ -647,6 +656,9 @@ QString ServerManager::importServerConfig(const QString &filePath)
     s.maintenanceStartHour   = obj[QStringLiteral("maintenanceStartHour")].toInt(-1);
     s.maintenanceEndHour     = obj[QStringLiteral("maintenanceEndHour")].toInt(-1);
     s.consoleLogging = obj[QStringLiteral("consoleLogging")].toBool(false);
+    s.maxPlayers     = obj[QStringLiteral("maxPlayers")].toInt(0);
+    s.restartWarningMinutes = obj[QStringLiteral("restartWarningMinutes")].toInt(15);
+    s.restartWarningMessage = obj[QStringLiteral("restartWarningMessage")].toString();
 
     QJsonObject rcon = obj[QStringLiteral("rcon")].toObject();
     s.rcon.host     = rcon[QStringLiteral("host")].toString(QStringLiteral("127.0.0.1"));
@@ -701,4 +713,52 @@ int ServerManager::crashCount(const QString &serverName) const
 void ServerManager::resetCrashCount(const QString &serverName)
 {
     m_crashCounts.remove(serverName);
+}
+
+// ---------------------------------------------------------------------------
+// Pending update tracking
+// ---------------------------------------------------------------------------
+
+void ServerManager::setPendingUpdate(const QString &serverName, bool pending)
+{
+    if (pending)
+        m_pendingUpdates[serverName] = true;
+    else
+        m_pendingUpdates.remove(serverName);
+}
+
+bool ServerManager::hasPendingUpdate(const QString &serverName) const
+{
+    return m_pendingUpdates.value(serverName, false);
+}
+
+void ServerManager::setPendingModUpdate(const QString &serverName, bool pending)
+{
+    if (pending)
+        m_pendingModUpdates[serverName] = true;
+    else
+        m_pendingModUpdates.remove(serverName);
+}
+
+bool ServerManager::hasPendingModUpdate(const QString &serverName) const
+{
+    return m_pendingModUpdates.value(serverName, false);
+}
+
+// ---------------------------------------------------------------------------
+// Restart warning
+// ---------------------------------------------------------------------------
+
+void ServerManager::sendRestartWarning(ServerConfig &server, int minutesRemaining)
+{
+    if (!isServerRunning(server))
+        return;
+
+    QString msg = server.formatRestartWarning(minutesRemaining);
+    emit logMessage(server.name,
+                    QStringLiteral("Restart warning (%1 min): %2")
+                        .arg(minutesRemaining).arg(msg));
+
+    // Send via RCON broadcast; common commands: "say", "broadcast", "ServerChat"
+    sendRconCommand(server, QStringLiteral("broadcast %1").arg(msg));
 }

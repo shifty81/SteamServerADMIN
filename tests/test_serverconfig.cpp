@@ -147,6 +147,28 @@ private slots:
     void testBackupCompressionLevelDefault();
     void testBackupCompressionLevelValidation();
     void testBackupCompressionLevelExportImport();
+
+    // ---- Max players tests ----
+    void testMaxPlayersDefault();
+    void testMaxPlayersPersistence();
+    void testMaxPlayersValidation();
+    void testMaxPlayersExportImport();
+
+    // ---- Restart warning tests ----
+    void testRestartWarningMinutesDefault();
+    void testRestartWarningMinutesPersistence();
+    void testRestartWarningMinutesValidation();
+    void testRestartWarningMessagePersistence();
+    void testRestartWarningMessageDefault();
+    void testRestartWarningFormatDefault();
+    void testRestartWarningFormatCustom();
+    void testRestartWarningExportImport();
+
+    // ---- Pending update tracking tests ----
+    void testPendingUpdateDefault();
+    void testPendingUpdateSetClear();
+    void testPendingModUpdateDefault();
+    void testPendingModUpdateSetClear();
 };
 
 void TestServerConfig::testSaveAndLoad()
@@ -1910,6 +1932,264 @@ void TestServerConfig::testBackupCompressionLevelExportImport()
     QString err = mgr2.importServerConfig(exportPath);
     QVERIFY2(err.isEmpty(), qPrintable(err));
     QCOMPARE(mgr2.servers().first().backupCompressionLevel, 3);
+}
+
+// ---------------------------------------------------------------------------
+// Max players tests
+// ---------------------------------------------------------------------------
+
+void TestServerConfig::testMaxPlayersDefault()
+{
+    ServerConfig s;
+    QCOMPARE(s.maxPlayers, 0);
+}
+
+void TestServerConfig::testMaxPlayersPersistence()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+
+    ServerManager mgr(configPath);
+    ServerConfig s;
+    s.name  = QStringLiteral("MaxPTest");
+    s.appid = 730;
+    s.dir   = QStringLiteral("/srv/mp");
+    s.maxPlayers = 64;
+    mgr.servers() << s;
+    QVERIFY(mgr.saveConfig());
+
+    ServerManager mgr2(configPath);
+    QVERIFY(mgr2.loadConfig());
+    QCOMPARE(mgr2.servers().first().maxPlayers, 64);
+}
+
+void TestServerConfig::testMaxPlayersValidation()
+{
+    ServerConfig s;
+    s.name  = QStringLiteral("MaxPVal");
+    s.appid = 730;
+    s.dir   = QStringLiteral("/srv/mpv");
+
+    // Valid: 0 (unlimited)
+    s.maxPlayers = 0;
+    QVERIFY(s.validate().isEmpty());
+
+    // Valid: positive
+    s.maxPlayers = 100;
+    QVERIFY(s.validate().isEmpty());
+
+    // Invalid: negative
+    s.maxPlayers = -1;
+    QStringList errors = s.validate();
+    QVERIFY(!errors.isEmpty());
+    bool found = false;
+    for (const QString &e : errors) {
+        if (e.contains(QStringLiteral("Max players")))
+            found = true;
+    }
+    QVERIFY(found);
+}
+
+void TestServerConfig::testMaxPlayersExportImport()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    QString exportPath = tmp.filePath(QStringLiteral("export.json"));
+
+    ServerManager mgr(configPath);
+    ServerConfig s;
+    s.name  = QStringLiteral("MaxPExp");
+    s.appid = 730;
+    s.dir   = QStringLiteral("/srv/mpe");
+    s.maxPlayers = 32;
+    mgr.servers() << s;
+    QVERIFY(mgr.saveConfig());
+
+    QVERIFY(mgr.exportServerConfig(QStringLiteral("MaxPExp"), exportPath));
+
+    ServerManager mgr2(tmp.filePath(QStringLiteral("servers2.json")));
+    QString err = mgr2.importServerConfig(exportPath);
+    QVERIFY2(err.isEmpty(), qPrintable(err));
+    QCOMPARE(mgr2.servers().first().maxPlayers, 32);
+}
+
+// ---------------------------------------------------------------------------
+// Restart warning tests
+// ---------------------------------------------------------------------------
+
+void TestServerConfig::testRestartWarningMinutesDefault()
+{
+    ServerConfig s;
+    QCOMPARE(s.restartWarningMinutes, 15);
+}
+
+void TestServerConfig::testRestartWarningMinutesPersistence()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+
+    ServerManager mgr(configPath);
+    ServerConfig s;
+    s.name  = QStringLiteral("RWTest");
+    s.appid = 730;
+    s.dir   = QStringLiteral("/srv/rw");
+    s.restartWarningMinutes = 10;
+    mgr.servers() << s;
+    QVERIFY(mgr.saveConfig());
+
+    ServerManager mgr2(configPath);
+    QVERIFY(mgr2.loadConfig());
+    QCOMPARE(mgr2.servers().first().restartWarningMinutes, 10);
+}
+
+void TestServerConfig::testRestartWarningMinutesValidation()
+{
+    ServerConfig s;
+    s.name  = QStringLiteral("RWVal");
+    s.appid = 730;
+    s.dir   = QStringLiteral("/srv/rwv");
+
+    // Valid: 0 (disabled)
+    s.restartWarningMinutes = 0;
+    QVERIFY(s.validate().isEmpty());
+
+    // Valid: positive
+    s.restartWarningMinutes = 30;
+    QVERIFY(s.validate().isEmpty());
+
+    // Invalid: negative
+    s.restartWarningMinutes = -5;
+    QStringList errors = s.validate();
+    QVERIFY(!errors.isEmpty());
+    bool found = false;
+    for (const QString &e : errors) {
+        if (e.contains(QStringLiteral("Restart warning")))
+            found = true;
+    }
+    QVERIFY(found);
+}
+
+void TestServerConfig::testRestartWarningMessagePersistence()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+
+    ServerManager mgr(configPath);
+    ServerConfig s;
+    s.name  = QStringLiteral("RWMsgTest");
+    s.appid = 730;
+    s.dir   = QStringLiteral("/srv/rwm");
+    s.restartWarningMessage = QStringLiteral("Reboot in {minutes} min!");
+    mgr.servers() << s;
+    QVERIFY(mgr.saveConfig());
+
+    ServerManager mgr2(configPath);
+    QVERIFY(mgr2.loadConfig());
+    QCOMPARE(mgr2.servers().first().restartWarningMessage,
+             QStringLiteral("Reboot in {minutes} min!"));
+}
+
+void TestServerConfig::testRestartWarningMessageDefault()
+{
+    ServerConfig s;
+    QVERIFY(s.restartWarningMessage.isEmpty());
+}
+
+void TestServerConfig::testRestartWarningFormatDefault()
+{
+    ServerConfig s;
+    QString msg = s.formatRestartWarning(5);
+    QVERIFY(msg.contains(QStringLiteral("5")));
+    QVERIFY(msg.contains(QStringLiteral("restart")));
+    // Default message should mention saving progress
+    QVERIFY(msg.contains(QStringLiteral("save")));
+}
+
+void TestServerConfig::testRestartWarningFormatCustom()
+{
+    ServerConfig s;
+    s.restartWarningMessage = QStringLiteral("Server down in {minutes} min! Get ready.");
+    QString msg = s.formatRestartWarning(3);
+    QCOMPARE(msg, QStringLiteral("Server down in 3 min! Get ready."));
+}
+
+void TestServerConfig::testRestartWarningExportImport()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    QString exportPath = tmp.filePath(QStringLiteral("export.json"));
+
+    ServerManager mgr(configPath);
+    ServerConfig s;
+    s.name  = QStringLiteral("RWExp");
+    s.appid = 730;
+    s.dir   = QStringLiteral("/srv/rwe");
+    s.restartWarningMinutes = 20;
+    s.restartWarningMessage = QStringLiteral("Restart in {minutes}m");
+    mgr.servers() << s;
+    QVERIFY(mgr.saveConfig());
+
+    QVERIFY(mgr.exportServerConfig(QStringLiteral("RWExp"), exportPath));
+
+    ServerManager mgr2(tmp.filePath(QStringLiteral("servers2.json")));
+    QString err = mgr2.importServerConfig(exportPath);
+    QVERIFY2(err.isEmpty(), qPrintable(err));
+    QCOMPARE(mgr2.servers().first().restartWarningMinutes, 20);
+    QCOMPARE(mgr2.servers().first().restartWarningMessage,
+             QStringLiteral("Restart in {minutes}m"));
+}
+
+// ---------------------------------------------------------------------------
+// Pending update tracking tests
+// ---------------------------------------------------------------------------
+
+void TestServerConfig::testPendingUpdateDefault()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    ServerManager mgr(tmp.filePath(QStringLiteral("servers.json")));
+    QVERIFY(!mgr.hasPendingUpdate(QStringLiteral("AnyServer")));
+}
+
+void TestServerConfig::testPendingUpdateSetClear()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    ServerManager mgr(tmp.filePath(QStringLiteral("servers.json")));
+
+    mgr.setPendingUpdate(QStringLiteral("Server1"), true);
+    QVERIFY(mgr.hasPendingUpdate(QStringLiteral("Server1")));
+    QVERIFY(!mgr.hasPendingUpdate(QStringLiteral("Server2")));
+
+    mgr.setPendingUpdate(QStringLiteral("Server1"), false);
+    QVERIFY(!mgr.hasPendingUpdate(QStringLiteral("Server1")));
+}
+
+void TestServerConfig::testPendingModUpdateDefault()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    ServerManager mgr(tmp.filePath(QStringLiteral("servers.json")));
+    QVERIFY(!mgr.hasPendingModUpdate(QStringLiteral("AnyServer")));
+}
+
+void TestServerConfig::testPendingModUpdateSetClear()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    ServerManager mgr(tmp.filePath(QStringLiteral("servers.json")));
+
+    mgr.setPendingModUpdate(QStringLiteral("Server1"), true);
+    QVERIFY(mgr.hasPendingModUpdate(QStringLiteral("Server1")));
+    QVERIFY(!mgr.hasPendingModUpdate(QStringLiteral("Server2")));
+
+    mgr.setPendingModUpdate(QStringLiteral("Server1"), false);
+    QVERIFY(!mgr.hasPendingModUpdate(QStringLiteral("Server1")));
 }
 
 #include "test_serverconfig.moc"

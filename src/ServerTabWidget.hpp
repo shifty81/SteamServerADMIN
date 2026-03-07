@@ -48,6 +48,7 @@ private slots:
 
 private:
     void buildOverviewTab(QTabWidget *tabs);
+    void buildSettingsTab(QTabWidget *tabs);
     void buildConfigTab(QTabWidget *tabs);
     void buildModsTab(QTabWidget *tabs);
     void buildBackupsTab(QTabWidget *tabs);

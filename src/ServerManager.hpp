@@ -102,6 +102,20 @@ public:
     /** Reset the crash counter for a server (e.g. after a manual start). */
     void resetCrashCount(const QString &serverName);
 
+    // ---- Pending update tracking ----
+    /** Mark / clear whether a server has a pending game update. */
+    void setPendingUpdate(const QString &serverName, bool pending);
+    bool hasPendingUpdate(const QString &serverName) const;
+
+    /** Mark / clear whether a server has a pending mod update. */
+    void setPendingModUpdate(const QString &serverName, bool pending);
+    bool hasPendingModUpdate(const QString &serverName) const;
+
+    // ---- Restart warning ----
+    /** Send an in-game RCON broadcast warning players about an upcoming restart.
+     *  @param minutesRemaining  minutes until the restart happens. */
+    void sendRestartWarning(ServerConfig &server, int minutesRemaining);
+
 signals:
     void logMessage(const QString &serverName, const QString &message);
     void serverCrashed(const QString &serverName);
@@ -120,6 +134,10 @@ private:
 
     // Crash backoff: consecutive crash count per server
     QMap<QString, int> m_crashCounts;
+
+    // Pending update tracking
+    QMap<QString, bool> m_pendingUpdates;
+    QMap<QString, bool> m_pendingModUpdates;
 
     QProcess *processFor(const ServerConfig &server) const;
 

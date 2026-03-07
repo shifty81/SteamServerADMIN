@@ -94,6 +94,66 @@ void SchedulerModule::startScheduler(const QString &serverName)
         t.restartTimer = new QTimer(this);
         t.restartTimer->setTimerType(Qt::VeryCoarseTimer);
 
+        // Look up the restart warning configuration
+        int warningMinutes = 0;
+        for (const ServerConfig &s : m_manager->servers()) {
+            if (s.name == serverName) {
+                warningMinutes = s.restartWarningMinutes;
+                break;
+            }
+        }
+
+        // --- Restart warning countdown timer ---
+        // If warnings are enabled, start a warning timer that fires periodically
+        // once the restart is approaching.  The warning timer starts
+        // (restartHours * 60 - warningMinutes) minutes after the restart timer
+        // begins, then fires every minute to broadcast the countdown.
+        if (warningMinutes > 0) {
+            int restartMs     = restartHours * 60 * 60 * 1000;
+            int warningStartMs = restartMs - warningMinutes * 60 * 1000;
+            if (warningStartMs < 0) warningStartMs = 0;
+
+            // Single-shot timer to kick off the countdown once we're inside the
+            // warning window.
+            t.restartWarningCountdown = warningMinutes;
+            QString name2 = serverName;
+            QTimer::singleShot(warningStartMs, this, [this, name2]() {
+                auto it = m_timers.find(name2);
+                if (it == m_timers.end()) return;
+
+                it->restartWarningTimer = new QTimer(this);
+                it->restartWarningTimer->setTimerType(Qt::CoarseTimer);
+
+                connect(it->restartWarningTimer, &QTimer::timeout, this, [this, name2]() {
+                    auto jt = m_timers.find(name2);
+                    if (jt == m_timers.end()) return;
+
+                    int mins = jt->restartWarningCountdown;
+                    if (mins <= 0) return;
+
+                    for (ServerConfig &s : m_manager->servers()) {
+                        if (s.name == name2) {
+                            if (!inMaintenanceWindow(s))
+                                m_manager->sendRestartWarning(s, mins);
+                            break;
+                        }
+                    }
+                    jt->restartWarningCountdown = mins - 1;
+                });
+                it->restartWarningTimer->start(60 * 1000);  // fire every minute
+
+                // Send the first warning immediately
+                for (ServerConfig &s : m_manager->servers()) {
+                    if (s.name == name2) {
+                        if (!inMaintenanceWindow(s))
+                            m_manager->sendRestartWarning(s, it->restartWarningCountdown);
+                        break;
+                    }
+                }
+                it->restartWarningCountdown -= 1;
+            });
+        }
+
         QString name = serverName;
         connect(t.restartTimer, &QTimer::timeout, this, [this, name]() {
             for (ServerConfig &s : m_manager->servers()) {
@@ -144,6 +204,10 @@ void SchedulerModule::stopScheduler(const QString &serverName)
     if (it->rconTimer) {
         it->rconTimer->stop();
         it->rconTimer->deleteLater();
+    }
+    if (it->restartWarningTimer) {
+        it->restartWarningTimer->stop();
+        it->restartWarningTimer->deleteLater();
     }
 
     m_timers.erase(it);
