@@ -79,7 +79,7 @@ find_qt6_windows() {
         "${USERPROFILE:-}/Qt" "$HOME/Qt"
     )
     for base in "${search_dirs[@]}"; do
-        [ -z "$base" ] || [ "$base" = "/Qt" ] && continue
+        { [ -z "$base" ] || [ "$base" = "/Qt" ]; } && continue
         [ -d "$base" ] || continue
         # Look for versioned directories like 6.x.x/msvc*_64 or 6.x.x/mingw*_64
         for ver_dir in "$base"/6*/msvc*_64 "$base"/6*/mingw*_64; do
@@ -227,7 +227,8 @@ BUILD_EXIT="${PIPESTATUS[0]}"
 
 # ── Post-build: report result and pause ───────────────────────
 if [ "$BUILD_EXIT" -ne 0 ]; then
-    err "Build failed (exit code $BUILD_EXIT)." | tee -a "$FULL_LOG"
+    err "Build failed (exit code $BUILD_EXIT)."
+    echo "Build failed (exit code $BUILD_EXIT)." >> "$FULL_LOG"
 fi
 # Only pause when running in an interactive terminal (not CI)
 if [ -t 0 ] && [ -z "${CI:-}" ]; then
