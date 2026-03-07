@@ -52,6 +52,12 @@ A cross-platform Qt6 desktop application for managing SteamCMD-based game server
 | **Scheduled RCON commands** | Run configured RCON commands at a repeating interval (e.g. broadcast messages, auto-save) |
 | **Config diff preview** | Before saving config editor changes, a diff dialog shows exactly what lines were added or removed |
 | **Favorite / pinned servers** | Mark servers as favorites (⭐); favorites sort to the top of the sidebar; double-click to toggle |
+| **Dashboard badge cards** | Each server displayed as a rich card on the Home Dashboard with health light, uptime, player count / max slots, and pending update badges |
+| **Right-click context menu** | Right-click any server badge to Save Config or Restart (with optional in-game warning countdown) |
+| **Form-based server settings** | Dedicated ⚙ Settings sub-tab with labelled form fields for every server property — no raw JSON editing needed |
+| **Restart warning broadcasts** | Configurable in-game RCON warnings before scheduled restarts; customisable message template with `{minutes}` placeholder |
+| **Max players display** | `maxPlayers` field shows capacity alongside live player count on the dashboard |
+| **Pending update indicators** | Dashboard badges highlight servers with pending game or mod updates |
 
 ---
 
@@ -149,7 +155,10 @@ See `servers.json` in the repository root for an example configuration.
     "backupIntervalMinutes": 30,
     "restartIntervalHours": 24,
     "scheduledRconCommands": [],
-    "rconCommandIntervalMinutes": 0
+    "rconCommandIntervalMinutes": 0,
+    "maxPlayers": 70,
+    "restartWarningMinutes": 15,
+    "restartWarningMessage": ""
   }
 ]
 ```

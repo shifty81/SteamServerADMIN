@@ -2,11 +2,15 @@
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
+#include <QGridLayout>
 #include <QLabel>
 #include <QPushButton>
 #include <QTimer>
 #include <QFrame>
 #include <QScrollArea>
+#include <QMenu>
+#include <QMessageBox>
+#include <QMouseEvent>
 
 HomeDashboard::HomeDashboard(ServerManager *manager, QWidget *parent)
     : QWidget(parent), m_manager(manager)
@@ -37,7 +41,7 @@ HomeDashboard::HomeDashboard(ServerManager *manager, QWidget *parent)
     summaryLayout->addStretch();
     outerLayout->addLayout(summaryLayout);
 
-    // Scrollable container for server rows
+    // Scrollable container for server badge cards
     auto *scroll = new QScrollArea(this);
     scroll->setWidgetResizable(true);
     m_rowContainer = new QWidget(scroll);
@@ -64,67 +68,84 @@ void HomeDashboard::refresh()
         }
         delete old;
     }
-    m_rows.clear();
+    m_badges.clear();
 
-    auto *layout = new QVBoxLayout(m_rowContainer);
-    layout->setSpacing(4);
+    auto *gridLayout = new QGridLayout(m_rowContainer);
+    gridLayout->setSpacing(12);
 
-    // Header row
-    {
-        auto *hdr = new QHBoxLayout();
-        auto *h1 = new QLabel(tr("Status"),  m_rowContainer);
-        auto *h2 = new QLabel(tr("Server"),  m_rowContainer);
-        auto *h3 = new QLabel(tr("Players"), m_rowContainer);
-        auto *h4 = new QLabel(tr("Actions"), m_rowContainer);
-        for (auto *l : { h1, h2, h3, h4 })
-            l->setStyleSheet(QStringLiteral("font-weight:bold;"));
-        h1->setFixedWidth(80);
-        h2->setMinimumWidth(200);
-        h3->setFixedWidth(100);
-        hdr->addWidget(h1);
-        hdr->addWidget(h2);
-        hdr->addWidget(h3);
-        hdr->addWidget(h4);
-        hdr->addStretch();
-        layout->addLayout(hdr);
-
-        auto *line = new QFrame(m_rowContainer);
-        line->setFrameShape(QFrame::HLine);
-        layout->addWidget(line);
-    }
+    int col = 0;
+    int row = 0;
+    static constexpr int kCardsPerRow = 3;
 
     for (ServerConfig &server : m_manager->servers()) {
-        auto *row = new QHBoxLayout();
+        // --- Badge card frame ---
+        auto *card = new QFrame(m_rowContainer);
+        card->setFrameShape(QFrame::StyledPanel);
+        card->setStyleSheet(QStringLiteral(
+            "QFrame { border:1px solid #888; border-radius:8px; padding:10px;"
+            " background:#2d2d2d; }"
+            "QLabel { color:#eee; border:none; background:transparent; }"));
+        card->setContextMenuPolicy(Qt::CustomContextMenu);
 
-        auto *statusLight = new QLabel(QStringLiteral("⬜"), m_rowContainer);
-        statusLight->setFixedWidth(80);
-        statusLight->setToolTip(tr("Server status"));
+        auto *cardLayout = new QVBoxLayout(card);
+        cardLayout->setSpacing(6);
 
-        auto *nameLabel = new QLabel(server.name, m_rowContainer);
-        nameLabel->setMinimumWidth(200);
+        // Row 1: status light + server name
+        auto *topRow = new QHBoxLayout();
+        auto *statusLight = new QLabel(QStringLiteral("⬜"), card);
+        statusLight->setStyleSheet(QStringLiteral("font-size:22px;"));
+        auto *nameLabel = new QLabel(server.name, card);
+        nameLabel->setStyleSheet(QStringLiteral("font-size:15px; font-weight:bold;"));
+        topRow->addWidget(statusLight);
+        topRow->addWidget(nameLabel);
+        topRow->addStretch();
+        cardLayout->addLayout(topRow);
 
-        auto *playersLabel = new QLabel(QStringLiteral("–"), m_rowContainer);
-        playersLabel->setFixedWidth(100);
+        // Row 2: players + uptime
+        auto *infoRow = new QHBoxLayout();
+        auto *playersLabel = new QLabel(QStringLiteral("Players: –"), card);
+        playersLabel->setStyleSheet(QStringLiteral("font-size:12px;"));
+        auto *uptimeLabel  = new QLabel(QStringLiteral("Uptime: –"), card);
+        uptimeLabel->setStyleSheet(QStringLiteral("font-size:12px;"));
+        infoRow->addWidget(playersLabel);
+        infoRow->addWidget(uptimeLabel);
+        infoRow->addStretch();
+        cardLayout->addLayout(infoRow);
 
-        auto *startBtn   = new QPushButton(tr("Start"),   m_rowContainer);
-        auto *stopBtn    = new QPushButton(tr("Stop"),    m_rowContainer);
-        auto *restartBtn = new QPushButton(tr("Restart"), m_rowContainer);
-        auto *backupBtn  = new QPushButton(tr("Backup"),  m_rowContainer);
+        // Row 3: pending update badges
+        auto *badgeRow = new QHBoxLayout();
+        auto *updateBadge = new QLabel(card);
+        updateBadge->setStyleSheet(QStringLiteral(
+            "font-size:11px; padding:2px 6px; border-radius:4px;"));
+        updateBadge->hide();
+        auto *modUpdateBadge = new QLabel(card);
+        modUpdateBadge->setStyleSheet(QStringLiteral(
+            "font-size:11px; padding:2px 6px; border-radius:4px;"));
+        modUpdateBadge->hide();
+        badgeRow->addWidget(updateBadge);
+        badgeRow->addWidget(modUpdateBadge);
+        badgeRow->addStretch();
+        cardLayout->addLayout(badgeRow);
 
+        // Row 4: quick-action buttons
+        auto *btnRow = new QHBoxLayout();
+        auto *startBtn   = new QPushButton(tr("▶ Start"),   card);
+        auto *stopBtn    = new QPushButton(tr("■ Stop"),    card);
+        auto *restartBtn = new QPushButton(tr("↺ Restart"), card);
+        auto *backupBtn  = new QPushButton(tr("📦 Backup"), card);
         for (auto *btn : { startBtn, stopBtn, restartBtn, backupBtn })
-            btn->setFixedWidth(70);
+            btn->setFixedHeight(28);
+        btnRow->addWidget(startBtn);
+        btnRow->addWidget(stopBtn);
+        btnRow->addWidget(restartBtn);
+        btnRow->addWidget(backupBtn);
+        cardLayout->addLayout(btnRow);
 
-        row->addWidget(statusLight);
-        row->addWidget(nameLabel);
-        row->addWidget(playersLabel);
-        row->addWidget(startBtn);
-        row->addWidget(stopBtn);
-        row->addWidget(restartBtn);
-        row->addWidget(backupBtn);
-        row->addStretch();
-        layout->addLayout(row);
+        gridLayout->addWidget(card, row, col);
+        ++col;
+        if (col >= kCardsPerRow) { col = 0; ++row; }
 
-        // Capture by name so the lambda remains valid even if QList reallocates.
+        // --- Connect buttons (capture by server name) ---
         QString sname = server.name;
         auto findServer = [this, sname]() -> ServerConfig * {
             for (ServerConfig &s : m_manager->servers())
@@ -140,14 +161,70 @@ void HomeDashboard::refresh()
         connect(backupBtn,  &QPushButton::clicked, this, [this, findServer]() {
             if (auto *s = findServer()) m_manager->takeSnapshot(*s); });
 
-        ServerRow r;
-        r.statusLight  = statusLight;
-        r.nameLabel    = nameLabel;
-        r.playersLabel = playersLabel;
-        m_rows << r;
+        // --- Right-click context menu ---
+        connect(card, &QWidget::customContextMenuRequested, this,
+                [this, findServer](const QPoint &pos) {
+            auto *s = findServer();
+            if (!s) return;
+
+            QMenu menu;
+            QAction *saveAction    = menu.addAction(tr("💾  Save Config"));
+            QAction *restartAction = menu.addAction(tr("↺  Restart Server"));
+
+            if (s->restartWarningMinutes > 0 && m_manager->isServerRunning(*s)) {
+                restartAction->setText(tr("↺  Restart (warn %1 min)")
+                                        .arg(s->restartWarningMinutes));
+            }
+
+            QAction *chosen = menu.exec(
+                qobject_cast<QWidget *>(sender())->mapToGlobal(pos));
+
+            if (chosen == saveAction) {
+                if (m_manager->saveConfig())
+                    QMessageBox::information(this, tr("Save"),
+                                             tr("Configuration saved."));
+                else
+                    QMessageBox::warning(this, tr("Save"),
+                                         tr("Failed to save configuration."));
+            } else if (chosen == restartAction) {
+                if (s->restartWarningMinutes > 0 && m_manager->isServerRunning(*s)) {
+                    // Send in-game warnings, then restart after delay
+                    int warnMin = s->restartWarningMinutes;
+                    m_manager->sendRestartWarning(*s, warnMin);
+
+                    QString name = s->name;
+                    // Schedule the actual restart after the warning period
+                    QTimer::singleShot(warnMin * 60 * 1000, this, [this, name]() {
+                        for (ServerConfig &srv : m_manager->servers()) {
+                            if (srv.name == name) {
+                                m_manager->restartServer(srv);
+                                break;
+                            }
+                        }
+                    });
+                } else {
+                    m_manager->restartServer(*s);
+                }
+            }
+        });
+
+        ServerBadge b;
+        b.statusLight    = statusLight;
+        b.nameLabel      = nameLabel;
+        b.playersLabel   = playersLabel;
+        b.uptimeLabel    = uptimeLabel;
+        b.updateBadge    = updateBadge;
+        b.modUpdateBadge = modUpdateBadge;
+        b.card           = card;
+        m_badges << b;
     }
 
-    layout->addStretch();
+    // Fill remaining columns so cards don't stretch
+    if (col > 0) {
+        for (; col < kCardsPerRow; ++col)
+            gridLayout->addWidget(new QWidget(m_rowContainer), row, col);
+    }
+    gridLayout->setRowStretch(row + 1, 1);
 }
 
 void HomeDashboard::updateStatus()
@@ -155,13 +232,14 @@ void HomeDashboard::updateStatus()
     const QList<ServerConfig> &srvs = m_manager->servers();
     int onlineCount = 0;
 
-    for (int i = 0; i < m_rows.size() && i < srvs.size(); ++i) {
+    for (int i = 0; i < m_badges.size() && i < srvs.size(); ++i) {
         const ServerConfig &s = srvs.at(i);
         bool online = m_manager->isServerRunning(s);
         int players = online ? m_manager->getPlayerCount(s) : -1;
 
         if (online) ++onlineCount;
 
+        // --- Status light ---
         QString light;
         QString tooltip;
         if (!online) {
@@ -175,11 +253,59 @@ void HomeDashboard::updateStatus()
             tooltip = tr("Online – idle");
         }
 
-        m_rows[i].statusLight->setText(light);
-        m_rows[i].statusLight->setToolTip(tooltip);
-        m_rows[i].playersLabel->setText(players >= 0
-                                        ? QString::number(players)
-                                        : QStringLiteral("–"));
+        m_badges[i].statusLight->setText(light);
+        m_badges[i].statusLight->setToolTip(tooltip);
+
+        // --- Player count (with max if set) ---
+        if (players >= 0) {
+            if (s.maxPlayers > 0)
+                m_badges[i].playersLabel->setText(
+                    tr("Players: %1 / %2").arg(players).arg(s.maxPlayers));
+            else
+                m_badges[i].playersLabel->setText(
+                    tr("Players: %1").arg(players));
+        } else {
+            m_badges[i].playersLabel->setText(QStringLiteral("Players: –"));
+        }
+
+        // --- Uptime ---
+        qint64 secs = m_manager->serverUptimeSeconds(s.name);
+        if (secs < 0) {
+            m_badges[i].uptimeLabel->setText(tr("Uptime: –"));
+        } else {
+            int days  = static_cast<int>(secs / 86400);
+            int hours = static_cast<int>((secs % 86400) / 3600);
+            int mins  = static_cast<int>((secs % 3600) / 60);
+            if (days > 0)
+                m_badges[i].uptimeLabel->setText(
+                    tr("Uptime: %1d %2h %3m").arg(days).arg(hours).arg(mins));
+            else if (hours > 0)
+                m_badges[i].uptimeLabel->setText(
+                    tr("Uptime: %1h %2m").arg(hours).arg(mins));
+            else
+                m_badges[i].uptimeLabel->setText(tr("Uptime: %1m").arg(mins));
+        }
+
+        // --- Pending update badges ---
+        if (m_manager->hasPendingUpdate(s.name)) {
+            m_badges[i].updateBadge->setText(tr("⬆ Update Available"));
+            m_badges[i].updateBadge->setStyleSheet(
+                QStringLiteral("font-size:11px; padding:2px 6px; border-radius:4px;"
+                               " background:#e67e22; color:white; border:none;"));
+            m_badges[i].updateBadge->show();
+        } else {
+            m_badges[i].updateBadge->hide();
+        }
+
+        if (m_manager->hasPendingModUpdate(s.name)) {
+            m_badges[i].modUpdateBadge->setText(tr("🔧 Mod Update Available"));
+            m_badges[i].modUpdateBadge->setStyleSheet(
+                QStringLiteral("font-size:11px; padding:2px 6px; border-radius:4px;"
+                               " background:#3498db; color:white; border:none;"));
+            m_badges[i].modUpdateBadge->show();
+        } else {
+            m_badges[i].modUpdateBadge->hide();
+        }
     }
 
     // Update cluster summary

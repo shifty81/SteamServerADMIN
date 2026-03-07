@@ -21,6 +21,9 @@
 #include <QGroupBox>
 #include <QKeyEvent>
 #include <QCheckBox>
+#include <QSpinBox>
+#include <QFormLayout>
+#include <QScrollArea>
 
 // ---------------------------------------------------------------------------
 
@@ -36,6 +39,7 @@ ServerTabWidget::ServerTabWidget(ServerManager *manager,
     outerLayout->addWidget(tabs);
 
     buildOverviewTab(tabs);
+    buildSettingsTab(tabs);
     buildConfigTab(tabs);
     buildModsTab(tabs);
     buildBackupsTab(tabs);
@@ -138,6 +142,202 @@ void ServerTabWidget::buildOverviewTab(QTabWidget *tabs)
     connect(deployBtn,  &QPushButton::clicked, this, &ServerTabWidget::onDeployServer);
 
     tabs->addTab(w, tr("Overview"));
+}
+
+void ServerTabWidget::buildSettingsTab(QTabWidget *tabs)
+{
+    auto *w = new QWidget(tabs);
+    auto *outerLayout = new QVBoxLayout(w);
+
+    auto *scroll = new QScrollArea(w);
+    scroll->setWidgetResizable(true);
+    auto *scrollContent = new QWidget(scroll);
+    auto *form = new QFormLayout(scrollContent);
+    form->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
+
+    // ---- Server Identity ----
+    auto *nameEdit = new QLineEdit(m_server.name, scrollContent);
+    form->addRow(tr("Server Name:"), nameEdit);
+
+    auto *appidSpin = new QSpinBox(scrollContent);
+    appidSpin->setRange(1, 9999999);
+    appidSpin->setValue(m_server.appid);
+    form->addRow(tr("Steam AppID:"), appidSpin);
+
+    auto *dirEdit = new QLineEdit(m_server.dir, scrollContent);
+    form->addRow(tr("Install Directory:"), dirEdit);
+
+    auto *exeEdit = new QLineEdit(m_server.executable, scrollContent);
+    form->addRow(tr("Executable:"), exeEdit);
+
+    auto *argsEdit = new QLineEdit(m_server.launchArgs, scrollContent);
+    form->addRow(tr("Launch Arguments:"), argsEdit);
+
+    // ---- RCON ----
+    auto *rconHostEdit = new QLineEdit(m_server.rcon.host, scrollContent);
+    form->addRow(tr("RCON Host:"), rconHostEdit);
+
+    auto *rconPortSpin = new QSpinBox(scrollContent);
+    rconPortSpin->setRange(1, 65535);
+    rconPortSpin->setValue(m_server.rcon.port);
+    form->addRow(tr("RCON Port:"), rconPortSpin);
+
+    auto *rconPassEdit = new QLineEdit(m_server.rcon.password, scrollContent);
+    rconPassEdit->setEchoMode(QLineEdit::Password);
+    form->addRow(tr("RCON Password:"), rconPassEdit);
+
+    // ---- Paths ----
+    auto *backupDirEdit = new QLineEdit(m_server.backupFolder, scrollContent);
+    form->addRow(tr("Backup Folder:"), backupDirEdit);
+
+    // ---- Players ----
+    auto *maxPlayersSpin = new QSpinBox(scrollContent);
+    maxPlayersSpin->setRange(0, 9999);
+    maxPlayersSpin->setSpecialValueText(tr("Unlimited"));
+    maxPlayersSpin->setValue(m_server.maxPlayers);
+    form->addRow(tr("Max Players (0 = unlimited):"), maxPlayersSpin);
+
+    // ---- Automation ----
+    auto *autoUpdateCheck = new QCheckBox(scrollContent);
+    autoUpdateCheck->setChecked(m_server.autoUpdate);
+    form->addRow(tr("Auto-update mods on start:"), autoUpdateCheck);
+
+    auto *autoStartCheck = new QCheckBox(scrollContent);
+    autoStartCheck->setChecked(m_server.autoStartOnLaunch);
+    form->addRow(tr("Auto-start on launch:"), autoStartCheck);
+
+    auto *favoriteCheck = new QCheckBox(scrollContent);
+    favoriteCheck->setChecked(m_server.favorite);
+    form->addRow(tr("Favorite (pinned):"), favoriteCheck);
+
+    // ---- Intervals ----
+    auto *backupIntervalSpin = new QSpinBox(scrollContent);
+    backupIntervalSpin->setRange(0, 99999);
+    backupIntervalSpin->setSuffix(tr(" min"));
+    backupIntervalSpin->setValue(m_server.backupIntervalMinutes);
+    form->addRow(tr("Backup Interval:"), backupIntervalSpin);
+
+    auto *restartIntervalSpin = new QSpinBox(scrollContent);
+    restartIntervalSpin->setRange(0, 9999);
+    restartIntervalSpin->setSuffix(tr(" hrs"));
+    restartIntervalSpin->setValue(m_server.restartIntervalHours);
+    form->addRow(tr("Restart Interval:"), restartIntervalSpin);
+
+    auto *keepBackupsSpin = new QSpinBox(scrollContent);
+    keepBackupsSpin->setRange(0, 9999);
+    keepBackupsSpin->setValue(m_server.keepBackups);
+    form->addRow(tr("Keep Backups:"), keepBackupsSpin);
+
+    auto *compressionSpin = new QSpinBox(scrollContent);
+    compressionSpin->setRange(0, 9);
+    compressionSpin->setValue(m_server.backupCompressionLevel);
+    form->addRow(tr("Backup Compression (0-9):"), compressionSpin);
+
+    // ---- Maintenance window ----
+    auto *maintStartSpin = new QSpinBox(scrollContent);
+    maintStartSpin->setRange(-1, 23);
+    maintStartSpin->setSpecialValueText(tr("Disabled"));
+    maintStartSpin->setValue(m_server.maintenanceStartHour);
+    form->addRow(tr("Maintenance Start Hour (-1=off):"), maintStartSpin);
+
+    auto *maintEndSpin = new QSpinBox(scrollContent);
+    maintEndSpin->setRange(-1, 23);
+    maintEndSpin->setSpecialValueText(tr("Disabled"));
+    maintEndSpin->setValue(m_server.maintenanceEndHour);
+    form->addRow(tr("Maintenance End Hour (-1=off):"), maintEndSpin);
+
+    // ---- Restart warning ----
+    auto *restartWarnSpin = new QSpinBox(scrollContent);
+    restartWarnSpin->setRange(0, 120);
+    restartWarnSpin->setSuffix(tr(" min"));
+    restartWarnSpin->setValue(m_server.restartWarningMinutes);
+    form->addRow(tr("Restart Warning Time:"), restartWarnSpin);
+
+    auto *restartWarnMsgEdit = new QLineEdit(m_server.restartWarningMessage, scrollContent);
+    restartWarnMsgEdit->setPlaceholderText(
+        tr("Server will restart in {minutes} minute(s). Please save your progress."));
+    form->addRow(tr("Restart Warning Message:"), restartWarnMsgEdit);
+
+    // ---- Discord ----
+    auto *webhookUrlEdit = new QLineEdit(m_server.discordWebhookUrl, scrollContent);
+    webhookUrlEdit->setPlaceholderText(tr("https://discord.com/api/webhooks/..."));
+    form->addRow(tr("Discord Webhook URL:"), webhookUrlEdit);
+
+    auto *webhookTplEdit = new QLineEdit(m_server.webhookTemplate, scrollContent);
+    webhookTplEdit->setPlaceholderText(tr("{server} {event} {timestamp}"));
+    form->addRow(tr("Webhook Template:"), webhookTplEdit);
+
+    // ---- Console logging ----
+    auto *consoleLogCheck = new QCheckBox(scrollContent);
+    consoleLogCheck->setChecked(m_server.consoleLogging);
+    form->addRow(tr("Console Logging:"), consoleLogCheck);
+
+    // ---- Scheduled RCON ----
+    auto *rconIntervalSpin = new QSpinBox(scrollContent);
+    rconIntervalSpin->setRange(0, 99999);
+    rconIntervalSpin->setSuffix(tr(" min"));
+    rconIntervalSpin->setValue(m_server.rconCommandIntervalMinutes);
+    form->addRow(tr("RCON Command Interval:"), rconIntervalSpin);
+
+    scroll->setWidget(scrollContent);
+    outerLayout->addWidget(scroll);
+
+    // ---- Save button ----
+    auto *saveBtn = new QPushButton(tr("💾  Save Settings"), w);
+    saveBtn->setStyleSheet(QStringLiteral(
+        "QPushButton { font-size:14px; padding:8px 20px; }"));
+    outerLayout->addWidget(saveBtn);
+
+    connect(saveBtn, &QPushButton::clicked, this, [this,
+            nameEdit, appidSpin, dirEdit, exeEdit, argsEdit,
+            rconHostEdit, rconPortSpin, rconPassEdit, backupDirEdit,
+            maxPlayersSpin, autoUpdateCheck, autoStartCheck, favoriteCheck,
+            backupIntervalSpin, restartIntervalSpin, keepBackupsSpin,
+            compressionSpin, maintStartSpin, maintEndSpin,
+            restartWarnSpin, restartWarnMsgEdit,
+            webhookUrlEdit, webhookTplEdit, consoleLogCheck,
+            rconIntervalSpin]() {
+        m_server.name           = nameEdit->text();
+        m_server.appid          = appidSpin->value();
+        m_server.dir            = dirEdit->text();
+        m_server.executable     = exeEdit->text();
+        m_server.launchArgs     = argsEdit->text();
+        m_server.rcon.host      = rconHostEdit->text();
+        m_server.rcon.port      = rconPortSpin->value();
+        m_server.rcon.password  = rconPassEdit->text();
+        m_server.backupFolder   = backupDirEdit->text();
+        m_server.maxPlayers     = maxPlayersSpin->value();
+        m_server.autoUpdate     = autoUpdateCheck->isChecked();
+        m_server.autoStartOnLaunch = autoStartCheck->isChecked();
+        m_server.favorite       = favoriteCheck->isChecked();
+        m_server.backupIntervalMinutes  = backupIntervalSpin->value();
+        m_server.restartIntervalHours   = restartIntervalSpin->value();
+        m_server.keepBackups    = keepBackupsSpin->value();
+        m_server.backupCompressionLevel = compressionSpin->value();
+        m_server.maintenanceStartHour   = maintStartSpin->value();
+        m_server.maintenanceEndHour     = maintEndSpin->value();
+        m_server.restartWarningMinutes  = restartWarnSpin->value();
+        m_server.restartWarningMessage  = restartWarnMsgEdit->text();
+        m_server.discordWebhookUrl = webhookUrlEdit->text();
+        m_server.webhookTemplate   = webhookTplEdit->text();
+        m_server.consoleLogging    = consoleLogCheck->isChecked();
+        m_server.rconCommandIntervalMinutes = rconIntervalSpin->value();
+
+        QStringList errors = m_server.validate();
+        if (!errors.isEmpty()) {
+            QMessageBox::warning(this, tr("Validation Error"),
+                                 errors.join(QStringLiteral("\n")));
+            return;
+        }
+
+        if (m_manager->saveConfig())
+            appendConsole(tr("[SSA] Settings saved successfully."));
+        else
+            QMessageBox::warning(this, tr("Save Failed"),
+                                 tr("Could not save configuration."));
+    });
+
+    tabs->addTab(w, tr("⚙ Settings"));
 }
 
 void ServerTabWidget::buildConfigTab(QTabWidget *tabs)
