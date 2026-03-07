@@ -10,9 +10,25 @@ param(
 $ErrorActionPreference = 'Stop'
 $BuildDir = "build"
 
+# ── 0. Set up logging ────────────────────────────────────────
+$ProjectRoot = Split-Path -Parent $PSScriptRoot
+$LogDir      = Join-Path $ProjectRoot "logs"
+if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir | Out-Null }
+
+$ConfigureLog = Join-Path $LogDir "configure.log"
+$BuildLog     = Join-Path $LogDir "build.log"
+$TestLog      = Join-Path $LogDir "test.log"
+
+# Truncate previous logs
+"" | Set-Content $ConfigureLog
+"" | Set-Content $BuildLog
+"" | Set-Content $TestLog
+
 function Info  { param([string]$msg) Write-Host ">> $msg" -ForegroundColor Cyan }
 function Warn  { param([string]$msg) Write-Host "!! $msg" -ForegroundColor Yellow }
 function Fatal { param([string]$msg) Write-Host "!! $msg" -ForegroundColor Red; exit 1 }
+
+Info "Logs will be written to: $LogDir"
 
 # ── 1. Check for cmake ───────────────────────────────────────
 if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) {
@@ -97,7 +113,7 @@ if ($qt6Path) {
 }
 
 Info "Configuring ($BuildType) …"
-cmake @cmakeArgs
+cmake @cmakeArgs 2>&1 | Tee-Object -FilePath $ConfigureLog -Append
 if ($LASTEXITCODE -ne 0) { Fatal "CMake configuration failed." }
 
 # ── 4. Build ─────────────────────────────────────────────────
@@ -105,7 +121,7 @@ $cpuCount = (Get-CimInstance Win32_Processor).NumberOfLogicalProcessors
 if (-not $cpuCount) { $cpuCount = 2 }
 
 Info "Building with $cpuCount parallel jobs …"
-cmake --build $BuildDir --config $BuildType --parallel $cpuCount
+cmake --build $BuildDir --config $BuildType --parallel $cpuCount 2>&1 | Tee-Object -FilePath $BuildLog -Append
 if ($LASTEXITCODE -ne 0) { Fatal "Build failed." }
 
 # ── 5. Run tests ─────────────────────────────────────────────
@@ -115,9 +131,13 @@ if (-not (Test-Path $testBin)) {
 }
 if (Test-Path $testBin) {
     Info "Running tests …"
-    ctest --test-dir $BuildDir --build-config $BuildType --output-on-failure
+    ctest --test-dir $BuildDir --build-config $BuildType --output-on-failure 2>&1 | Tee-Object -FilePath $TestLog -Append
 } else {
     Warn "Test binary not found — skipping tests."
 }
 
 Info "Build complete!  Binary: $BuildDir\$BuildType\SSA.exe  (or $BuildDir\SSA.exe)"
+Info "Log files:"
+Info "  Configure : $ConfigureLog"
+Info "  Build     : $BuildLog"
+Info "  Test      : $TestLog"
