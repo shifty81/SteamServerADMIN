@@ -2,7 +2,7 @@
 # ──────────────────────────────────────────────────────────────
 # SSA – Steam Server ADMIN  ·  Automated build script (Linux / macOS)
 # ──────────────────────────────────────────────────────────────
-set -euo pipefail
+set -uo pipefail
 
 BUILD_TYPE="${1:-Release}"
 BUILD_DIR="build"
@@ -19,13 +19,37 @@ TEST_LOG="$LOG_DIR/test.log"
 
 info()  { printf '\033[1;34m>> %s\033[0m\n' "$*"; }
 warn()  { printf '\033[1;33m!! %s\033[0m\n' "$*"; }
-err()   { printf '\033[1;31m!! %s\033[0m\n' "$*"; exit 1; }
+err()   { printf '\033[1;31m!! %s\033[0m\n' "$*"; }
+
+# Initialize every log file with a header so they are never empty
+TIMESTAMP="$(date '+%Y-%m-%d %H:%M:%S')"
+for _log in "$CONFIGURE_LOG" "$BUILD_LOG" "$TEST_LOG"; do
+    printf '=== SSA Build — %s — %s ===\n' "$TIMESTAMP" "$BUILD_TYPE" > "$_log"
+done
+
+# Pause before exiting so the terminal window stays visible
+EXIT_CODE=0
+cleanup() {
+    if [ "$EXIT_CODE" -ne 0 ]; then
+        err "Build failed (exit code $EXIT_CODE)."
+    fi
+    # Only pause when running in an interactive terminal (not CI)
+    if [ -t 0 ] && [ -z "${CI:-}" ]; then
+        printf '\n'
+        read -rp "Press Enter to close …"
+    fi
+    exit "$EXIT_CODE"
+}
+trap cleanup EXIT
 
 info "Logs will be written to: $LOG_DIR"
 
 # ── 1. Check for cmake ───────────────────────────────────────
 if ! command -v cmake &>/dev/null; then
-    err "CMake is not installed. Please install CMake 3.22+ and re-run this script."
+    msg="CMake is not installed. Please install CMake 3.22+ and re-run this script."
+    err "$msg"
+    echo "$msg" >> "$CONFIGURE_LOG"
+    EXIT_CODE=1; exit 1
 fi
 
 # ── 2. Install Qt6 if needed ─────────────────────────────────
@@ -43,6 +67,7 @@ install_qt6_linux() {
         sudo pacman -S --noconfirm qt6-base
     else
         err "Unsupported package manager. Please install Qt6 (Core, Widgets, Network) manually."
+        return 1
     fi
 }
 
@@ -55,6 +80,7 @@ install_qt6_macos() {
         export CMAKE_PREFIX_PATH="${QT_PREFIX}${CMAKE_PREFIX_PATH:+;$CMAKE_PREFIX_PATH}"
     else
         err "Homebrew not found. Please install Homebrew (https://brew.sh) or install Qt6 manually."
+        return 1
     fi
 }
 
@@ -83,11 +109,19 @@ if ! check_qt6; then
     case "$(uname -s)" in
         Linux)  install_qt6_linux ;;
         Darwin) install_qt6_macos ;;
-        *)      err "Unsupported OS. Please install Qt6 manually." ;;
+        *)
+            msg="Unsupported OS. Please install Qt6 manually."
+            err "$msg"
+            echo "$msg" >> "$CONFIGURE_LOG"
+            EXIT_CODE=1; exit 1
+            ;;
     esac
     # Re-check
     if ! check_qt6; then
-        err "Qt6 still not found after installation attempt. Please install Qt6 (Core, Widgets, Network) manually."
+        msg="Qt6 still not found after installation attempt. Please install Qt6 (Core, Widgets, Network) manually."
+        err "$msg"
+        echo "$msg" >> "$CONFIGURE_LOG"
+        EXIT_CODE=1; exit 1
     fi
 fi
 
@@ -95,20 +129,30 @@ info "Qt6 found ✓"
 
 # ── 3. Configure ─────────────────────────────────────────────
 info "Configuring ($BUILD_TYPE) …"
-cmake -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
-    ${CMAKE_PREFIX_PATH:+-DCMAKE_PREFIX_PATH="$CMAKE_PREFIX_PATH"} 2>&1 | tee "$CONFIGURE_LOG"
+if ! cmake -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+    ${CMAKE_PREFIX_PATH:+-DCMAKE_PREFIX_PATH="$CMAKE_PREFIX_PATH"} 2>&1 | tee -a "$CONFIGURE_LOG"; then
+    err "CMake configuration failed. See $CONFIGURE_LOG"
+    EXIT_CODE=1; exit 1
+fi
 
 # ── 4. Build ─────────────────────────────────────────────────
 NPROC="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 2)"
 info "Building with $NPROC parallel jobs …"
-cmake --build "$BUILD_DIR" --parallel "$NPROC" 2>&1 | tee "$BUILD_LOG"
+if ! cmake --build "$BUILD_DIR" --parallel "$NPROC" 2>&1 | tee -a "$BUILD_LOG"; then
+    err "Build failed. See $BUILD_LOG"
+    EXIT_CODE=1; exit 1
+fi
 
 # ── 5. Run tests (if test binary was built) ──────────────────
 if [ -f "$BUILD_DIR/SSA_Tests" ]; then
     info "Running tests …"
-    ctest --test-dir "$BUILD_DIR" --output-on-failure 2>&1 | tee "$TEST_LOG"
+    if ! ctest --test-dir "$BUILD_DIR" --output-on-failure 2>&1 | tee -a "$TEST_LOG"; then
+        err "Tests failed. See $TEST_LOG"
+        EXIT_CODE=1; exit 1
+    fi
 else
     warn "Test binary not found — skipping tests."
+    echo "Test binary not found — tests skipped." >> "$TEST_LOG"
 fi
 
 info "Build complete!  Binary: $BUILD_DIR/SSA"
