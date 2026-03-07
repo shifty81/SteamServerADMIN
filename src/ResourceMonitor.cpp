@@ -16,7 +16,6 @@
 
 #ifdef Q_OS_MACOS
 #include <mach/mach.h>
-#include <mach/mach_host.h>
 #endif
 
 // ---------------------------------------------------------------------------
@@ -133,7 +132,8 @@ ResourceUsage ResourceMonitor::readUsage(qint64 pid)
         mach_msg_type_number_t infoCount = MACH_TASK_BASIC_INFO_COUNT;
         mach_task_basic_info_data_t info;
         if (task_info(task, MACH_TASK_BASIC_INFO,
-                      reinterpret_cast<task_info_t>(&info), &infoCount) == KERN_SUCCESS) {
+                      reinterpret_cast<task_info_t>(&info), &infoCount) == KERN_SUCCESS
+            && infoCount == MACH_TASK_BASIC_INFO_COUNT) {
             ru.memoryBytes = static_cast<qint64>(info.resident_size);
         }
         mach_port_deallocate(mach_task_self(), task);

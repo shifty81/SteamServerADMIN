@@ -57,6 +57,7 @@ ServerManager::ServerManager(const QString &configFile, QObject *parent)
     // Check resource thresholds when usage is updated
     connect(m_resourceMonitor, &ResourceMonitor::usageUpdated,
             this, [this](const QMap<QString, ResourceUsage> &usage) {
+        constexpr double kBytesPerMB = 1024.0 * 1024.0;
         for (auto it = usage.constBegin(); it != usage.constEnd(); ++it) {
             const QString &name = it.key();
             const ResourceUsage &ru = it.value();
@@ -70,7 +71,7 @@ ServerManager::ServerManager(const QString &configFile, QObject *parent)
                             .arg(ru.cpuPercent).arg(s.cpuAlertThreshold));
                 }
                 if (s.memAlertThresholdMB > 0) {
-                    double memMB = static_cast<double>(ru.memoryBytes) / (1024.0 * 1024.0);
+                    double memMB = static_cast<double>(ru.memoryBytes) / kBytesPerMB;
                     if (memMB > s.memAlertThresholdMB) {
                         emit resourceAlert(name,
                             QStringLiteral("Memory usage %.1f MB exceeds threshold %.1f MB")
