@@ -86,7 +86,10 @@ install_qt6_macos() {
 install_qt6_msys() {
     if command -v pacman &>/dev/null; then
         info "Installing Qt6 development packages via MSYS2 pacman …"
-        pacman -S --noconfirm "${MINGW_PACKAGE_PREFIX:-mingw-w64-x86_64}"-qt6-base
+        if ! pacman -S --noconfirm "${MINGW_PACKAGE_PREFIX:-mingw-w64-x86_64}"-qt6-base; then
+            err "MSYS2 pacman failed to install Qt6. Please install it manually or use scripts/build.ps1."
+            return 1
+        fi
     else
         err "On Windows, please use scripts/build.ps1 (PowerShell) or install Qt6 manually."
         return 1
@@ -117,9 +120,9 @@ if ! check_qt6; then
     warn "Qt6 not found — attempting automatic installation …"
     _uname="$(uname -s)"
     case "$_uname" in
-        Linux)                  install_qt6_linux ;;
-        Darwin)                 install_qt6_macos ;;
-        MINGW*|MSYS*|CYGWIN*)  install_qt6_msys  ;;
+        Linux)  install_qt6_linux ;;
+        Darwin) install_qt6_macos ;;
+        MINGW*|MSYS*|CYGWIN*) install_qt6_msys ;;
         *)
             msg="Unsupported OS ($_uname). Please install Qt6 manually."
             err "$msg"
