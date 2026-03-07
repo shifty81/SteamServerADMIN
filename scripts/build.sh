@@ -110,31 +110,34 @@ install_qt6_msys() {
         return 0
     }
 
-    # 3) Try winget / chocolatey (available from Git Bash as .exe)
-    if command -v winget.exe &>/dev/null; then
-        info "Attempting to install Qt via winget …"
-        if winget.exe install --id=qt.qt --accept-source-agreements --accept-package-agreements 2>&1; then
-            qt_path="$(find_qt6_windows)" && {
-                export CMAKE_PREFIX_PATH="${qt_path}${CMAKE_PREFIX_PATH:+;$CMAKE_PREFIX_PATH}"
-                return 0
-            }
+    # 3) Try aqtinstall (Python-based Qt installer – the standard CI tool)
+    local pip_cmd=""
+    pip_cmd="$(command -v pip3 2>/dev/null || command -v pip 2>/dev/null)" || true
+    if [ -n "$pip_cmd" ]; then
+        info "Attempting to install Qt via aqtinstall (pip) …"
+        if "$pip_cmd" install aqtinstall 2>&1; then
+            local aqt_cmd=""
+            aqt_cmd="$(command -v aqt 2>/dev/null || command -v aqt.exe 2>/dev/null)" || true
+            if [ -n "$aqt_cmd" ]; then
+                local qt_ver="${SSA_QT_VERSION:-6.7.2}"
+                local qt_arch="${SSA_QT_ARCH:-win64_msvc2019_64}"
+                local qt_install_dir="${QT_BASEDIR:-$HOME/Qt}"
+                info "Installing Qt $qt_ver ($qt_arch) to $qt_install_dir …"
+                if "$aqt_cmd" install-qt windows desktop "$qt_ver" "$qt_arch" \
+                        --outputdir "$qt_install_dir" 2>&1; then
+                    qt_path="$(find_qt6_windows)" && {
+                        export CMAKE_PREFIX_PATH="${qt_path}${CMAKE_PREFIX_PATH:+;$CMAKE_PREFIX_PATH}"
+                        return 0
+                    }
+                fi
+            fi
         fi
-        warn "winget install did not succeed."
-    fi
-
-    if command -v choco.exe &>/dev/null; then
-        info "Attempting to install Qt via Chocolatey …"
-        if choco.exe install qt6-base-dev -y 2>&1; then
-            qt_path="$(find_qt6_windows)" && {
-                export CMAKE_PREFIX_PATH="${qt_path}${CMAKE_PREFIX_PATH:+;$CMAKE_PREFIX_PATH}"
-                return 0
-            }
-        fi
-        warn "Chocolatey install did not succeed."
+        warn "aqtinstall did not succeed."
     fi
 
     err "Qt6 could not be found or installed automatically."
-    err "Please install Qt 6.4+ from https://www.qt.io/download and either:"
+    err "Please install Qt 6.4+ from https://www.qt.io/download or via:"
+    err "  • pip install aqtinstall && aqt install-qt windows desktop 6.7.2 win64_msvc2019_64 --outputdir \$HOME/Qt"
     err "  • Set CMAKE_PREFIX_PATH to the Qt6 directory, or"
     err "  • Use scripts/build.ps1 (PowerShell) which searches additional paths."
     return 1
