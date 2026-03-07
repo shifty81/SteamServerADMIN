@@ -53,12 +53,8 @@ jobs:
         run: cmake -B build -DCMAKE_BUILD_TYPE=Debug 2>&1 | tee logs/configure.log
         shell: bash
 
-      - name: Build application
-        run: cmake --build build --config Debug --target SSA 2>&1 | tee logs/build.log
-        shell: bash
-
-      - name: Build tests
-        run: cmake --build build --config Debug --target SSA_Tests 2>&1 | tee -a logs/build.log
+      - name: Build
+        run: cmake --build build --config Debug 2>&1 | tee logs/build.log
         shell: bash
 
       - name: Run tests
