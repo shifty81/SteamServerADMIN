@@ -80,19 +80,23 @@ function Find-Qt6 {
 }
 
 function Install-Qt6 {
-    # Try winget first, then chocolatey
-    if (Get-Command winget -ErrorAction SilentlyContinue) {
-        Info "Attempting to install Qt via winget …"
-        $output = winget install --id=qt.qt --accept-source-agreements --accept-package-agreements 2>&1
-        if ($LASTEXITCODE -eq 0) { return $true }
-        Warn "winget install did not succeed: $output"
-    }
+    # Try aqtinstall (Python-based Qt installer – the standard CI tool)
+    $pipCmd = Get-Command pip3 -ErrorAction SilentlyContinue
+    if (-not $pipCmd) { $pipCmd = Get-Command pip -ErrorAction SilentlyContinue }
 
-    if (Get-Command choco -ErrorAction SilentlyContinue) {
-        Info "Attempting to install Qt via Chocolatey …"
-        $output = choco install qt6-base-dev -y 2>&1
-        if ($LASTEXITCODE -eq 0) { return $true }
-        Warn "Chocolatey install did not succeed: $output"
+    if ($pipCmd) {
+        Info "Attempting to install Qt via aqtinstall (pip) …"
+        & $pipCmd.Source install aqtinstall 2>&1 | Out-Null
+        $aqtCmd = Get-Command aqt -ErrorAction SilentlyContinue
+        if ($aqtCmd) {
+            $qtVer  = if ($env:SSA_QT_VERSION) { $env:SSA_QT_VERSION } else { "6.7.2" }
+            $qtArch = if ($env:SSA_QT_ARCH)    { $env:SSA_QT_ARCH }    else { "win64_msvc2019_64" }
+            $qtInstallDir = if ($env:QT_BASEDIR) { $env:QT_BASEDIR } else { Join-Path $env:USERPROFILE "Qt" }
+            Info "Installing Qt $qtVer ($qtArch) to $qtInstallDir …"
+            & $aqtCmd.Source install-qt windows desktop $qtVer $qtArch --outputdir $qtInstallDir 2>&1
+            if ($LASTEXITCODE -eq 0) { return $true }
+        }
+        Warn "aqtinstall did not succeed."
     }
 
     return $false
@@ -105,7 +109,7 @@ if (-not $qt6Path) {
     $qt6Path = Find-Qt6
 
     if (-not $qt6Path) {
-        $msg = "Qt6 could not be found or installed automatically. Please install Qt 6.4+ from https://www.qt.io/download"
+        $msg = "Qt6 could not be found or installed automatically. Please install Qt 6.4+ from https://www.qt.io/download or via: pip install aqtinstall && aqt install-qt windows desktop 6.7.2 win64_msvc2019_64 --outputdir %USERPROFILE%\Qt"
         Write-Host ""
         Write-Host "=== $msg ===" -ForegroundColor Yellow
         Write-Host '  Set: $env:CMAKE_PREFIX_PATH = "C:\Qt\6.x.x\msvc20xx_64"' -ForegroundColor Yellow
