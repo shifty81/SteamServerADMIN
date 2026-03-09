@@ -24,12 +24,14 @@ try {
 
 # ── 0. Set up logging ────────────────────────────────────────
 # Resolve project root with fallback for different execution contexts
+# $PSScriptRoot is the script's directory; $MyInvocation.MyCommand.Path includes the filename
+$ProjectRoot = $null
 if ($PSScriptRoot) {
     $ProjectRoot = Split-Path -Parent $PSScriptRoot
 } elseif ($MyInvocation.MyCommand.Path) {
     $ProjectRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 }
-if (-not $ProjectRoot) { $ProjectRoot = (Get-Location).Path }
+if (-not $ProjectRoot -or $ProjectRoot -eq "") { $ProjectRoot = (Get-Location).Path }
 
 $LogDir      = Join-Path $ProjectRoot "logs"
 if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir -Force | Out-Null }
