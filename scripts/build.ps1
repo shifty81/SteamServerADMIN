@@ -91,13 +91,47 @@ function Install-Qt6 {
             Warn "pip install aqtinstall failed: $pipOutput"
             return $false
         }
+        # Find aqt: check PATH, then Python user-scripts dir, then python -m aqt
+        $aqtExe = $null
+        $usePythonModule = $false
         $aqtCmd = Get-Command aqt -ErrorAction SilentlyContinue
         if ($aqtCmd) {
+            $aqtExe = $aqtCmd.Source
+        } else {
+            # aqt not on PATH — look in Python user-scripts directory
+            $pyCmd2 = Get-Command python3 -ErrorAction SilentlyContinue
+            if (-not $pyCmd2) { $pyCmd2 = Get-Command python -ErrorAction SilentlyContinue }
+            if ($pyCmd2) {
+                $userScripts = & $pyCmd2.Source -c "import sysconfig,os;print(sysconfig.get_path('scripts',os.name+'_user'))" 2>$null
+                if ($userScripts) {
+                    $aqtPath = Join-Path $userScripts "aqt.exe"
+                    if (Test-Path $aqtPath) {
+                        $aqtExe = $aqtPath
+                        Info "Found aqt at: $aqtExe"
+                    }
+                }
+                # Last resort: python -m aqt (verify it works first)
+                if (-not $aqtExe) {
+                    & $pyCmd2.Source -m aqt version 2>$null | Out-Null
+                    if ($LASTEXITCODE -eq 0) {
+                        $aqtExe = $pyCmd2.Source
+                        $usePythonModule = $true
+                        Info "Using 'python -m aqt' (aqt not found on PATH)"
+                    }
+                }
+            }
+        }
+
+        if ($aqtExe) {
             $qtVer  = if ($env:SSA_QT_VERSION) { $env:SSA_QT_VERSION } else { "6.7.2" }
             $qtArch = if ($env:SSA_QT_ARCH)    { $env:SSA_QT_ARCH }    else { "win64_msvc2019_64" }
             $qtInstallDir = if ($env:QT_BASEDIR) { $env:QT_BASEDIR } else { Join-Path $env:USERPROFILE "Qt" }
             Info "Installing Qt $qtVer ($qtArch) to $qtInstallDir …"
-            & $aqtCmd.Source install-qt windows desktop $qtVer $qtArch --outputdir $qtInstallDir 2>&1
+            if ($usePythonModule) {
+                & $aqtExe -m aqt install-qt windows desktop $qtVer $qtArch --outputdir $qtInstallDir 2>&1
+            } else {
+                & $aqtExe install-qt windows desktop $qtVer $qtArch --outputdir $qtInstallDir 2>&1
+            }
             if ($LASTEXITCODE -eq 0) { return $true }
         }
         Warn "aqtinstall did not succeed."
