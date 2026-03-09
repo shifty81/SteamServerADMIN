@@ -1,38 +1,43 @@
 #pragma once
 
-#include <QObject>
-#include <QSystemTrayIcon>
-
-class QMenu;
-class QAction;
-class QMainWindow;
+#include <chrono>
+#include <functional>
+#include <mutex>
+#include <string>
+#include <vector>
 
 /**
- * @brief System-tray integration for SSA.
+ * @brief Platform-agnostic notification manager for SSA.
  *
- * Shows a tray icon with a context menu (Show / Quit), and exposes a
- * convenience method to display balloon notifications for important
- * events (server crashes, backup completions, etc.).
+ * Queues notifications so the ImGui UI layer can display them as
+ * toast overlays.  Replaces the former Qt-based system-tray wrapper.
  */
-class TrayManager : public QObject {
-    Q_OBJECT
+class TrayManager {
 public:
-    explicit TrayManager(QMainWindow *mainWindow, QObject *parent = nullptr);
+    struct Notification {
+        std::string title;
+        std::string message;
+        std::chrono::steady_clock::time_point timestamp;
+    };
 
-    /** Show a balloon notification in the system tray. */
-    void notify(const QString &title, const QString &message,
-                QSystemTrayIcon::MessageIcon icon = QSystemTrayIcon::Information,
-                int durationMs = 5000);
+    TrayManager() = default;
 
-    /** Whether the system tray is available on this platform. */
+    /** Enqueue a notification for the ImGui layer to render. */
+    void notify(const std::string &title, const std::string &message);
+
+    /** Notifications are always available (rendered via ImGui toast). */
     bool isAvailable() const;
 
-signals:
-    /** Emitted when the user clicks "Quit" in the tray menu. */
-    void quitRequested();
+    /** True when at least one unread notification is pending. */
+    bool hasNotifications() const;
+
+    /** Return and clear all pending notifications. */
+    std::vector<Notification> consumeNotifications();
+
+    /** Set by the UI layer; invoked when the user requests an app quit. */
+    std::function<void()> onQuitRequested;
 
 private:
-    QSystemTrayIcon *m_trayIcon = nullptr;
-    QMenu           *m_menu     = nullptr;
-    QMainWindow     *m_mainWindow = nullptr;
+    mutable std::mutex m_mutex;
+    std::vector<Notification> m_pending;
 };

@@ -52,12 +52,11 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     connect(m_manager, &ServerManager::logMessage, m_logModule, &LogModule::log);
 
     // ---- System tray ----
-    m_trayManager = new TrayManager(this, this);
-    connect(m_trayManager, &TrayManager::quitRequested, qApp, &QApplication::quit);
+    m_trayManager = std::make_unique<TrayManager>();
+    m_trayManager->onQuitRequested = [](){ qApp->quit(); };
     connect(m_manager, &ServerManager::serverCrashed, this, [this](const QString &name) {
-        m_trayManager->notify(tr("Server Crashed"),
-                              tr("'%1' crashed and is being restarted.").arg(name),
-                              QSystemTrayIcon::Warning);
+        m_trayManager->notify("Server Crashed",
+                              ("'" + name + "' crashed and is being restarted.").toStdString());
     });
 
     // ---- Central widget ----
@@ -422,8 +421,8 @@ void MainWindow::onCloneServer()
     m_scheduler->startScheduler(newName);
 
     m_logModule->log(newName, QStringLiteral("Cloned from '%1'.").arg(source));
-    m_trayManager->notify(tr("Server Cloned"),
-                          tr("'%1' cloned from '%2'.").arg(newName, source));
+    m_trayManager->notify("Server Cloned",
+                          ("'" + newName + "' cloned from '" + source + "'.").toStdString());
 }
 
 // ---------------------------------------------------------------------------
@@ -470,8 +469,8 @@ void MainWindow::onRemoveServer()
     m_dashboard->refresh();
 
     m_logModule->log(target, QStringLiteral("Server removed."));
-    m_trayManager->notify(tr("Server Removed"),
-                          tr("'%1' has been removed.").arg(target));
+    m_trayManager->notify("Server Removed",
+                          ("'" + target + "' has been removed.").toStdString());
 }
 
 // ---------------------------------------------------------------------------
@@ -533,8 +532,8 @@ void MainWindow::onImportServer()
     QMessageBox::information(this, tr("Import Server"),
                              tr("'%1' imported successfully.").arg(imported.name));
     m_logModule->log(imported.name, QStringLiteral("Config imported from ") + path);
-    m_trayManager->notify(tr("Server Imported"),
-                          tr("'%1' imported.").arg(imported.name));
+    m_trayManager->notify("Server Imported",
+                          ("'" + imported.name + "' imported.").toStdString());
 }
 
 // ---------------------------------------------------------------------------

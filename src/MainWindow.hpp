@@ -6,6 +6,7 @@
 #include <QTabWidget>
 #include <QListWidget>
 #include <QLineEdit>
+#include <memory>
 
 class HomeDashboard;
 class ServerTabWidget;
@@ -54,7 +55,7 @@ private:
     ServerManager   *m_manager        = nullptr;
     SchedulerModule *m_scheduler      = nullptr;
     LogModule       *m_logModule      = nullptr;
-    TrayManager     *m_trayManager    = nullptr;
+    std::unique_ptr<TrayManager> m_trayManager;
     QTabWidget      *m_tabs           = nullptr;
     QListWidget     *m_serverList     = nullptr;
     QLineEdit       *m_searchBox      = nullptr;

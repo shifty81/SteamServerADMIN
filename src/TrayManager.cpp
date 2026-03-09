@@ -1,59 +1,29 @@
 #include "TrayManager.hpp"
 
-#include <QMainWindow>
-#include <QMenu>
-#include <QAction>
-#include <QApplication>
-#include <QStyle>
+#include <algorithm>
+#include <utility>
 
-TrayManager::TrayManager(QMainWindow *mainWindow, QObject *parent)
-    : QObject(parent), m_mainWindow(mainWindow)
+void TrayManager::notify(const std::string &title, const std::string &message)
 {
-    if (!QSystemTrayIcon::isSystemTrayAvailable())
-        return;
-
-    m_trayIcon = new QSystemTrayIcon(this);
-    m_trayIcon->setIcon(qApp->style()->standardIcon(QStyle::SP_ComputerIcon));
-    m_trayIcon->setToolTip(QStringLiteral("SSA – Steam Server ADMIN"));
-
-    // Context menu
-    m_menu = new QMenu();
-    QAction *showAction = m_menu->addAction(tr("Show"));
-    m_menu->addSeparator();
-    QAction *quitAction = m_menu->addAction(tr("Quit"));
-
-    m_trayIcon->setContextMenu(m_menu);
-
-    connect(showAction, &QAction::triggered, this, [this]() {
-        if (m_mainWindow) {
-            m_mainWindow->show();
-            m_mainWindow->raise();
-            m_mainWindow->activateWindow();
-        }
-    });
-    connect(quitAction, &QAction::triggered, this, &TrayManager::quitRequested);
-
-    // Double-click on tray icon restores the window
-    connect(m_trayIcon, &QSystemTrayIcon::activated, this,
-            [this](QSystemTrayIcon::ActivationReason reason) {
-                if (reason == QSystemTrayIcon::DoubleClick && m_mainWindow) {
-                    m_mainWindow->show();
-                    m_mainWindow->raise();
-                    m_mainWindow->activateWindow();
-                }
-            });
-
-    m_trayIcon->show();
-}
-
-void TrayManager::notify(const QString &title, const QString &message,
-                         QSystemTrayIcon::MessageIcon icon, int durationMs)
-{
-    if (m_trayIcon)
-        m_trayIcon->showMessage(title, message, icon, durationMs);
+    std::lock_guard<std::mutex> lock(m_mutex);
+    m_pending.push_back({title, message, std::chrono::steady_clock::now()});
 }
 
 bool TrayManager::isAvailable() const
 {
-    return m_trayIcon != nullptr;
+    return true;
+}
+
+bool TrayManager::hasNotifications() const
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    return !m_pending.empty();
+}
+
+std::vector<TrayManager::Notification> TrayManager::consumeNotifications()
+{
+    std::lock_guard<std::mutex> lock(m_mutex);
+    std::vector<Notification> result;
+    result.swap(m_pending);
+    return result;
 }
