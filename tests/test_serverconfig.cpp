@@ -231,6 +231,33 @@ private slots:
     void testEnvironmentVariablesPersistence();
     void testEnvironmentVariablesExportImport();
     void testEnvironmentVariablesMultiple();
+
+    // ---- Batch operations tests ----
+    void testStartAllServers();
+    void testStopAllServers();
+    void testRestartAllServers();
+    void testStartGroup();
+    void testStopGroup();
+    void testRestartGroup();
+    void testServerGroupsList();
+    void testServerGroupsEmpty();
+    void testRunningServerCount();
+
+    // ---- Auto-update check interval tests ----
+    void testAutoUpdateCheckIntervalDefault();
+    void testAutoUpdateCheckIntervalPersistence();
+    void testAutoUpdateCheckIntervalValidation();
+    void testAutoUpdateCheckIntervalExportImport();
+
+    // ---- Server statistics tests ----
+    void testTotalUptimeDefault();
+    void testTotalUptimePersistence();
+    void testTotalCrashesDefault();
+    void testTotalCrashesPersistence();
+    void testLastCrashTimeDefault();
+    void testLastCrashTimePersistence();
+    void testStatsExportImport();
+    void testStatsValidation();
 };
 
 void TestServerConfig::testSaveAndLoad()
@@ -3001,6 +3028,425 @@ void TestServerConfig::testEnvironmentVariablesMultiple()
     QCOMPARE(mgr2.servers().size(), 2);
     QCOMPARE(mgr2.servers().at(0).environmentVariables.size(), 1);
     QCOMPARE(mgr2.servers().at(1).environmentVariables.size(), 2);
+}
+
+// ---------------------------------------------------------------------------
+// Batch operations tests
+// ---------------------------------------------------------------------------
+
+void TestServerConfig::testStartAllServers()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+
+    ServerManager mgr(configPath);
+    ServerConfig s1;
+    s1.name = QStringLiteral("Batch1");
+    s1.appid = 1;
+    s1.dir = QStringLiteral("/srv/b1");
+    s1.startupPriority = 2;
+
+    ServerConfig s2;
+    s2.name = QStringLiteral("Batch2");
+    s2.appid = 2;
+    s2.dir = QStringLiteral("/srv/b2");
+    s2.startupPriority = 1;
+
+    mgr.servers() << s1 << s2;
+
+    // startAllServers should not crash even with non-existent executables
+    mgr.startAllServers();
+    // Servers won't actually start (no executables), so running count = 0
+    QCOMPARE(mgr.runningServerCount(), 0);
+}
+
+void TestServerConfig::testStopAllServers()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+
+    ServerManager mgr(configPath);
+    ServerConfig s1;
+    s1.name = QStringLiteral("StopAll1");
+    s1.appid = 1;
+    s1.dir = QStringLiteral("/srv/sa1");
+    mgr.servers() << s1;
+
+    // stopAllServers on non-running servers should not crash
+    mgr.stopAllServers();
+    QCOMPARE(mgr.runningServerCount(), 0);
+}
+
+void TestServerConfig::testRestartAllServers()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+
+    ServerManager mgr(configPath);
+    ServerConfig s1;
+    s1.name = QStringLiteral("RestartAll1");
+    s1.appid = 1;
+    s1.dir = QStringLiteral("/srv/ra1");
+    mgr.servers() << s1;
+
+    // restartAllServers on non-running servers should not crash
+    mgr.restartAllServers();
+    QCOMPARE(mgr.runningServerCount(), 0);
+}
+
+void TestServerConfig::testStartGroup()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+
+    ServerManager mgr(configPath);
+    ServerConfig s1;
+    s1.name = QStringLiteral("G1");
+    s1.appid = 1;
+    s1.dir = QStringLiteral("/srv/g1");
+    s1.group = QStringLiteral("Production");
+
+    ServerConfig s2;
+    s2.name = QStringLiteral("G2");
+    s2.appid = 2;
+    s2.dir = QStringLiteral("/srv/g2");
+    s2.group = QStringLiteral("Testing");
+
+    mgr.servers() << s1 << s2;
+
+    // startGroup should only attempt to start servers in the specified group
+    mgr.startGroup(QStringLiteral("Production"));
+    QCOMPARE(mgr.runningServerCount(), 0); // No executables, but shouldn't crash
+}
+
+void TestServerConfig::testStopGroup()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+
+    ServerManager mgr(configPath);
+    ServerConfig s1;
+    s1.name = QStringLiteral("SG1");
+    s1.appid = 1;
+    s1.dir = QStringLiteral("/srv/sg1");
+    s1.group = QStringLiteral("Production");
+    mgr.servers() << s1;
+
+    mgr.stopGroup(QStringLiteral("Production"));
+    QCOMPARE(mgr.runningServerCount(), 0);
+}
+
+void TestServerConfig::testRestartGroup()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+
+    ServerManager mgr(configPath);
+    ServerConfig s1;
+    s1.name = QStringLiteral("RG1");
+    s1.appid = 1;
+    s1.dir = QStringLiteral("/srv/rg1");
+    s1.group = QStringLiteral("Production");
+    mgr.servers() << s1;
+
+    mgr.restartGroup(QStringLiteral("Production"));
+    QCOMPARE(mgr.runningServerCount(), 0);
+}
+
+void TestServerConfig::testServerGroupsList()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+
+    ServerManager mgr(configPath);
+    ServerConfig s1;
+    s1.name = QStringLiteral("GL1");
+    s1.appid = 1;
+    s1.dir = QStringLiteral("/srv/gl1");
+    s1.group = QStringLiteral("Production");
+
+    ServerConfig s2;
+    s2.name = QStringLiteral("GL2");
+    s2.appid = 2;
+    s2.dir = QStringLiteral("/srv/gl2");
+    s2.group = QStringLiteral("Testing");
+
+    ServerConfig s3;
+    s3.name = QStringLiteral("GL3");
+    s3.appid = 3;
+    s3.dir = QStringLiteral("/srv/gl3");
+    s3.group = QStringLiteral("Production");  // duplicate group
+
+    ServerConfig s4;
+    s4.name = QStringLiteral("GL4");
+    s4.appid = 4;
+    s4.dir = QStringLiteral("/srv/gl4");
+    // no group set
+
+    mgr.servers() << s1 << s2 << s3 << s4;
+
+    QStringList groups = mgr.serverGroups();
+    QCOMPARE(groups.size(), 2);
+    QVERIFY(groups.contains(QStringLiteral("Production")));
+    QVERIFY(groups.contains(QStringLiteral("Testing")));
+}
+
+void TestServerConfig::testServerGroupsEmpty()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+
+    ServerManager mgr(configPath);
+    QVERIFY(mgr.serverGroups().isEmpty());
+
+    // Servers without groups
+    ServerConfig s1;
+    s1.name = QStringLiteral("NoGroup");
+    s1.appid = 1;
+    s1.dir = QStringLiteral("/srv/ng");
+    mgr.servers() << s1;
+    QVERIFY(mgr.serverGroups().isEmpty());
+}
+
+void TestServerConfig::testRunningServerCount()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+
+    ServerManager mgr(configPath);
+    QCOMPARE(mgr.runningServerCount(), 0);
+
+    ServerConfig s1;
+    s1.name = QStringLiteral("RC1");
+    s1.appid = 1;
+    s1.dir = QStringLiteral("/srv/rc1");
+    mgr.servers() << s1;
+    QCOMPARE(mgr.runningServerCount(), 0);
+}
+
+// ---------------------------------------------------------------------------
+// Auto-update check interval tests
+// ---------------------------------------------------------------------------
+
+void TestServerConfig::testAutoUpdateCheckIntervalDefault()
+{
+    ServerConfig s;
+    QCOMPARE(s.autoUpdateCheckIntervalMinutes, 0);
+}
+
+void TestServerConfig::testAutoUpdateCheckIntervalPersistence()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+
+    ServerManager mgr(configPath);
+    ServerConfig s;
+    s.name = QStringLiteral("UpdateCheck");
+    s.appid = 1;
+    s.dir = QStringLiteral("/srv/uc");
+    s.autoUpdateCheckIntervalMinutes = 60;
+    mgr.servers() << s;
+    QVERIFY(mgr.saveConfig());
+
+    ServerManager mgr2(configPath);
+    QVERIFY(mgr2.loadConfig());
+    QCOMPARE(mgr2.servers().at(0).autoUpdateCheckIntervalMinutes, 60);
+}
+
+void TestServerConfig::testAutoUpdateCheckIntervalValidation()
+{
+    ServerConfig s;
+    s.name = QStringLiteral("UCValid");
+    s.appid = 1;
+    s.dir = QStringLiteral("/srv/ucv");
+
+    s.autoUpdateCheckIntervalMinutes = 0;
+    QVERIFY(s.validate().isEmpty());
+
+    s.autoUpdateCheckIntervalMinutes = 120;
+    QVERIFY(s.validate().isEmpty());
+
+    s.autoUpdateCheckIntervalMinutes = -1;
+    QStringList errors = s.validate();
+    QVERIFY(!errors.isEmpty());
+    bool found = false;
+    for (const QString &e : errors) {
+        if (e.contains(QStringLiteral("Auto-update check interval")))
+            found = true;
+    }
+    QVERIFY(found);
+}
+
+void TestServerConfig::testAutoUpdateCheckIntervalExportImport()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    QString exportPath = tmp.filePath(QStringLiteral("export.json"));
+
+    ServerManager mgr(configPath);
+    ServerConfig s;
+    s.name = QStringLiteral("UCExp");
+    s.appid = 1;
+    s.dir = QStringLiteral("/srv/ucexp");
+    s.autoUpdateCheckIntervalMinutes = 45;
+    mgr.servers() << s;
+    QVERIFY(mgr.exportServerConfig(QStringLiteral("UCExp"), exportPath));
+
+    ServerManager mgr2(tmp.filePath(QStringLiteral("servers2.json")));
+    QVERIFY(mgr2.importServerConfig(exportPath).isEmpty());
+    QCOMPARE(mgr2.servers().at(0).autoUpdateCheckIntervalMinutes, 45);
+}
+
+// ---------------------------------------------------------------------------
+// Server statistics tests
+// ---------------------------------------------------------------------------
+
+void TestServerConfig::testTotalUptimeDefault()
+{
+    ServerConfig s;
+    QCOMPARE(s.totalUptimeSeconds, 0);
+}
+
+void TestServerConfig::testTotalUptimePersistence()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+
+    ServerManager mgr(configPath);
+    ServerConfig s;
+    s.name = QStringLiteral("UptimeTest");
+    s.appid = 1;
+    s.dir = QStringLiteral("/srv/ut");
+    s.totalUptimeSeconds = 86400;  // 1 day
+    mgr.servers() << s;
+    QVERIFY(mgr.saveConfig());
+
+    ServerManager mgr2(configPath);
+    QVERIFY(mgr2.loadConfig());
+    QCOMPARE(mgr2.servers().at(0).totalUptimeSeconds, 86400);
+}
+
+void TestServerConfig::testTotalCrashesDefault()
+{
+    ServerConfig s;
+    QCOMPARE(s.totalCrashes, 0);
+}
+
+void TestServerConfig::testTotalCrashesPersistence()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+
+    ServerManager mgr(configPath);
+    ServerConfig s;
+    s.name = QStringLiteral("CrashTest");
+    s.appid = 1;
+    s.dir = QStringLiteral("/srv/ct");
+    s.totalCrashes = 5;
+    mgr.servers() << s;
+    QVERIFY(mgr.saveConfig());
+
+    ServerManager mgr2(configPath);
+    QVERIFY(mgr2.loadConfig());
+    QCOMPARE(mgr2.servers().at(0).totalCrashes, 5);
+}
+
+void TestServerConfig::testLastCrashTimeDefault()
+{
+    ServerConfig s;
+    QVERIFY(s.lastCrashTime.isEmpty());
+}
+
+void TestServerConfig::testLastCrashTimePersistence()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+
+    ServerManager mgr(configPath);
+    ServerConfig s;
+    s.name = QStringLiteral("CrashTimeTest");
+    s.appid = 1;
+    s.dir = QStringLiteral("/srv/ctt");
+    s.lastCrashTime = QStringLiteral("2026-01-15T10:30:00");
+    mgr.servers() << s;
+    QVERIFY(mgr.saveConfig());
+
+    ServerManager mgr2(configPath);
+    QVERIFY(mgr2.loadConfig());
+    QCOMPARE(mgr2.servers().at(0).lastCrashTime, QStringLiteral("2026-01-15T10:30:00"));
+}
+
+void TestServerConfig::testStatsExportImport()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    QString exportPath = tmp.filePath(QStringLiteral("export.json"));
+
+    ServerManager mgr(configPath);
+    ServerConfig s;
+    s.name = QStringLiteral("StatsExp");
+    s.appid = 1;
+    s.dir = QStringLiteral("/srv/statsexp");
+    s.totalUptimeSeconds = 172800;  // 2 days
+    s.totalCrashes = 3;
+    s.lastCrashTime = QStringLiteral("2026-02-20T14:00:00");
+    mgr.servers() << s;
+    QVERIFY(mgr.exportServerConfig(QStringLiteral("StatsExp"), exportPath));
+
+    ServerManager mgr2(tmp.filePath(QStringLiteral("servers2.json")));
+    QVERIFY(mgr2.importServerConfig(exportPath).isEmpty());
+    QCOMPARE(mgr2.servers().at(0).totalUptimeSeconds, 172800);
+    QCOMPARE(mgr2.servers().at(0).totalCrashes, 3);
+    QCOMPARE(mgr2.servers().at(0).lastCrashTime, QStringLiteral("2026-02-20T14:00:00"));
+}
+
+void TestServerConfig::testStatsValidation()
+{
+    ServerConfig s;
+    s.name = QStringLiteral("StatsValid");
+    s.appid = 1;
+    s.dir = QStringLiteral("/srv/sv");
+
+    // Valid defaults
+    QVERIFY(s.validate().isEmpty());
+
+    // Negative totalUptimeSeconds should fail
+    s.totalUptimeSeconds = -1;
+    QStringList errors = s.validate();
+    QVERIFY(!errors.isEmpty());
+    bool found = false;
+    for (const QString &e : errors) {
+        if (e.contains(QStringLiteral("Total uptime")))
+            found = true;
+    }
+    QVERIFY(found);
+    s.totalUptimeSeconds = 0;
+
+    // Negative totalCrashes should fail
+    s.totalCrashes = -1;
+    errors = s.validate();
+    QVERIFY(!errors.isEmpty());
+    found = false;
+    for (const QString &e : errors) {
+        if (e.contains(QStringLiteral("Total crashes")))
+            found = true;
+    }
+    QVERIFY(found);
 }
 
 #include "test_serverconfig.moc"

@@ -605,6 +605,91 @@ void ServerManager::autoStartServers()
 }
 
 // ---------------------------------------------------------------------------
+// Batch server operations
+// ---------------------------------------------------------------------------
+
+void ServerManager::startAllServers()
+{
+    // Respect startup priority ordering
+    QList<int> indices;
+    for (int i = 0; i < m_servers.size(); ++i)
+        indices << i;
+    std::sort(indices.begin(), indices.end(), [this](int a, int b) {
+        return m_servers[a].startupPriority < m_servers[b].startupPriority;
+    });
+    for (int idx : std::as_const(indices))
+        startServer(m_servers[idx]);
+}
+
+void ServerManager::stopAllServers()
+{
+    for (ServerConfig &s : m_servers) {
+        if (isServerRunning(s))
+            stopServer(s);
+    }
+}
+
+void ServerManager::restartAllServers()
+{
+    for (ServerConfig &s : m_servers) {
+        if (isServerRunning(s))
+            restartServer(s);
+    }
+}
+
+void ServerManager::startGroup(const QString &group)
+{
+    QList<int> indices;
+    for (int i = 0; i < m_servers.size(); ++i) {
+        if (m_servers[i].group == group)
+            indices << i;
+    }
+    std::sort(indices.begin(), indices.end(), [this](int a, int b) {
+        return m_servers[a].startupPriority < m_servers[b].startupPriority;
+    });
+    for (int idx : std::as_const(indices))
+        startServer(m_servers[idx]);
+}
+
+void ServerManager::stopGroup(const QString &group)
+{
+    for (ServerConfig &s : m_servers) {
+        if (s.group == group && isServerRunning(s))
+            stopServer(s);
+    }
+}
+
+void ServerManager::restartGroup(const QString &group)
+{
+    for (ServerConfig &s : m_servers) {
+        if (s.group == group && isServerRunning(s))
+            restartServer(s);
+    }
+}
+
+QStringList ServerManager::serverGroups() const
+{
+    QSet<QString> groups;
+    for (const ServerConfig &s : m_servers) {
+        if (!s.group.trimmed().isEmpty())
+            groups.insert(s.group);
+    }
+    QStringList result(groups.begin(), groups.end());
+    result.sort(Qt::CaseInsensitive);
+    return result;
+}
+
+int ServerManager::runningServerCount() const
+{
+    int count = 0;
+    for (const ServerConfig &s : m_servers) {
+        if (isServerRunning(s))
+            ++count;
+    }
+    return count;
+}
+
+// ---------------------------------------------------------------------------
 // Server lifecycle
 // ---------------------------------------------------------------------------
 

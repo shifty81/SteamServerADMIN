@@ -71,6 +71,24 @@ public:
 
     void autoStartServers();
 
+    // ---- Batch server operations ----
+    /** Start all servers (respecting startup priority). */
+    void startAllServers();
+    /** Stop all currently running servers. */
+    void stopAllServers();
+    /** Restart all currently running servers. */
+    void restartAllServers();
+    /** Start all servers belonging to the given group. */
+    void startGroup(const QString &group);
+    /** Stop all running servers in the given group. */
+    void stopGroup(const QString &group);
+    /** Restart all running servers in the given group. */
+    void restartGroup(const QString &group);
+    /** Return the list of unique, non-empty group names across all servers. */
+    QStringList serverGroups() const;
+    /** Return the number of currently running servers. */
+    int runningServerCount() const;
+
     // ---- SteamCMD ----
     void deployServer(ServerConfig &server);
     bool updateMods(ServerConfig &server);

@@ -43,6 +43,7 @@ private:
         QLabel *uptimeLabel    = nullptr;
         QLabel *updateBadge    = nullptr;  // pending game update indicator
         QLabel *modUpdateBadge = nullptr;  // pending mod update indicator
+        QLabel *statsLabel     = nullptr;  // total uptime / crash stats
         QWidget *card          = nullptr;  // the card widget for context menu
     };
     QList<ServerBadge> m_badges;
