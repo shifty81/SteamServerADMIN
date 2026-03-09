@@ -66,6 +66,9 @@ A cross-platform Qt6 desktop application for managing SteamCMD-based game server
 | **Auto-backup before restart** | Optionally take a full snapshot before every scheduled restart (`backupBeforeRestart`), providing a safe restore point |
 | **Graceful shutdown timeout** | Configurable `gracefulShutdownSeconds` per server controls how long to wait after sending a terminate signal before force-killing the process |
 | **Custom environment variables** | Pass custom key=value environment variables to each server process on launch via `environmentVariables` map in the server config |
+| **Batch start / stop / restart** | Start, stop, or restart all servers at once, or limit to a specific group; startup priority ordering is respected |
+| **Auto-update checking** | Periodic SteamCMD update checks per server (`autoUpdateCheckIntervalMinutes`); pending update badges shown on dashboard |
+| **Server statistics** | Track cumulative uptime, total crash count, and last crash time across sessions; stats displayed on dashboard cards and settings tab |
 
 ---
 
@@ -190,7 +193,11 @@ See `servers.json` in the repository root for an example configuration.
     "startupPriority": 1,
     "backupBeforeRestart": true,
     "gracefulShutdownSeconds": 15,
-    "environmentVariables": {}
+    "environmentVariables": {},
+    "autoUpdateCheckIntervalMinutes": 60,
+    "totalUptimeSeconds": 0,
+    "totalCrashes": 0,
+    "lastCrashTime": ""
   }
 ]
 ```

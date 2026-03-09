@@ -150,6 +150,14 @@ bool ServerManager::loadConfig()
         for (auto eIt = envVars.begin(); eIt != envVars.end(); ++eIt)
             s.environmentVariables[eIt.key()] = eIt.value().toString();
 
+        // Auto-update check interval
+        s.autoUpdateCheckIntervalMinutes = obj[QStringLiteral("autoUpdateCheckIntervalMinutes")].toInt(0);
+
+        // Server statistics
+        s.totalUptimeSeconds = static_cast<qint64>(obj[QStringLiteral("totalUptimeSeconds")].toDouble(0));
+        s.totalCrashes       = obj[QStringLiteral("totalCrashes")].toInt(0);
+        s.lastCrashTime      = obj[QStringLiteral("lastCrashTime")].toString();
+
         for (const QJsonValue &v : obj[QStringLiteral("scheduledRconCommands")].toArray())
             s.scheduledRconCommands << v.toString();
 
@@ -254,6 +262,14 @@ bool ServerManager::saveConfig() const
             envVarsObj[eIt.key()] = eIt.value();
         obj[QStringLiteral("environmentVariables")] = envVarsObj;
 
+        // Auto-update check interval
+        obj[QStringLiteral("autoUpdateCheckIntervalMinutes")] = s.autoUpdateCheckIntervalMinutes;
+
+        // Server statistics
+        obj[QStringLiteral("totalUptimeSeconds")] = static_cast<double>(s.totalUptimeSeconds);
+        obj[QStringLiteral("totalCrashes")]       = s.totalCrashes;
+        obj[QStringLiteral("lastCrashTime")]      = s.lastCrashTime;
+
         QJsonObject rcon;
         rcon[QStringLiteral("host")]     = s.rcon.host;
         rcon[QStringLiteral("port")]     = s.rcon.port;
@@ -304,6 +320,91 @@ void ServerManager::autoStartServers()
     });
     for (int idx : std::as_const(indices))
         startServer(m_servers[idx]);
+}
+
+// ---------------------------------------------------------------------------
+// Batch server operations
+// ---------------------------------------------------------------------------
+
+void ServerManager::startAllServers()
+{
+    // Respect startup priority ordering
+    QList<int> indices;
+    for (int i = 0; i < m_servers.size(); ++i)
+        indices << i;
+    std::sort(indices.begin(), indices.end(), [this](int a, int b) {
+        return m_servers[a].startupPriority < m_servers[b].startupPriority;
+    });
+    for (int idx : std::as_const(indices))
+        startServer(m_servers[idx]);
+}
+
+void ServerManager::stopAllServers()
+{
+    for (ServerConfig &s : m_servers) {
+        if (isServerRunning(s))
+            stopServer(s);
+    }
+}
+
+void ServerManager::restartAllServers()
+{
+    for (ServerConfig &s : m_servers) {
+        if (isServerRunning(s))
+            restartServer(s);
+    }
+}
+
+void ServerManager::startGroup(const QString &group)
+{
+    QList<int> indices;
+    for (int i = 0; i < m_servers.size(); ++i) {
+        if (m_servers[i].group == group)
+            indices << i;
+    }
+    std::sort(indices.begin(), indices.end(), [this](int a, int b) {
+        return m_servers[a].startupPriority < m_servers[b].startupPriority;
+    });
+    for (int idx : std::as_const(indices))
+        startServer(m_servers[idx]);
+}
+
+void ServerManager::stopGroup(const QString &group)
+{
+    for (ServerConfig &s : m_servers) {
+        if (s.group == group && isServerRunning(s))
+            stopServer(s);
+    }
+}
+
+void ServerManager::restartGroup(const QString &group)
+{
+    for (ServerConfig &s : m_servers) {
+        if (s.group == group && isServerRunning(s))
+            restartServer(s);
+    }
+}
+
+QStringList ServerManager::serverGroups() const
+{
+    QSet<QString> groups;
+    for (const ServerConfig &s : m_servers) {
+        if (!s.group.trimmed().isEmpty())
+            groups.insert(s.group);
+    }
+    QStringList result(groups.begin(), groups.end());
+    result.sort(Qt::CaseInsensitive);
+    return result;
+}
+
+int ServerManager::runningServerCount() const
+{
+    int count = 0;
+    for (const ServerConfig &s : m_servers) {
+        if (isServerRunning(s))
+            ++count;
+    }
+    return count;
 }
 
 // ---------------------------------------------------------------------------
@@ -407,6 +508,13 @@ void ServerManager::stopServer(ServerConfig &server)
             proc->kill();
     }
     m_processes.remove(server.name);
+    // Flush accumulated uptime before removing start time
+    auto stIt = m_startTimes.constFind(server.name);
+    if (stIt != m_startTimes.constEnd()) {
+        qint64 elapsed = stIt.value().secsTo(QDateTime::currentDateTime());
+        if (elapsed > 0)
+            server.totalUptimeSeconds += elapsed;
+    }
     m_startTimes.remove(server.name);
     m_crashCounts.remove(server.name);
     m_resourceMonitor->untrackProcess(server.name);
@@ -450,12 +558,33 @@ void ServerManager::onProcessFinished(const QString &serverName, int exitCode,
         proc->deleteLater();
     }
     m_crashConns.remove(serverName);
+
+    // Flush accumulated uptime into the config before removing the start time
+    auto stIt = m_startTimes.constFind(serverName);
+    if (stIt != m_startTimes.constEnd()) {
+        qint64 elapsed = stIt.value().secsTo(QDateTime::currentDateTime());
+        for (ServerConfig &s : m_servers) {
+            if (s.name == serverName && elapsed > 0) {
+                s.totalUptimeSeconds += elapsed;
+                break;
+            }
+        }
+    }
     m_startTimes.remove(serverName);
     m_resourceMonitor->untrackProcess(serverName);
 
     if (exitStatus == QProcess::CrashExit) {
         int crashes = m_crashCounts.value(serverName, 0) + 1;
         m_crashCounts[serverName] = crashes;
+
+        // Update persistent crash statistics
+        for (ServerConfig &s : m_servers) {
+            if (s.name == serverName) {
+                s.totalCrashes += 1;
+                s.lastCrashTime = QDateTime::currentDateTime().toString(Qt::ISODate);
+                break;
+            }
+        }
 
         emit serverCrashed(serverName);
 
@@ -761,6 +890,14 @@ bool ServerManager::exportServerConfig(const QString &serverName,
         envVarsObj[eIt.key()] = eIt.value();
     obj[QStringLiteral("environmentVariables")] = envVarsObj;
 
+    // Auto-update check interval
+    obj[QStringLiteral("autoUpdateCheckIntervalMinutes")] = s.autoUpdateCheckIntervalMinutes;
+
+    // Server statistics
+    obj[QStringLiteral("totalUptimeSeconds")] = static_cast<double>(s.totalUptimeSeconds);
+    obj[QStringLiteral("totalCrashes")]       = s.totalCrashes;
+    obj[QStringLiteral("lastCrashTime")]      = s.lastCrashTime;
+
     QJsonObject rcon;
     rcon[QStringLiteral("host")]     = s.rcon.host;
     rcon[QStringLiteral("port")]     = s.rcon.port;
@@ -846,6 +983,14 @@ QString ServerManager::importServerConfig(const QString &filePath)
     QJsonObject envVars = obj[QStringLiteral("environmentVariables")].toObject();
     for (auto eIt = envVars.begin(); eIt != envVars.end(); ++eIt)
         s.environmentVariables[eIt.key()] = eIt.value().toString();
+
+    // Auto-update check interval
+    s.autoUpdateCheckIntervalMinutes = obj[QStringLiteral("autoUpdateCheckIntervalMinutes")].toInt(0);
+
+    // Server statistics
+    s.totalUptimeSeconds = static_cast<qint64>(obj[QStringLiteral("totalUptimeSeconds")].toDouble(0));
+    s.totalCrashes       = obj[QStringLiteral("totalCrashes")].toInt(0);
+    s.lastCrashTime      = obj[QStringLiteral("lastCrashTime")].toString();
 
     QJsonObject rcon = obj[QStringLiteral("rcon")].toObject();
     s.rcon.host     = rcon[QStringLiteral("host")].toString(QStringLiteral("127.0.0.1"));
@@ -956,3 +1101,69 @@ void ServerManager::sendRestartWarning(ServerConfig &server, int minutesRemainin
 
 ResourceMonitor *ServerManager::resourceMonitor() { return m_resourceMonitor; }
 EventHookManager *ServerManager::eventHookManager() { return m_eventHookManager; }
+
+// ---------------------------------------------------------------------------
+// Server statistics – flush accumulated uptime into config
+// ---------------------------------------------------------------------------
+
+void ServerManager::flushUptimeStats()
+{
+    for (ServerConfig &s : m_servers) {
+        auto it = m_startTimes.constFind(s.name);
+        if (it == m_startTimes.constEnd())
+            continue;
+        qint64 elapsed = it.value().secsTo(QDateTime::currentDateTime());
+        if (elapsed > 0)
+            s.totalUptimeSeconds += elapsed;
+        // Reset the start time to "now" so we don't double-count
+        m_startTimes[s.name] = QDateTime::currentDateTime();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Auto-update check
+// ---------------------------------------------------------------------------
+
+bool ServerManager::checkForUpdate(const ServerConfig &server)
+{
+    // Run SteamCMD in a quick info-only mode to check for available updates.
+    // +app_info_update 1  → "1" forces a refresh of the cached app metadata
+    //                       from the Steam CDN so that subsequent queries
+    //                       reflect the latest published build IDs.
+    // +app_info_print     → dumps the app's metadata; we scan the output for
+    //                       keywords that indicate a newer version is available.
+    //
+    // Limitations: SteamCMD does not provide a machine-readable "update available"
+    // flag.  The heuristic below looks for known telltale strings that appear when
+    // the installed build differs from the latest.  This may produce false
+    // positives/negatives if Valve changes the SteamCMD output format.
+    QProcess proc;
+    proc.setProgram(m_steamCmdPath);
+    proc.setArguments({
+        QStringLiteral("+login"),    QStringLiteral("anonymous"),
+        QStringLiteral("+app_info_update"), QStringLiteral("1"),  // 1 = force cache refresh
+        QStringLiteral("+app_info_print"),  QString::number(server.appid),
+        QStringLiteral("+quit")
+    });
+    proc.setProcessChannelMode(QProcess::MergedChannels);
+    proc.start();
+    if (!proc.waitForFinished(30000)) {
+        proc.kill();
+        return false;
+    }
+
+    QString output = QString::fromLocal8Bit(proc.readAll());
+    return output.contains(QStringLiteral("update required"), Qt::CaseInsensitive)
+        || output.contains(QStringLiteral("needs update"), Qt::CaseInsensitive);
+}
+
+void ServerManager::checkAllForUpdates()
+{
+    for (const ServerConfig &s : std::as_const(m_servers)) {
+        bool pending = checkForUpdate(s);
+        setPendingUpdate(s.name, pending);
+        if (pending) {
+            emit logMessage(s.name, QStringLiteral("Update available for AppID %1.").arg(s.appid));
+        }
+    }
+}

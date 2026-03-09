@@ -92,6 +92,9 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     auto *syncModsBtn = new QPushButton(tr("⟳  Sync Mods (All)"), sidebar);
     auto *syncCfgBtn  = new QPushButton(tr("⟳  Sync Configs (All)"), sidebar);
     auto *broadcastBtn= new QPushButton(tr("📢  Broadcast Command"), sidebar);
+    auto *startAllBtn = new QPushButton(tr("▶  Start All"), sidebar);
+    auto *stopAllBtn  = new QPushButton(tr("⏹  Stop All"), sidebar);
+    auto *restartAllBtn=new QPushButton(tr("🔄  Restart All"), sidebar);
     sideLayout->addWidget(addBtn);
     sideLayout->addWidget(cloneBtn);
     sideLayout->addWidget(removeBtn);
@@ -100,6 +103,9 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     sideLayout->addWidget(syncModsBtn);
     sideLayout->addWidget(syncCfgBtn);
     sideLayout->addWidget(broadcastBtn);
+    sideLayout->addWidget(startAllBtn);
+    sideLayout->addWidget(stopAllBtn);
+    sideLayout->addWidget(restartAllBtn);
 
     mainLayout->addWidget(sidebar);
 
@@ -136,6 +142,25 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
     connect(syncModsBtn,  &QPushButton::clicked, this, &MainWindow::onSyncMods);
     connect(syncCfgBtn,   &QPushButton::clicked, this, &MainWindow::onSyncConfigs);
     connect(broadcastBtn, &QPushButton::clicked, this, &MainWindow::onBroadcastCommand);
+    connect(startAllBtn,  &QPushButton::clicked, this, [this]() {
+        m_manager->startAllServers();
+    });
+    connect(stopAllBtn,   &QPushButton::clicked, this, [this]() {
+        if (m_manager->runningServerCount() == 0) return;
+        auto ans = QMessageBox::question(this, tr("Stop All Servers"),
+                       tr("Stop all %1 running server(s)?")
+                           .arg(m_manager->runningServerCount()));
+        if (ans == QMessageBox::Yes)
+            m_manager->stopAllServers();
+    });
+    connect(restartAllBtn,&QPushButton::clicked, this, [this]() {
+        if (m_manager->runningServerCount() == 0) return;
+        auto ans = QMessageBox::question(this, tr("Restart All Servers"),
+                       tr("Restart all %1 running server(s)?")
+                           .arg(m_manager->runningServerCount()));
+        if (ans == QMessageBox::Yes)
+            m_manager->restartAllServers();
+    });
     connect(m_searchBox, &QLineEdit::textChanged, this, &MainWindow::onSearchChanged);
     connect(m_serverList, &QListWidget::itemClicked,
             this, &MainWindow::onServerListItemClicked);

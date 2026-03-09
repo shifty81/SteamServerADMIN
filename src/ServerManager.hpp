@@ -49,6 +49,24 @@ public:
     /** Start all servers that have autoStartOnLaunch enabled. */
     void autoStartServers();
 
+    // ---- Batch server operations ----
+    /** Start all servers (respecting startup priority). */
+    void startAllServers();
+    /** Stop all currently running servers. */
+    void stopAllServers();
+    /** Restart all currently running servers. */
+    void restartAllServers();
+    /** Start all servers belonging to the given group. */
+    void startGroup(const QString &group);
+    /** Stop all running servers in the given group. */
+    void stopGroup(const QString &group);
+    /** Restart all running servers in the given group. */
+    void restartGroup(const QString &group);
+    /** Return the list of unique, non-empty group names across all servers. */
+    QStringList serverGroups() const;
+    /** Return the number of currently running servers. */
+    int runningServerCount() const;
+
     // ---- SteamCMD ----
     void deployServer(ServerConfig &server);
     /** Update all mods via SteamCMD. Takes a pre-update snapshot and
@@ -125,6 +143,20 @@ public:
     // ---- Event hooks ----
     /** Return the shared EventHookManager instance. */
     EventHookManager *eventHookManager();
+
+    // ---- Server statistics ----
+    /** Flush accumulated uptime for all running servers into their configs.
+     *  Call this periodically or before saving config. */
+    void flushUptimeStats();
+
+    // ---- Auto-update check ----
+    /** Check for pending updates for a server by running SteamCMD with
+     *  +app_info_update.  Returns true if an update appears available,
+     *  false otherwise.  This is best-effort (runs a quick SteamCMD command). */
+    bool checkForUpdate(const ServerConfig &server);
+
+    /** Check all servers for pending updates and mark them via setPendingUpdate. */
+    void checkAllForUpdates();
 
 signals:
     void logMessage(const QString &serverName, const QString &message);
