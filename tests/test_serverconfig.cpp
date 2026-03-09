@@ -1,11 +1,16 @@
-#include <QtTest>
-#include <QDir>
-#include <QFile>
-#include <QJsonDocument>
-#include <QJsonArray>
-#include <QJsonObject>
-#include <QTemporaryDir>
-#include <QSignalSpy>
+#include <gtest/gtest.h>
+
+#include <filesystem>
+#include <fstream>
+#include <string>
+#include <vector>
+#include <algorithm>
+#include <cstdlib>
+#include <chrono>
+#include <thread>
+#include <atomic>
+
+#include <nlohmann/json.hpp>
 
 #include "ServerConfig.hpp"
 #include "ServerManager.hpp"
@@ -18,405 +23,214 @@
 #include "ResourceMonitor.hpp"
 #include "EventHookManager.hpp"
 
+namespace fs = std::filesystem;
+
 // ---------------------------------------------------------------------------
-// ServerConfig round-trip through ServerManager save/load
+// Temporary directory helper (replaces QTemporaryDir)
 // ---------------------------------------------------------------------------
-class TestServerConfig : public QObject {
-    Q_OBJECT
-
-private slots:
-    void testSaveAndLoad();
-    void testAddRemoveMod();
-    void testBackupRotation();
-    void testSchedulerStartStop();
-    void testSchedulerTimerIntervals();
-    void testCrashSignalEmitted();
-
-    // ---- New validation tests ----
-    void testValidateValidConfig();
-    void testValidateEmptyName();
-    void testValidateInvalidAppId();
-    void testValidateEmptyDir();
-    void testValidatePortRange();
-    void testValidateNegativeIntervals();
-    void testValidateAllDuplicateNames();
-    void testSaveRejectsInvalidConfig();
-    void testLoadEmptyArray();
-    void testLoadMalformedJson();
-    void testLoadMissingFile();
-    void testMultipleServersRoundTrip();
-    void testDefaultFieldValues();
-
-    // ---- LogModule tests ----
-    void testLogModuleWritesEntries();
-    void testLogModuleMaxEntries();
-    void testLogModuleFileOutput();
-    void testLogModuleEntryAddedSignal();
-
-    // ---- Server cloning tests ----
-    void testCloneServerConfig();
-    void testCloneServerDuplicateNameRejected();
-
-    // ---- Server removal tests ----
-    void testRemoveServer();
-    void testRemoveServerNotFound();
-    void testRemoveServerPersistence();
-
-    // ---- Broadcast RCON tests ----
-    void testBroadcastRconCommand();
-
-    // ---- Export/Import tests ----
-    void testExportServerConfig();
-    void testExportServerNotFound();
-    void testImportServerConfig();
-    void testImportServerDuplicateName();
-
-    // ---- Disabled mods tests ----
-    void testDisabledModsPersistence();
-    void testDisabledModsDefaultEmpty();
-
-    // ---- Game templates tests ----
-    void testBuiltinTemplatesNotEmpty();
-    void testBuiltinTemplatesHaveValidAppIds();
-    void testBuiltinTemplatesContainCustomEntry();
-
-    // ---- Uptime tracking tests ----
-    void testUptimeNotRunning();
-    void testStartTimeRecorded();
-
-    // ---- Crash backoff tests ----
-    void testCrashCountDefault();
-    void testCrashCountReset();
-    void testCrashBackoffConstants();
-
-    // ---- Notes field tests ----
-    void testNotesPersistence();
-    void testNotesDefaultEmpty();
-    void testNotesExportImport();
-
-    // ---- Mod ordering tests ----
-    void testModOrderPreserved();
-
-    // ---- Update rollback tests ----
-    void testUpdateModsReturnsBool();
-
-    // ---- Discord webhook field tests ----
-    void testDiscordWebhookUrlPersistence();
-    void testDiscordWebhookUrlDefaultEmpty();
-    void testDiscordWebhookUrlExportImport();
-
-    // ---- Auto-start on launch tests ----
-    void testAutoStartOnLaunchPersistence();
-    void testAutoStartOnLaunchDefaultFalse();
-    void testAutoStartServersMethod();
-
-    // ---- Scheduled RCON commands tests ----
-    void testScheduledRconCommandsPersistence();
-    void testScheduledRconCommandsDefaultEmpty();
-    void testRconCommandIntervalValidation();
-    void testSchedulerRconTimer();
-    void testValidateRconIntervalNegative();
-
-    // ---- Favorite servers tests ----
-    void testFavoritePersistence();
-    void testFavoriteDefaultFalse();
-    void testFavoriteExportImport();
-
-    // ---- RCON password obfuscation tests ----
-    void testRconPasswordObfuscatedOnDisk();
-    void testRconPasswordLegacyPlaintext();
-    void testRconPasswordRoundTrip();
-
-    // ---- Console logging tests ----
-    void testConsoleLoggingPersistence();
-    void testConsoleLoggingDefaultFalse();
-    void testConsoleLogWriterAppend();
-
-    // ---- Webhook template tests ----
-    void testWebhookTemplatePersistence();
-    void testWebhookTemplateDefaultEmpty();
-    void testWebhookTemplateFormatMessage();
-    void testWebhookTemplateExportImport();
-
-    // ---- Maintenance window tests ----
-    void testMaintenanceWindowPersistence();
-    void testMaintenanceWindowDefaultDisabled();
-    void testMaintenanceWindowValidation();
-    void testMaintenanceWindowExportImport();
-
-    // ---- Backup compression level tests ----
-    void testBackupCompressionLevelPersistence();
-    void testBackupCompressionLevelDefault();
-    void testBackupCompressionLevelValidation();
-    void testBackupCompressionLevelExportImport();
-
-    // ---- Max players tests ----
-    void testMaxPlayersDefault();
-    void testMaxPlayersPersistence();
-    void testMaxPlayersValidation();
-    void testMaxPlayersExportImport();
-
-    // ---- Restart warning tests ----
-    void testRestartWarningMinutesDefault();
-    void testRestartWarningMinutesPersistence();
-    void testRestartWarningMinutesValidation();
-    void testRestartWarningMessagePersistence();
-    void testRestartWarningMessageDefault();
-    void testRestartWarningFormatDefault();
-    void testRestartWarningFormatCustom();
-    void testRestartWarningExportImport();
-
-    // ---- Pending update tracking tests ----
-    void testPendingUpdateDefault();
-    void testPendingUpdateSetClear();
-    void testPendingModUpdateDefault();
-    void testPendingModUpdateSetClear();
-
-    // ---- Resource monitoring tests ----
-    void testResourceMonitorTrackUntrack();
-    void testResourceMonitorUsageDefault();
-    void testResourceMonitorPollInterval();
-    void testResourceMonitorStartStop();
-    void testResourceMonitorReadUsageInvalidPid();
-    void testCpuAlertThresholdDefault();
-    void testCpuAlertThresholdPersistence();
-    void testCpuAlertThresholdValidation();
-    void testMemAlertThresholdDefault();
-    void testMemAlertThresholdPersistence();
-    void testMemAlertThresholdValidation();
-    void testResourceAlertThresholdsExportImport();
-    void testResourceAlertSignal();
-
-    // ---- Event hook tests ----
-    void testEventHookKnownEvents();
-    void testEventHookFireEmpty();
-    void testEventHookFireMissing();
-    void testEventHookFireScript();
-    void testEventHookTimeout();
-    void testEventHooksPersistence();
-    void testEventHooksDefaultEmpty();
-    void testEventHooksExportImport();
-
-    // ---- Tags tests ----
-    void testTagsDefault();
-    void testTagsPersistence();
-    void testTagsExportImport();
-    void testTagsMultiple();
-
-    // ---- Server group tests ----
-    void testGroupDefault();
-    void testGroupPersistence();
-    void testGroupExportImport();
-
-    // ---- Startup priority tests ----
-    void testStartupPriorityDefault();
-    void testStartupPriorityPersistence();
-    void testStartupPriorityValidation();
-    void testStartupPriorityExportImport();
-    void testAutoStartRespectsStartupPriority();
-
-    // ---- Backup before restart tests ----
-    void testBackupBeforeRestartDefault();
-    void testBackupBeforeRestartPersistence();
-    void testBackupBeforeRestartExportImport();
-
-    // ---- Graceful shutdown timeout tests ----
-    void testGracefulShutdownDefault();
-    void testGracefulShutdownPersistence();
-    void testGracefulShutdownValidation();
-    void testGracefulShutdownExportImport();
-
-    // ---- Environment variables tests ----
-    void testEnvironmentVariablesDefault();
-    void testEnvironmentVariablesPersistence();
-    void testEnvironmentVariablesExportImport();
-    void testEnvironmentVariablesMultiple();
-
-    // ---- Batch operations tests ----
-    void testStartAllServers();
-    void testStopAllServers();
-    void testRestartAllServers();
-    void testStartGroup();
-    void testStopGroup();
-    void testRestartGroup();
-    void testServerGroupsList();
-    void testServerGroupsEmpty();
-    void testRunningServerCount();
-
-    // ---- Auto-update check interval tests ----
-    void testAutoUpdateCheckIntervalDefault();
-    void testAutoUpdateCheckIntervalPersistence();
-    void testAutoUpdateCheckIntervalValidation();
-    void testAutoUpdateCheckIntervalExportImport();
-
-    // ---- Server statistics tests ----
-    void testTotalUptimeDefault();
-    void testTotalUptimePersistence();
-    void testTotalCrashesDefault();
-    void testTotalCrashesPersistence();
-    void testLastCrashTimeDefault();
-    void testLastCrashTimePersistence();
-    void testStatsExportImport();
-    void testStatsValidation();
+class TempDir {
+public:
+    TempDir() {
+        m_path = fs::temp_directory_path() / ("ssa_test_" + std::to_string(
+            std::chrono::steady_clock::now().time_since_epoch().count()));
+        fs::create_directories(m_path);
+    }
+    ~TempDir() {
+        std::error_code ec;
+        fs::remove_all(m_path, ec);
+    }
+    bool isValid() const { return fs::exists(m_path); }
+    std::string path() const { return m_path.string(); }
+    std::string filePath(const std::string &name) const {
+        return (m_path / name).string();
+    }
+private:
+    fs::path m_path;
 };
 
-void TestServerConfig::testSaveAndLoad()
-{
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
+// Helper: check if a vector contains a value
+template <typename T>
+bool vectorContains(const std::vector<T> &v, const T &val) {
+    return std::find(v.begin(), v.end(), val) != v.end();
+}
 
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+// Helper: check if a string contains a substring
+bool strContains(const std::string &haystack, const std::string &needle) {
+    return haystack.find(needle) != std::string::npos;
+}
+
+// Helper: read entire file to string
+std::string readFile(const std::string &path) {
+    std::ifstream f(path);
+    if (!f.is_open()) return "";
+    return std::string((std::istreambuf_iterator<char>(f)),
+                        std::istreambuf_iterator<char>());
+}
+
+// Helper: write string to file
+void writeFile(const std::string &path, const std::string &content) {
+    std::ofstream f(path);
+    f << content;
+}
+
+TEST(ServerConfig, SaveAndLoad)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    std::string configPath = tmp.filePath("servers.json");
 
     // Build a server config and save it
     ServerManager mgr(configPath);
 
     ServerConfig s;
-    s.name         = QStringLiteral("Test Server");
+    s.name         = "Test Server";
     s.appid        = 376030;
-    s.dir          = QStringLiteral("/srv/test");
-    s.executable   = QStringLiteral("server.exe");
-    s.backupFolder = QStringLiteral("/srv/backups/test");
-    s.rcon.host    = QStringLiteral("127.0.0.1");
+    s.dir          = "/srv/test";
+    s.executable   = "server.exe";
+    s.backupFolder = "/srv/backups/test";
+    s.rcon.host    = "127.0.0.1";
     s.rcon.port    = 27020;
-    s.rcon.password= QStringLiteral("secret");
+    s.rcon.password= "secret";
     s.mods         = { 111, 222, 333 };
     s.autoUpdate   = true;
     s.keepBackups  = 5;
 
-    mgr.servers() << s;
-    QVERIFY(mgr.saveConfig());
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.saveConfig());
 
     // Load back into a fresh manager
     ServerManager mgr2(configPath);
-    QVERIFY(mgr2.loadConfig());
-    QCOMPARE(mgr2.servers().size(), 1);
+    ASSERT_TRUE(mgr2.loadConfig());
+    EXPECT_EQ(mgr2.servers().size(), static_cast<size_t>(1));
 
-    const ServerConfig &loaded = mgr2.servers().first();
-    QCOMPARE(loaded.name,          QStringLiteral("Test Server"));
-    QCOMPARE(loaded.appid,         376030);
-    QCOMPARE(loaded.dir,           QStringLiteral("/srv/test"));
-    QCOMPARE(loaded.executable,    QStringLiteral("server.exe"));
-    QCOMPARE(loaded.backupFolder,  QStringLiteral("/srv/backups/test"));
-    QCOMPARE(loaded.rcon.host,     QStringLiteral("127.0.0.1"));
-    QCOMPARE(loaded.rcon.port,     27020);
-    QCOMPARE(loaded.rcon.password, QStringLiteral("secret"));
-    QCOMPARE(loaded.mods,          QList<int>({ 111, 222, 333 }));
-    QCOMPARE(loaded.autoUpdate,    true);
-    QCOMPARE(loaded.keepBackups,   5);
+    const ServerConfig &loaded = mgr2.servers().front();
+    EXPECT_EQ(loaded.name,          "Test Server");
+    EXPECT_EQ(loaded.appid,         376030);
+    EXPECT_EQ(loaded.dir,           "/srv/test");
+    EXPECT_EQ(loaded.executable,    "server.exe");
+    EXPECT_EQ(loaded.backupFolder,  "/srv/backups/test");
+    EXPECT_EQ(loaded.rcon.host,     "127.0.0.1");
+    EXPECT_EQ(loaded.rcon.port,     27020);
+    EXPECT_EQ(loaded.rcon.password, "secret");
+    EXPECT_EQ(loaded.mods,          std::vector<int>({ 111, 222, 333 }));
+    EXPECT_EQ(loaded.autoUpdate,    true);
+    EXPECT_EQ(loaded.keepBackups,   5);
 }
 
-void TestServerConfig::testAddRemoveMod()
+TEST(ServerConfig, AddRemoveMod)
 {
     ServerConfig s;
     s.mods = { 100, 200, 300 };
 
     // Add
     int newMod = 400;
-    if (!s.mods.contains(newMod))
-        s.mods << newMod;
-    QVERIFY(s.mods.contains(newMod));
-    QCOMPARE(s.mods.size(), 4);
+    if (!vectorContains(s.mods, newMod))
+        s.mods.push_back(newMod);
+    ASSERT_TRUE(vectorContains(s.mods, newMod));
+    EXPECT_EQ(s.mods.size(), 4);
 
     // Remove
-    s.mods.removeAll(200);
-    QVERIFY(!s.mods.contains(200));
-    QCOMPARE(s.mods.size(), 3);
+    s.mods.erase(std::remove(s.mods.begin(), s.mods.end(), 200), s.mods.end());
+    EXPECT_FALSE(vectorContains(s.mods, 200));
+    EXPECT_EQ(s.mods.size(), 3);
 
     // No duplicate
-    s.mods << 100;
+    s.mods.push_back(100);
     // Still should contain 100 once more – removeAll removes all
-    QCOMPARE(s.mods.count(100), 2);
+    EXPECT_EQ(static_cast<int>(std::count(s.mods.begin(), s.mods.end(), 100)), 2);
 }
 
-void TestServerConfig::testBackupRotation()
+TEST(ServerConfig, BackupRotation)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
 
     ServerConfig s;
     s.backupFolder = tmp.path();
     s.keepBackups  = 3;
 
     // Create 5 dummy zip files with ascending timestamps
-    QStringList created;
+    std::vector<std::string> created;
     for (int i = 1; i <= 5; ++i) {
-        QString path = tmp.filePath(
-            QStringLiteral("2026010%1_120000_config.zip").arg(i));
-        QFile f(path);
-        QVERIFY(f.open(QIODevice::WriteOnly));
-        f.write("dummy");
-        f.close();
-        created << path;
+        std::string path = tmp.filePath(
+            ("2026010" + std::to_string(i) + "_120000_config.zip"));
+        { std::ofstream f(path); ASSERT_TRUE(f.is_open()); f << "dummy"; }
+        created.push_back(path);
     }
 
     BackupModule::rotateBackups(s);
 
     // Only the 3 newest should remain
-    QDir dir(tmp.path());
-    QStringList remaining = dir.entryList({ QStringLiteral("*_config.zip") }, QDir::Files);
-    QCOMPARE(remaining.size(), 3);
+    std::vector<std::string> remaining;
+    for (const auto &entry : fs::directory_iterator(tmp.path())) {
+        if (entry.is_regular_file() && strContains(entry.path().filename().string(), "_config.zip"))
+            remaining.push_back(entry.path().filename().string());
+    }
+    std::sort(remaining.begin(), remaining.end());
+    EXPECT_EQ(remaining.size(), static_cast<size_t>(3));
 
     // The 3 newest (highest timestamps) should survive
-    for (const QString &f : { QStringLiteral("20260105_120000_config.zip"),
-                               QStringLiteral("20260104_120000_config.zip"),
-                               QStringLiteral("20260103_120000_config.zip") }) {
-        QVERIFY2(remaining.contains(f), qPrintable(f + " should be kept"));
+    for (const auto &f : std::vector<std::string>{"20260103_120000_config.zip",
+                               "20260104_120000_config.zip",
+                               "20260105_120000_config.zip"}) {
+        ASSERT_TRUE(vectorContains(remaining, f)) << (f + " should be kept");
     }
 }
 
-void TestServerConfig::testSchedulerStartStop()
+TEST(ServerConfig, SchedulerStartStop)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
 
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    std::string configPath = tmp.filePath("servers.json");
 
     ServerManager mgr(configPath);
     ServerConfig s;
-    s.name = QStringLiteral("Sched Server");
+    s.name = "Sched Server";
     s.appid = 730;
     s.dir = tmp.path();
-    s.backupFolder = tmp.filePath(QStringLiteral("backups"));
+    s.backupFolder = tmp.filePath("backups");
     s.backupIntervalMinutes = 10;
     s.restartIntervalHours = 2;
-    mgr.servers() << s;
+    mgr.servers().push_back(s);
     mgr.saveConfig();
 
     SchedulerModule scheduler(&mgr);
 
     // Start scheduler for the server
-    scheduler.startScheduler(QStringLiteral("Sched Server"));
+    scheduler.startScheduler("Sched Server");
 
     // Starting again should not crash (replaces timers)
-    scheduler.startScheduler(QStringLiteral("Sched Server"));
+    scheduler.startScheduler("Sched Server");
 
     // Stop scheduler
-    scheduler.stopScheduler(QStringLiteral("Sched Server"));
+    scheduler.stopScheduler("Sched Server");
 
     // Stopping an unknown server should not crash
-    scheduler.stopScheduler(QStringLiteral("Unknown"));
+    scheduler.stopScheduler("Unknown");
 
     // startAll / stopAll
     scheduler.startAll();
     scheduler.stopAll();
 }
 
-void TestServerConfig::testSchedulerTimerIntervals()
+TEST(ServerConfig, SchedulerTimerIntervals)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
 
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    std::string configPath = tmp.filePath("servers.json");
 
     ServerManager mgr(configPath);
     ServerConfig s;
-    s.name = QStringLiteral("Timer Server");
+    s.name = "Timer Server";
     s.appid = 730;
     s.dir = tmp.path();
-    s.backupFolder = tmp.filePath(QStringLiteral("backups"));
+    s.backupFolder = tmp.filePath("backups");
     s.backupIntervalMinutes = 0;   // disabled
     s.restartIntervalHours  = 0;   // disabled
-    mgr.servers() << s;
+    mgr.servers().push_back(s);
 
     SchedulerModule scheduler(&mgr);
     scheduler.startAll();
@@ -431,1124 +245,1122 @@ void TestServerConfig::testSchedulerTimerIntervals()
     scheduler.stopAll();
 }
 
-void TestServerConfig::testCrashSignalEmitted()
+TEST(ServerConfig, CrashSignalEmitted)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
 
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    std::string configPath = tmp.filePath("servers.json");
 
     ServerManager mgr(configPath);
 
-    // Verify the serverCrashed signal exists and can be spied on
-    QSignalSpy spy(&mgr, &ServerManager::serverCrashed);
-    QVERIFY(spy.isValid());
+    // Verify the onServerCrashed callback mechanism works
+    int crashCallbackCount = 0;
+    mgr.onServerCrashed = [&crashCallbackCount](const std::string &) {
+        ++crashCallbackCount;
+    };
 
-    // No crashes should have been emitted yet
-    QCOMPARE(spy.count(), 0);
+    // No crashes should have been triggered yet
+    EXPECT_EQ(crashCallbackCount, 0);
 }
 
 // ---------------------------------------------------------------------------
 // New validation tests
 // ---------------------------------------------------------------------------
 
-void TestServerConfig::testValidateValidConfig()
+TEST(ServerConfig, ValidateValidConfig)
 {
     ServerConfig s;
-    s.name  = QStringLiteral("MyServer");
+    s.name  = "MyServer";
     s.appid = 730;
-    s.dir   = QStringLiteral("/srv/cs2");
+    s.dir   = "/srv/cs2";
     s.rcon.port = 27015;
 
-    QStringList errors = s.validate();
-    QVERIFY2(errors.isEmpty(),
-             qPrintable(QStringLiteral("Expected no errors, got: ") + errors.join(QStringLiteral("; "))));
+    std::vector<std::string> errors = s.validate();
+    ASSERT_TRUE(errors.empty()) << "Expected no errors, got: " << [&](){ std::string r; for(size_t i=0;i<errors.size();++i){if(i)r+="; ";r+=errors[i];} return r; }();
 }
 
-void TestServerConfig::testValidateEmptyName()
+TEST(ServerConfig, ValidateEmptyName)
 {
     ServerConfig s;
-    s.name  = QStringLiteral("");
+    s.name  = "";
     s.appid = 730;
-    s.dir   = QStringLiteral("/srv/cs2");
+    s.dir   = "/srv/cs2";
 
-    QStringList errors = s.validate();
-    QVERIFY(!errors.isEmpty());
-    QVERIFY(errors.first().contains(QStringLiteral("name")));
+    std::vector<std::string> errors = s.validate();
+    EXPECT_FALSE(errors.empty());
+    ASSERT_TRUE(strContains(errors.front(), "name"));
 
     // Whitespace-only name should also fail
-    s.name = QStringLiteral("   ");
+    s.name = "   ";
     errors = s.validate();
-    QVERIFY(!errors.isEmpty());
+    EXPECT_FALSE(errors.empty());
 }
 
-void TestServerConfig::testValidateInvalidAppId()
+TEST(ServerConfig, ValidateInvalidAppId)
 {
     ServerConfig s;
-    s.name  = QStringLiteral("Test");
+    s.name  = "Test";
     s.appid = 0;
-    s.dir   = QStringLiteral("/srv/test");
+    s.dir   = "/srv/test";
 
-    QStringList errors = s.validate();
-    QVERIFY(!errors.isEmpty());
-    QVERIFY(errors.first().contains(QStringLiteral("AppID")));
+    std::vector<std::string> errors = s.validate();
+    EXPECT_FALSE(errors.empty());
+    ASSERT_TRUE(strContains(errors.front(), "AppID"));
 
     // Negative AppID
     s.appid = -1;
     errors = s.validate();
-    QVERIFY(!errors.isEmpty());
+    EXPECT_FALSE(errors.empty());
 }
 
-void TestServerConfig::testValidateEmptyDir()
+TEST(ServerConfig, ValidateEmptyDir)
 {
     ServerConfig s;
-    s.name  = QStringLiteral("Test");
+    s.name  = "Test";
     s.appid = 730;
-    s.dir   = QStringLiteral("");
+    s.dir   = "";
 
-    QStringList errors = s.validate();
-    QVERIFY(!errors.isEmpty());
-    QVERIFY(errors.first().contains(QStringLiteral("directory")));
+    std::vector<std::string> errors = s.validate();
+    EXPECT_FALSE(errors.empty());
+    ASSERT_TRUE(strContains(errors.front(), "directory"));
 }
 
-void TestServerConfig::testValidatePortRange()
+TEST(ServerConfig, ValidatePortRange)
 {
     ServerConfig s;
-    s.name  = QStringLiteral("Test");
+    s.name  = "Test";
     s.appid = 730;
-    s.dir   = QStringLiteral("/srv/test");
+    s.dir   = "/srv/test";
 
     // Port 0
     s.rcon.port = 0;
-    QStringList errors = s.validate();
-    QVERIFY(!errors.isEmpty());
-    QVERIFY(errors.first().contains(QStringLiteral("port")));
+    std::vector<std::string> errors = s.validate();
+    EXPECT_FALSE(errors.empty());
+    ASSERT_TRUE(strContains(errors.front(), "port"));
 
     // Port too high
     s.rcon.port = 70000;
     errors = s.validate();
-    QVERIFY(!errors.isEmpty());
+    EXPECT_FALSE(errors.empty());
 
     // Negative port
     s.rcon.port = -1;
     errors = s.validate();
-    QVERIFY(!errors.isEmpty());
+    EXPECT_FALSE(errors.empty());
 
     // Valid boundary values
     s.rcon.port = 1;
     errors = s.validate();
-    QVERIFY(errors.isEmpty());
+    ASSERT_TRUE(errors.empty());
 
     s.rcon.port = 65535;
     errors = s.validate();
-    QVERIFY(errors.isEmpty());
+    ASSERT_TRUE(errors.empty());
 }
 
-void TestServerConfig::testValidateNegativeIntervals()
+TEST(ServerConfig, ValidateNegativeIntervals)
 {
     ServerConfig s;
-    s.name  = QStringLiteral("Test");
+    s.name  = "Test";
     s.appid = 730;
-    s.dir   = QStringLiteral("/srv/test");
+    s.dir   = "/srv/test";
 
     s.keepBackups = -1;
-    QStringList errors = s.validate();
-    QVERIFY(!errors.isEmpty());
+    std::vector<std::string> errors = s.validate();
+    EXPECT_FALSE(errors.empty());
 
     s.keepBackups = 0;
     s.backupIntervalMinutes = -5;
     errors = s.validate();
-    QVERIFY(!errors.isEmpty());
+    EXPECT_FALSE(errors.empty());
 
     s.backupIntervalMinutes = 0;
     s.restartIntervalHours = -1;
     errors = s.validate();
-    QVERIFY(!errors.isEmpty());
+    EXPECT_FALSE(errors.empty());
 }
 
-void TestServerConfig::testValidateAllDuplicateNames()
+TEST(ServerConfig, ValidateAllDuplicateNames)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
 
-    ServerManager mgr(tmp.filePath(QStringLiteral("servers.json")));
+    ServerManager mgr(tmp.filePath("servers.json"));
 
     ServerConfig s1;
-    s1.name  = QStringLiteral("DupeServer");
+    s1.name  = "DupeServer";
     s1.appid = 730;
-    s1.dir   = QStringLiteral("/srv/a");
+    s1.dir   = "/srv/a";
 
     ServerConfig s2;
-    s2.name  = QStringLiteral("DupeServer");
+    s2.name  = "DupeServer";
     s2.appid = 2430930;
-    s2.dir   = QStringLiteral("/srv/b");
+    s2.dir   = "/srv/b";
 
-    mgr.servers() << s1 << s2;
+    mgr.servers().push_back(s1);
+    mgr.servers().push_back(s2);
 
-    QStringList errors = mgr.validateAll();
-    QVERIFY(!errors.isEmpty());
+    std::vector<std::string> errors = mgr.validateAll();
+    EXPECT_FALSE(errors.empty());
 
     // Should mention "Duplicate"
     bool foundDuplicate = false;
-    for (const QString &e : std::as_const(errors)) {
-        if (e.contains(QStringLiteral("Duplicate")))
+    for (const auto &e : errors) {
+        if (strContains(e, "Duplicate"))
             foundDuplicate = true;
     }
-    QVERIFY2(foundDuplicate, "Expected a duplicate-name error");
+    ASSERT_TRUE(foundDuplicate) << "Expected a duplicate-name error";
 }
 
-void TestServerConfig::testSaveRejectsInvalidConfig()
+TEST(ServerConfig, SaveRejectsInvalidConfig)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
 
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    std::string configPath = tmp.filePath("servers.json");
     ServerManager mgr(configPath);
 
     ServerConfig s;
-    s.name  = QStringLiteral("");   // invalid: empty name
+    s.name  = "";   // invalid: empty name
     s.appid = 0;                    // invalid: zero appid
-    s.dir   = QStringLiteral("");   // invalid: empty dir
-    mgr.servers() << s;
+    s.dir   = "";   // invalid: empty dir
+    mgr.servers().push_back(s);
 
     // Save should fail because config is invalid
-    QVERIFY(!mgr.saveConfig());
+    EXPECT_FALSE(mgr.saveConfig());
 
     // File should not have been created
-    QVERIFY(!QFile::exists(configPath));
+    EXPECT_FALSE(fs::exists(configPath));
 }
 
-void TestServerConfig::testLoadEmptyArray()
+TEST(ServerConfig, LoadEmptyArray)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
 
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    std::string configPath = tmp.filePath("servers.json");
 
     // Write a valid empty JSON array
-    QFile f(configPath);
-    QVERIFY(f.open(QIODevice::WriteOnly));
-    f.write("[]");
-    f.close();
+    { std::ofstream f(configPath); ASSERT_TRUE(f.is_open()); f << "[]"; }
 
     ServerManager mgr(configPath);
-    QVERIFY(mgr.loadConfig());
-    QCOMPARE(mgr.servers().size(), 0);
+    ASSERT_TRUE(mgr.loadConfig());
+    EXPECT_EQ(mgr.servers().size(), static_cast<size_t>(0));
 }
 
-void TestServerConfig::testLoadMalformedJson()
+TEST(ServerConfig, LoadMalformedJson)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
 
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    std::string configPath = tmp.filePath("servers.json");
 
-    QFile f(configPath);
-    QVERIFY(f.open(QIODevice::WriteOnly));
-    f.write("{not valid json!!!");
-    f.close();
+    { std::ofstream f(configPath); ASSERT_TRUE(f.is_open()); f << "{not valid json!!!"; }
 
     ServerManager mgr(configPath);
-    QVERIFY(!mgr.loadConfig());
+    EXPECT_FALSE(mgr.loadConfig());
 }
 
-void TestServerConfig::testLoadMissingFile()
+TEST(ServerConfig, LoadMissingFile)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
 
-    ServerManager mgr(tmp.filePath(QStringLiteral("nonexistent.json")));
-    QVERIFY(!mgr.loadConfig());
+    ServerManager mgr(tmp.filePath("nonexistent.json"));
+    EXPECT_FALSE(mgr.loadConfig());
 }
 
-void TestServerConfig::testMultipleServersRoundTrip()
+TEST(ServerConfig, MultipleServersRoundTrip)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
 
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    std::string configPath = tmp.filePath("servers.json");
     ServerManager mgr(configPath);
 
     for (int i = 1; i <= 5; ++i) {
         ServerConfig s;
-        s.name  = QStringLiteral("Server_%1").arg(i);
+        s.name  = ("Server_" + std::to_string(i));
         s.appid = 730 + i;
-        s.dir   = QStringLiteral("/srv/s%1").arg(i);
+        s.dir   = ("/srv/s" + std::to_string(i));
         s.mods  = { i * 100, i * 200 };
-        mgr.servers() << s;
+        mgr.servers().push_back(s);
     }
 
-    QVERIFY(mgr.saveConfig());
+    ASSERT_TRUE(mgr.saveConfig());
 
     ServerManager mgr2(configPath);
-    QVERIFY(mgr2.loadConfig());
-    QCOMPARE(mgr2.servers().size(), 5);
+    ASSERT_TRUE(mgr2.loadConfig());
+    EXPECT_EQ(mgr2.servers().size(), static_cast<size_t>(5));
 
     for (int i = 0; i < 5; ++i) {
-        QCOMPARE(mgr2.servers().at(i).name,  QStringLiteral("Server_%1").arg(i + 1));
-        QCOMPARE(mgr2.servers().at(i).appid, 730 + i + 1);
-        QCOMPARE(mgr2.servers().at(i).mods.size(), 2);
+        EXPECT_EQ(mgr2.servers().at(i).name,  ("Server_" + std::to_string(i + 1)));
+        EXPECT_EQ(mgr2.servers().at(i).appid, 730 + i + 1);
+        EXPECT_EQ(mgr2.servers().at(i).mods.size(), 2);
     }
 }
 
-void TestServerConfig::testDefaultFieldValues()
+TEST(ServerConfig, DefaultFieldValues)
 {
     // Ensure default values match expected defaults
     ServerConfig s;
-    QCOMPARE(s.appid,                0);
-    QCOMPARE(s.rcon.port,            27015);
-    QCOMPARE(s.autoUpdate,           true);
-    QCOMPARE(s.backupIntervalMinutes, 30);
-    QCOMPARE(s.restartIntervalHours, 24);
-    QCOMPARE(s.keepBackups,          10);
-    QVERIFY(s.name.isEmpty());
-    QVERIFY(s.dir.isEmpty());
-    QVERIFY(s.executable.isEmpty());
-    QVERIFY(s.mods.isEmpty());
+    EXPECT_EQ(s.appid,                0);
+    EXPECT_EQ(s.rcon.port,            27015);
+    EXPECT_EQ(s.autoUpdate,           true);
+    EXPECT_EQ(s.backupIntervalMinutes, 30);
+    EXPECT_EQ(s.restartIntervalHours, 24);
+    EXPECT_EQ(s.keepBackups,          10);
+    ASSERT_TRUE(s.name.empty());
+    ASSERT_TRUE(s.dir.empty());
+    ASSERT_TRUE(s.executable.empty());
+    ASSERT_TRUE(s.mods.empty());
 }
 
 // ---------------------------------------------------------------------------
 // LogModule tests
 // ---------------------------------------------------------------------------
 
-void TestServerConfig::testLogModuleWritesEntries()
+TEST(ServerConfig, LogModuleWritesEntries)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
 
-    LogModule log(tmp.filePath(QStringLiteral("test.log")));
-    log.log(QStringLiteral("Server1"), QStringLiteral("Started"));
-    log.log(QStringLiteral("Server2"), QStringLiteral("Backup complete"));
+    LogModule log(tmp.filePath("test.log"));
+    log.log("Server1", "Started");
+    log.log("Server2", "Backup complete");
 
-    QStringList entries = log.entries();
-    QCOMPARE(entries.size(), 2);
-    QVERIFY(entries.at(0).contains(QStringLiteral("Server1")));
-    QVERIFY(entries.at(0).contains(QStringLiteral("Started")));
-    QVERIFY(entries.at(1).contains(QStringLiteral("Server2")));
-    QVERIFY(entries.at(1).contains(QStringLiteral("Backup complete")));
+    std::vector<std::string> entries = log.entries();
+    EXPECT_EQ(entries.size(), static_cast<size_t>(2));
+    ASSERT_TRUE(strContains(entries.at(0), "Server1"));
+    ASSERT_TRUE(strContains(entries.at(0), "Started"));
+    ASSERT_TRUE(strContains(entries.at(1), "Server2"));
+    ASSERT_TRUE(strContains(entries.at(1), "Backup complete"));
 }
 
-void TestServerConfig::testLogModuleMaxEntries()
+TEST(ServerConfig, LogModuleMaxEntries)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
 
-    LogModule log(tmp.filePath(QStringLiteral("test.log")));
+    LogModule log(tmp.filePath("test.log"));
     log.setMaxEntries(3);
 
     for (int i = 0; i < 5; ++i)
-        log.log(QStringLiteral("S"), QStringLiteral("msg%1").arg(i));
+        log.log("S", ("msg" + std::to_string(i)));
 
-    QStringList entries = log.entries();
-    QCOMPARE(entries.size(), 3);
+    std::vector<std::string> entries = log.entries();
+    EXPECT_EQ(entries.size(), static_cast<size_t>(3));
     // Oldest entries should have been trimmed; newest 3 remain
-    QVERIFY(entries.at(0).contains(QStringLiteral("msg2")));
-    QVERIFY(entries.at(1).contains(QStringLiteral("msg3")));
-    QVERIFY(entries.at(2).contains(QStringLiteral("msg4")));
+    ASSERT_TRUE(strContains(entries.at(0), "msg2"));
+    ASSERT_TRUE(strContains(entries.at(1), "msg3"));
+    ASSERT_TRUE(strContains(entries.at(2), "msg4"));
 }
 
-void TestServerConfig::testLogModuleFileOutput()
+TEST(ServerConfig, LogModuleFileOutput)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
 
-    QString logPath = tmp.filePath(QStringLiteral("test.log"));
+    std::string logPath = tmp.filePath("test.log");
 
     {
         LogModule log(logPath);
-        log.log(QStringLiteral("TestSrv"), QStringLiteral("hello"));
+        log.log("TestSrv", "hello");
     }
 
-    QFile f(logPath);
-    QVERIFY(f.open(QIODevice::ReadOnly));
-    QString content = QString::fromUtf8(f.readAll());
-    QVERIFY(content.contains(QStringLiteral("TestSrv")));
-    QVERIFY(content.contains(QStringLiteral("hello")));
+    std::string content = readFile(logPath);
+    ASSERT_TRUE(strContains(content, "TestSrv"));
+    ASSERT_TRUE(strContains(content, "hello"));
 }
 
-void TestServerConfig::testLogModuleEntryAddedSignal()
+TEST(ServerConfig, LogModuleEntryAddedSignal)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
 
-    LogModule log(tmp.filePath(QStringLiteral("test.log")));
-    QSignalSpy spy(&log, &LogModule::entryAdded);
-    QVERIFY(spy.isValid());
+    LogModule log(tmp.filePath("test.log"));
+    int callbackCount = 0;
+    std::string lastEntry;
+    log.onEntryAdded = [&callbackCount, &lastEntry](const std::string &entry) {
+        ++callbackCount;
+        lastEntry = entry;
+    };
 
-    log.log(QStringLiteral("S"), QStringLiteral("event"));
-    QCOMPARE(spy.count(), 1);
-
-    QString emitted = spy.at(0).at(0).toString();
-    QVERIFY(emitted.contains(QStringLiteral("event")));
+    log.log("S", "event");
+    EXPECT_EQ(callbackCount, 1);
+    ASSERT_TRUE(strContains(lastEntry, "event"));
 }
 
 // ---------------------------------------------------------------------------
 // Server cloning tests
 // ---------------------------------------------------------------------------
 
-void TestServerConfig::testCloneServerConfig()
+TEST(ServerConfig, CloneServerConfig)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
 
-    ServerManager mgr(tmp.filePath(QStringLiteral("servers.json")));
+    ServerManager mgr(tmp.filePath("servers.json"));
 
     ServerConfig s;
-    s.name  = QStringLiteral("Original");
+    s.name  = "Original";
     s.appid = 730;
-    s.dir   = QStringLiteral("/srv/orig");
+    s.dir   = "/srv/orig";
     s.mods  = { 111, 222 };
     s.rcon.port = 27015;
     s.backupIntervalMinutes = 15;
-    mgr.servers() << s;
+    mgr.servers().push_back(s);
 
     // Clone it
     ServerConfig cloned = s;
-    cloned.name = QStringLiteral("Clone");
-    mgr.servers() << cloned;
+    cloned.name = "Clone";
+    mgr.servers().push_back(cloned);
 
     // Validate – should pass (no duplicates, both configs valid)
-    QStringList errors = mgr.validateAll();
-    QVERIFY2(errors.isEmpty(),
-             qPrintable(QStringLiteral("Expected no errors: ") + errors.join(QStringLiteral("; "))));
+    std::vector<std::string> errors = mgr.validateAll();
+    ASSERT_TRUE(errors.empty()) << "Expected no errors: " << [&](){ std::string r; for(size_t i=0;i<errors.size();++i){if(i)r+="; ";r+=errors[i];} return r; }();
 
     // Verify clone has same fields
-    const ServerConfig &c = mgr.servers().last();
-    QCOMPARE(c.name,  QStringLiteral("Clone"));
-    QCOMPARE(c.appid, 730);
-    QCOMPARE(c.dir,   QStringLiteral("/srv/orig"));
-    QCOMPARE(c.mods,  QList<int>({ 111, 222 }));
-    QCOMPARE(c.backupIntervalMinutes, 15);
+    const ServerConfig &c = mgr.servers().back();
+    EXPECT_EQ(c.name,  "Clone");
+    EXPECT_EQ(c.appid, 730);
+    EXPECT_EQ(c.dir,   "/srv/orig");
+    EXPECT_EQ(c.mods,  std::vector<int>({ 111, 222 }));
+    EXPECT_EQ(c.backupIntervalMinutes, 15);
 
     // Save and reload
-    QVERIFY(mgr.saveConfig());
-    ServerManager mgr2(tmp.filePath(QStringLiteral("servers.json")));
-    QVERIFY(mgr2.loadConfig());
-    QCOMPARE(mgr2.servers().size(), 2);
-    QCOMPARE(mgr2.servers().at(1).name, QStringLiteral("Clone"));
+    ASSERT_TRUE(mgr.saveConfig());
+    ServerManager mgr2(tmp.filePath("servers.json"));
+    ASSERT_TRUE(mgr2.loadConfig());
+    EXPECT_EQ(mgr2.servers().size(), static_cast<size_t>(2));
+    EXPECT_EQ(mgr2.servers().at(1).name, "Clone");
 }
 
-void TestServerConfig::testCloneServerDuplicateNameRejected()
+TEST(ServerConfig, CloneServerDuplicateNameRejected)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
 
-    ServerManager mgr(tmp.filePath(QStringLiteral("servers.json")));
+    ServerManager mgr(tmp.filePath("servers.json"));
 
     ServerConfig s;
-    s.name  = QStringLiteral("MyServer");
+    s.name  = "MyServer";
     s.appid = 730;
-    s.dir   = QStringLiteral("/srv/my");
-    mgr.servers() << s;
+    s.dir   = "/srv/my";
+    mgr.servers().push_back(s);
 
     // Clone with same name (should fail validation)
     ServerConfig cloned = s;  // same name
-    mgr.servers() << cloned;
+    mgr.servers().push_back(cloned);
 
-    QStringList errors = mgr.validateAll();
-    QVERIFY(!errors.isEmpty());
+    std::vector<std::string> errors = mgr.validateAll();
+    EXPECT_FALSE(errors.empty());
 
     bool foundDuplicate = false;
-    for (const QString &e : std::as_const(errors)) {
-        if (e.contains(QStringLiteral("Duplicate")))
+    for (const auto &e : errors) {
+        if (strContains(e, "Duplicate"))
             foundDuplicate = true;
     }
-    QVERIFY2(foundDuplicate, "Cloning with same name should trigger duplicate error");
+    ASSERT_TRUE(foundDuplicate) << "Cloning with same name should trigger duplicate error";
 }
 
 // ---------------------------------------------------------------------------
 // Server removal tests
 // ---------------------------------------------------------------------------
 
-void TestServerConfig::testRemoveServer()
+TEST(ServerConfig, RemoveServer)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
 
-    ServerManager mgr(tmp.filePath(QStringLiteral("servers.json")));
+    ServerManager mgr(tmp.filePath("servers.json"));
 
     ServerConfig s1;
-    s1.name  = QStringLiteral("Server1");
+    s1.name  = "Server1";
     s1.appid = 730;
-    s1.dir   = QStringLiteral("/srv/s1");
+    s1.dir   = "/srv/s1";
 
     ServerConfig s2;
-    s2.name  = QStringLiteral("Server2");
+    s2.name  = "Server2";
     s2.appid = 2430930;
-    s2.dir   = QStringLiteral("/srv/s2");
+    s2.dir   = "/srv/s2";
 
-    mgr.servers() << s1 << s2;
-    QCOMPARE(mgr.servers().size(), 2);
+    mgr.servers().push_back(s1);
+    mgr.servers().push_back(s2);
+    EXPECT_EQ(mgr.servers().size(), static_cast<size_t>(2));
 
     // Remove first server
-    bool removed = mgr.removeServer(QStringLiteral("Server1"));
-    QVERIFY(removed);
-    QCOMPARE(mgr.servers().size(), 1);
-    QCOMPARE(mgr.servers().first().name, QStringLiteral("Server2"));
+    bool removed = mgr.removeServer("Server1");
+    ASSERT_TRUE(removed);
+    EXPECT_EQ(mgr.servers().size(), static_cast<size_t>(1));
+    EXPECT_EQ(mgr.servers().front().name, "Server2");
 }
 
-void TestServerConfig::testRemoveServerNotFound()
+TEST(ServerConfig, RemoveServerNotFound)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
 
-    ServerManager mgr(tmp.filePath(QStringLiteral("servers.json")));
+    ServerManager mgr(tmp.filePath("servers.json"));
 
     ServerConfig s;
-    s.name  = QStringLiteral("MyServer");
+    s.name  = "MyServer";
     s.appid = 730;
-    s.dir   = QStringLiteral("/srv/my");
-    mgr.servers() << s;
+    s.dir   = "/srv/my";
+    mgr.servers().push_back(s);
 
     // Try to remove a non-existent server
-    bool removed = mgr.removeServer(QStringLiteral("NonExistent"));
-    QVERIFY(!removed);
-    QCOMPARE(mgr.servers().size(), 1);
+    bool removed = mgr.removeServer("NonExistent");
+    EXPECT_FALSE(removed);
+    EXPECT_EQ(mgr.servers().size(), static_cast<size_t>(1));
 }
 
-void TestServerConfig::testRemoveServerPersistence()
+TEST(ServerConfig, RemoveServerPersistence)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
 
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    std::string configPath = tmp.filePath("servers.json");
     ServerManager mgr(configPath);
 
     ServerConfig s1;
-    s1.name  = QStringLiteral("Alpha");
+    s1.name  = "Alpha";
     s1.appid = 730;
-    s1.dir   = QStringLiteral("/srv/alpha");
+    s1.dir   = "/srv/alpha";
 
     ServerConfig s2;
-    s2.name  = QStringLiteral("Beta");
+    s2.name  = "Beta";
     s2.appid = 2430930;
-    s2.dir   = QStringLiteral("/srv/beta");
+    s2.dir   = "/srv/beta";
 
-    mgr.servers() << s1 << s2;
-    QVERIFY(mgr.saveConfig());
+    mgr.servers().push_back(s1);
+    mgr.servers().push_back(s2);
+    ASSERT_TRUE(mgr.saveConfig());
 
     // Remove and save
-    mgr.removeServer(QStringLiteral("Alpha"));
-    QVERIFY(mgr.saveConfig());
+    mgr.removeServer("Alpha");
+    ASSERT_TRUE(mgr.saveConfig());
 
     // Reload and verify
     ServerManager mgr2(configPath);
-    QVERIFY(mgr2.loadConfig());
-    QCOMPARE(mgr2.servers().size(), 1);
-    QCOMPARE(mgr2.servers().first().name, QStringLiteral("Beta"));
+    ASSERT_TRUE(mgr2.loadConfig());
+    EXPECT_EQ(mgr2.servers().size(), static_cast<size_t>(1));
+    EXPECT_EQ(mgr2.servers().front().name, "Beta");
 }
 
 // ---------------------------------------------------------------------------
 // Broadcast RCON tests
 // ---------------------------------------------------------------------------
 
-void TestServerConfig::testBroadcastRconCommand()
+TEST(ServerConfig, BroadcastRconCommand)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
 
-    ServerManager mgr(tmp.filePath(QStringLiteral("servers.json")));
+    ServerManager mgr(tmp.filePath("servers.json"));
 
     ServerConfig s1;
-    s1.name  = QStringLiteral("S1");
+    s1.name  = "S1";
     s1.appid = 730;
-    s1.dir   = QStringLiteral("/srv/s1");
-    s1.rcon.host = QStringLiteral("127.0.0.1");
+    s1.dir   = "/srv/s1";
+    s1.rcon.host = "127.0.0.1";
     s1.rcon.port = 27015;
 
     ServerConfig s2;
-    s2.name  = QStringLiteral("S2");
+    s2.name  = "S2";
     s2.appid = 2430930;
-    s2.dir   = QStringLiteral("/srv/s2");
-    s2.rcon.host = QStringLiteral("127.0.0.1");
+    s2.dir   = "/srv/s2";
+    s2.rcon.host = "127.0.0.1";
     s2.rcon.port = 27016;
 
-    mgr.servers() << s1 << s2;
+    mgr.servers().push_back(s1);
+    mgr.servers().push_back(s2);
 
     // broadcastRconCommand should return one result per server
     // (RCON will fail to connect in test env, but that's expected)
-    QStringList results = mgr.broadcastRconCommand(QStringLiteral("status"));
-    QCOMPARE(results.size(), 2);
-    QVERIFY(results.at(0).contains(QStringLiteral("[S1]")));
-    QVERIFY(results.at(1).contains(QStringLiteral("[S2]")));
+    std::vector<std::string> results = mgr.broadcastRconCommand("status");
+    EXPECT_EQ(results.size(), static_cast<size_t>(2));
+    ASSERT_TRUE(strContains(results.at(0), "[S1]"));
+    ASSERT_TRUE(strContains(results.at(1), "[S2]"));
 }
 
-QTEST_MAIN(TestServerConfig)
 
 // ---------------------------------------------------------------------------
 // Export/Import tests
 // ---------------------------------------------------------------------------
 
-void TestServerConfig::testExportServerConfig()
+TEST(ServerConfig, ExportServerConfig)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
 
-    ServerManager mgr(tmp.filePath(QStringLiteral("servers.json")));
+    ServerManager mgr(tmp.filePath("servers.json"));
 
     ServerConfig s;
-    s.name  = QStringLiteral("ExportMe");
+    s.name  = "ExportMe";
     s.appid = 730;
-    s.dir   = QStringLiteral("/srv/export");
-    s.executable = QStringLiteral("server.exe");
+    s.dir   = "/srv/export";
+    s.executable = "server.exe";
     s.mods  = { 111, 222 };
     s.disabledMods = { 222 };
     s.rcon.port = 27020;
-    mgr.servers() << s;
+    mgr.servers().push_back(s);
 
-    QString exportPath = tmp.filePath(QStringLiteral("exported.json"));
-    QVERIFY(mgr.exportServerConfig(QStringLiteral("ExportMe"), exportPath));
+    std::string exportPath = tmp.filePath("exported.json");
+    ASSERT_TRUE(mgr.exportServerConfig("ExportMe", exportPath));
 
     // Verify the file exists and contains expected data
-    QFile f(exportPath);
-    QVERIFY(f.open(QIODevice::ReadOnly));
-    QJsonDocument doc = QJsonDocument::fromJson(f.readAll());
-    QVERIFY(doc.isObject());
+    std::string f_content = readFile(exportPath);
+    ASSERT_FALSE(f_content.empty());
+    nlohmann::json doc = nlohmann::json::parse(readFile(exportPath));
 
-    QJsonObject obj = doc.object();
-    QCOMPARE(obj[QStringLiteral("name")].toString(), QStringLiteral("ExportMe"));
-    QCOMPARE(obj[QStringLiteral("appid")].toInt(), 730);
-    QCOMPARE(obj[QStringLiteral("dir")].toString(), QStringLiteral("/srv/export"));
+    // obj is just doc (nlohmann::json is already the object)
+    EXPECT_EQ(doc["name"].get<std::string>(), "ExportMe");
+    EXPECT_EQ(doc["appid"].get<int>(), 730);
+    EXPECT_EQ(doc["dir"].get<std::string>(), "/srv/export");
 
     // Verify mods and disabledMods are present
-    QJsonArray mods = obj[QStringLiteral("mods")].toArray();
-    QCOMPARE(mods.size(), 2);
-    QJsonArray disabled = obj[QStringLiteral("disabledMods")].toArray();
-    QCOMPARE(disabled.size(), 1);
-    QCOMPARE(disabled.at(0).toInt(), 222);
+    auto mods = doc["mods"];
+    EXPECT_EQ(mods.size(), static_cast<size_t>(2));
+    auto disabled = doc["disabledMods"];
+    EXPECT_EQ(disabled.size(), static_cast<size_t>(1));
+    EXPECT_EQ(disabled[0].get<int>(), 222);
 }
 
-void TestServerConfig::testExportServerNotFound()
+TEST(ServerConfig, ExportServerNotFound)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
 
-    ServerManager mgr(tmp.filePath(QStringLiteral("servers.json")));
-    QString exportPath = tmp.filePath(QStringLiteral("exported.json"));
+    ServerManager mgr(tmp.filePath("servers.json"));
+    std::string exportPath = tmp.filePath("exported.json");
 
     // No servers loaded – export should fail
-    QVERIFY(!mgr.exportServerConfig(QStringLiteral("NonExistent"), exportPath));
-    QVERIFY(!QFile::exists(exportPath));
+    EXPECT_FALSE(mgr.exportServerConfig("NonExistent", exportPath));
+    EXPECT_FALSE(fs::exists(exportPath));
 }
 
-void TestServerConfig::testImportServerConfig()
+TEST(ServerConfig, ImportServerConfig)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
 
     // First create and export a server
-    ServerManager mgr1(tmp.filePath(QStringLiteral("servers1.json")));
+    ServerManager mgr1(tmp.filePath("servers1.json"));
     ServerConfig s;
-    s.name  = QStringLiteral("Imported");
+    s.name  = "Imported";
     s.appid = 2430930;
-    s.dir   = QStringLiteral("/srv/import");
+    s.dir   = "/srv/import";
     s.mods  = { 333, 444 };
     s.disabledMods = { 444 };
-    mgr1.servers() << s;
+    mgr1.servers().push_back(s);
 
-    QString exportPath = tmp.filePath(QStringLiteral("to_import.json"));
-    QVERIFY(mgr1.exportServerConfig(QStringLiteral("Imported"), exportPath));
+    std::string exportPath = tmp.filePath("to_import.json");
+    ASSERT_TRUE(mgr1.exportServerConfig("Imported", exportPath));
 
     // Import into a fresh manager
-    ServerManager mgr2(tmp.filePath(QStringLiteral("servers2.json")));
-    QString error = mgr2.importServerConfig(exportPath);
-    QVERIFY2(error.isEmpty(), qPrintable(QStringLiteral("Import failed: ") + error));
+    ServerManager mgr2(tmp.filePath("servers2.json"));
+    std::string error = mgr2.importServerConfig(exportPath);
+    ASSERT_TRUE(error.empty()) << "Import failed: " << error;
 
-    QCOMPARE(mgr2.servers().size(), 1);
-    const ServerConfig &imported = mgr2.servers().first();
-    QCOMPARE(imported.name,  QStringLiteral("Imported"));
-    QCOMPARE(imported.appid, 2430930);
-    QCOMPARE(imported.mods,  QList<int>({ 333, 444 }));
-    QCOMPARE(imported.disabledMods, QList<int>({ 444 }));
+    EXPECT_EQ(mgr2.servers().size(), static_cast<size_t>(1));
+    const ServerConfig &imported = mgr2.servers().front();
+    EXPECT_EQ(imported.name,  "Imported");
+    EXPECT_EQ(imported.appid, 2430930);
+    EXPECT_EQ(imported.mods,  std::vector<int>({ 333, 444 }));
+    EXPECT_EQ(imported.disabledMods, std::vector<int>({ 444 }));
 }
 
-void TestServerConfig::testImportServerDuplicateName()
+TEST(ServerConfig, ImportServerDuplicateName)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
 
     // Create a server and export it
-    ServerManager mgr(tmp.filePath(QStringLiteral("servers.json")));
+    ServerManager mgr(tmp.filePath("servers.json"));
     ServerConfig s;
-    s.name  = QStringLiteral("DupeImport");
+    s.name  = "DupeImport";
     s.appid = 730;
-    s.dir   = QStringLiteral("/srv/dupe");
-    mgr.servers() << s;
+    s.dir   = "/srv/dupe";
+    mgr.servers().push_back(s);
 
-    QString exportPath = tmp.filePath(QStringLiteral("dupe.json"));
-    QVERIFY(mgr.exportServerConfig(QStringLiteral("DupeImport"), exportPath));
+    std::string exportPath = tmp.filePath("dupe.json");
+    ASSERT_TRUE(mgr.exportServerConfig("DupeImport", exportPath));
 
     // Try to import – should fail because the name already exists
-    QString error = mgr.importServerConfig(exportPath);
-    QVERIFY(!error.isEmpty());
-    QVERIFY(error.contains(QStringLiteral("Duplicate")));
-    QCOMPARE(mgr.servers().size(), 1);  // should not have added
+    std::string error = mgr.importServerConfig(exportPath);
+    EXPECT_FALSE(error.empty());
+    ASSERT_TRUE(strContains(error, "Duplicate"));
+    EXPECT_EQ(mgr.servers().size(), static_cast<size_t>(1));  // should not have added
 }
 
 // ---------------------------------------------------------------------------
 // Disabled mods tests
 // ---------------------------------------------------------------------------
 
-void TestServerConfig::testDisabledModsPersistence()
+TEST(ServerConfig, DisabledModsPersistence)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
 
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    std::string configPath = tmp.filePath("servers.json");
     ServerManager mgr(configPath);
 
     ServerConfig s;
-    s.name  = QStringLiteral("ModToggle");
+    s.name  = "ModToggle";
     s.appid = 730;
-    s.dir   = QStringLiteral("/srv/mods");
+    s.dir   = "/srv/mods";
     s.mods  = { 100, 200, 300 };
     s.disabledMods = { 200 };
-    mgr.servers() << s;
-    QVERIFY(mgr.saveConfig());
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.saveConfig());
 
     // Reload and verify
     ServerManager mgr2(configPath);
-    QVERIFY(mgr2.loadConfig());
-    QCOMPARE(mgr2.servers().size(), 1);
+    ASSERT_TRUE(mgr2.loadConfig());
+    EXPECT_EQ(mgr2.servers().size(), static_cast<size_t>(1));
 
-    const ServerConfig &loaded = mgr2.servers().first();
-    QCOMPARE(loaded.mods, QList<int>({ 100, 200, 300 }));
-    QCOMPARE(loaded.disabledMods, QList<int>({ 200 }));
+    const ServerConfig &loaded = mgr2.servers().front();
+    EXPECT_EQ(loaded.mods, std::vector<int>({ 100, 200, 300 }));
+    EXPECT_EQ(loaded.disabledMods, std::vector<int>({ 200 }));
 }
 
-void TestServerConfig::testDisabledModsDefaultEmpty()
+TEST(ServerConfig, DisabledModsDefaultEmpty)
 {
     ServerConfig s;
-    QVERIFY(s.disabledMods.isEmpty());
+    ASSERT_TRUE(s.disabledMods.empty());
 }
 
 // ---------------------------------------------------------------------------
 // Game templates tests
 // ---------------------------------------------------------------------------
 
-void TestServerConfig::testBuiltinTemplatesNotEmpty()
+TEST(ServerConfig, BuiltinTemplatesNotEmpty)
 {
-    QList<GameTemplate> templates = GameTemplate::builtinTemplates();
-    QVERIFY(templates.size() > 0);
+    std::vector<GameTemplate> templates = GameTemplate::builtinTemplates();
+    ASSERT_TRUE(templates.size() > 0);
     // Should contain at least a few well-known games
-    QVERIFY(templates.size() >= 4);
+    ASSERT_TRUE(templates.size() >= 4);
 }
 
-void TestServerConfig::testBuiltinTemplatesHaveValidAppIds()
+TEST(ServerConfig, BuiltinTemplatesHaveValidAppIds)
 {
-    QList<GameTemplate> templates = GameTemplate::builtinTemplates();
+    std::vector<GameTemplate> templates = GameTemplate::builtinTemplates();
     for (const GameTemplate &t : std::as_const(templates)) {
         // Each template must have a non-empty display name
-        QVERIFY2(!t.displayName.isEmpty(),
-                 qPrintable(QStringLiteral("Template has empty displayName")));
+        ASSERT_TRUE(!t.displayName.empty()) << ("Template has empty displayName");
         // "Custom" entry has appid 0, all others must be positive
-        if (!t.displayName.contains(QStringLiteral("Custom"))) {
-            QVERIFY2(t.appid > 0,
-                     qPrintable(QStringLiteral("Template '%1' has non-positive appid").arg(t.displayName)));
-            QVERIFY2(!t.executable.isEmpty(),
-                     qPrintable(QStringLiteral("Template '%1' has empty executable").arg(t.displayName)));
+        if (!strContains(t.displayName, "Custom")) {
+            ASSERT_TRUE(t.appid > 0) << "Template '" << t.displayName << "' has non-positive appid";
+            ASSERT_TRUE(!t.executable.empty()) << "Template '" << t.displayName << "' has empty executable";
         }
     }
 }
 
-void TestServerConfig::testBuiltinTemplatesContainCustomEntry()
+TEST(ServerConfig, BuiltinTemplatesContainCustomEntry)
 {
-    QList<GameTemplate> templates = GameTemplate::builtinTemplates();
+    std::vector<GameTemplate> templates = GameTemplate::builtinTemplates();
     bool foundCustom = false;
     for (const GameTemplate &t : std::as_const(templates)) {
-        if (t.displayName.contains(QStringLiteral("Custom"))) {
+        if (strContains(t.displayName, "Custom")) {
             foundCustom = true;
-            QCOMPARE(t.appid, 0);
+            EXPECT_EQ(t.appid, 0);
             break;
         }
     }
-    QVERIFY2(foundCustom, "Expected a 'Custom' template entry");
+    ASSERT_TRUE(foundCustom) << "Expected a 'Custom' template entry";
 }
 
 // ---------------------------------------------------------------------------
 // Uptime tracking tests
 // ---------------------------------------------------------------------------
 
-void TestServerConfig::testUptimeNotRunning()
+TEST(ServerConfig, UptimeNotRunning)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
 
-    ServerManager mgr(tmp.filePath(QStringLiteral("servers.json")));
+    ServerManager mgr(tmp.filePath("servers.json"));
     ServerConfig s;
-    s.name  = QStringLiteral("UptimeTest");
+    s.name  = "UptimeTest";
     s.appid = 730;
-    s.dir   = QStringLiteral("/srv/test");
-    mgr.servers() << s;
+    s.dir   = "/srv/test";
+    mgr.servers().push_back(s);
 
     // Server is not running, so uptime should be -1
-    QCOMPARE(mgr.serverUptimeSeconds(QStringLiteral("UptimeTest")), qint64(-1));
-    QVERIFY(!mgr.serverStartTime(QStringLiteral("UptimeTest")).isValid());
+    EXPECT_EQ(mgr.serverUptimeSeconds("UptimeTest"), int64_t(-1));
+    EXPECT_EQ(mgr.serverStartTime("UptimeTest").time_since_epoch().count(), 0);
 }
 
-void TestServerConfig::testStartTimeRecorded()
+TEST(ServerConfig, StartTimeRecorded)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
 
-    ServerManager mgr(tmp.filePath(QStringLiteral("servers.json")));
+    ServerManager mgr(tmp.filePath("servers.json"));
 
     // Before any server starts, start time should be invalid
-    QVERIFY(!mgr.serverStartTime(QStringLiteral("NoSuchServer")).isValid());
-    QCOMPARE(mgr.serverUptimeSeconds(QStringLiteral("NoSuchServer")), qint64(-1));
+    EXPECT_EQ(mgr.serverStartTime("NoSuchServer").time_since_epoch().count(), 0);
+    EXPECT_EQ(mgr.serverUptimeSeconds("NoSuchServer"), int64_t(-1));
 }
 
 // ---------------------------------------------------------------------------
 // Crash backoff tests
 // ---------------------------------------------------------------------------
 
-void TestServerConfig::testCrashCountDefault()
+TEST(ServerConfig, CrashCountDefault)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
 
-    ServerManager mgr(tmp.filePath(QStringLiteral("servers.json")));
+    ServerManager mgr(tmp.filePath("servers.json"));
 
     // Default crash count should be 0
-    QCOMPARE(mgr.crashCount(QStringLiteral("AnyServer")), 0);
+    EXPECT_EQ(mgr.crashCount("AnyServer"), 0);
 }
 
-void TestServerConfig::testCrashCountReset()
+TEST(ServerConfig, CrashCountReset)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
 
-    ServerManager mgr(tmp.filePath(QStringLiteral("servers.json")));
+    ServerManager mgr(tmp.filePath("servers.json"));
 
     // Reset should not crash even for unknown server
-    mgr.resetCrashCount(QStringLiteral("Unknown"));
-    QCOMPARE(mgr.crashCount(QStringLiteral("Unknown")), 0);
+    mgr.resetCrashCount("Unknown");
+    EXPECT_EQ(mgr.crashCount("Unknown"), 0);
 }
 
-void TestServerConfig::testCrashBackoffConstants()
+TEST(ServerConfig, CrashBackoffConstants)
 {
     // Verify the backoff constants are sensible
-    QVERIFY(ServerManager::kMaxCrashRestarts > 0);
-    QVERIFY(ServerManager::kCrashBackoffBaseMs > 0);
-    QCOMPARE(ServerManager::kMaxCrashRestarts, 5);
-    QCOMPARE(ServerManager::kCrashBackoffBaseMs, 2000);
+    ASSERT_TRUE(ServerManager::kMaxCrashRestarts > 0);
+    ASSERT_TRUE(ServerManager::kCrashBackoffBaseMs > 0);
+    EXPECT_EQ(ServerManager::kMaxCrashRestarts, 5);
+    EXPECT_EQ(ServerManager::kCrashBackoffBaseMs, 2000);
 }
 
 // ---------------------------------------------------------------------------
 // Notes field tests
 // ---------------------------------------------------------------------------
 
-void TestServerConfig::testNotesPersistence()
+TEST(ServerConfig, NotesPersistence)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
 
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    std::string configPath = tmp.filePath("servers.json");
     ServerManager mgr(configPath);
 
     ServerConfig s;
-    s.name  = QStringLiteral("NotesServer");
+    s.name  = "NotesServer";
     s.appid = 730;
-    s.dir   = QStringLiteral("/srv/notes");
-    s.notes = QStringLiteral("This is a test note\nwith multiple lines.");
-    mgr.servers() << s;
-    QVERIFY(mgr.saveConfig());
+    s.dir   = "/srv/notes";
+    s.notes = "This is a test note\nwith multiple lines.";
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.saveConfig());
 
     // Reload and verify notes are preserved
     ServerManager mgr2(configPath);
-    QVERIFY(mgr2.loadConfig());
-    QCOMPARE(mgr2.servers().size(), 1);
-    QCOMPARE(mgr2.servers().first().notes,
-             QStringLiteral("This is a test note\nwith multiple lines."));
+    ASSERT_TRUE(mgr2.loadConfig());
+    EXPECT_EQ(mgr2.servers().size(), static_cast<size_t>(1));
+    EXPECT_EQ(mgr2.servers().front().notes,
+             "This is a test note\nwith multiple lines.");
 }
 
-void TestServerConfig::testNotesDefaultEmpty()
+TEST(ServerConfig, NotesDefaultEmpty)
 {
     ServerConfig s;
-    QVERIFY(s.notes.isEmpty());
+    ASSERT_TRUE(s.notes.empty());
 }
 
-void TestServerConfig::testNotesExportImport()
+TEST(ServerConfig, NotesExportImport)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
 
-    ServerManager mgr1(tmp.filePath(QStringLiteral("servers1.json")));
+    ServerManager mgr1(tmp.filePath("servers1.json"));
     ServerConfig s;
-    s.name  = QStringLiteral("NotesExport");
+    s.name  = "NotesExport";
     s.appid = 730;
-    s.dir   = QStringLiteral("/srv/notes");
-    s.notes = QStringLiteral("Important server info");
-    mgr1.servers() << s;
+    s.dir   = "/srv/notes";
+    s.notes = "Important server info";
+    mgr1.servers().push_back(s);
 
-    QString exportPath = tmp.filePath(QStringLiteral("exported.json"));
-    QVERIFY(mgr1.exportServerConfig(QStringLiteral("NotesExport"), exportPath));
+    std::string exportPath = tmp.filePath("exported.json");
+    ASSERT_TRUE(mgr1.exportServerConfig("NotesExport", exportPath));
 
     // Import into a fresh manager
-    ServerManager mgr2(tmp.filePath(QStringLiteral("servers2.json")));
-    QString error = mgr2.importServerConfig(exportPath);
-    QVERIFY2(error.isEmpty(), qPrintable(QStringLiteral("Import failed: ") + error));
+    ServerManager mgr2(tmp.filePath("servers2.json"));
+    std::string error = mgr2.importServerConfig(exportPath);
+    ASSERT_TRUE(error.empty()) << "Import failed: " << error;
 
-    QCOMPARE(mgr2.servers().size(), 1);
-    QCOMPARE(mgr2.servers().first().notes, QStringLiteral("Important server info"));
+    EXPECT_EQ(mgr2.servers().size(), static_cast<size_t>(1));
+    EXPECT_EQ(mgr2.servers().front().notes, "Important server info");
 }
 
 // ---------------------------------------------------------------------------
 // Mod ordering tests
 // ---------------------------------------------------------------------------
 
-void TestServerConfig::testModOrderPreserved()
+TEST(ServerConfig, ModOrderPreserved)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
 
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    std::string configPath = tmp.filePath("servers.json");
     ServerManager mgr(configPath);
 
     ServerConfig s;
-    s.name  = QStringLiteral("ModOrder");
+    s.name  = "ModOrder";
     s.appid = 730;
-    s.dir   = QStringLiteral("/srv/mods");
+    s.dir   = "/srv/mods";
     s.mods  = { 300, 100, 200 };   // specific order
-    mgr.servers() << s;
-    QVERIFY(mgr.saveConfig());
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.saveConfig());
 
     // Reload and verify order is preserved
     ServerManager mgr2(configPath);
-    QVERIFY(mgr2.loadConfig());
-    QCOMPARE(mgr2.servers().first().mods, QList<int>({ 300, 100, 200 }));
+    ASSERT_TRUE(mgr2.loadConfig());
+    EXPECT_EQ(mgr2.servers().front().mods, std::vector<int>({ 300, 100, 200 }));
 
     // Reorder and save again
     mgr2.servers()[0].mods = { 200, 300, 100 };
-    QVERIFY(mgr2.saveConfig());
+    ASSERT_TRUE(mgr2.saveConfig());
 
     ServerManager mgr3(configPath);
-    QVERIFY(mgr3.loadConfig());
-    QCOMPARE(mgr3.servers().first().mods, QList<int>({ 200, 300, 100 }));
+    ASSERT_TRUE(mgr3.loadConfig());
+    EXPECT_EQ(mgr3.servers().front().mods, std::vector<int>({ 200, 300, 100 }));
 }
 
 // ---------------------------------------------------------------------------
 // Update rollback tests
 // ---------------------------------------------------------------------------
 
-void TestServerConfig::testUpdateModsReturnsBool()
+TEST(ServerConfig, UpdateModsReturnsBool)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
 
-    ServerManager mgr(tmp.filePath(QStringLiteral("servers.json")));
+    ServerManager mgr(tmp.filePath("servers.json"));
 
     ServerConfig s;
-    s.name  = QStringLiteral("RollbackTest");
+    s.name  = "RollbackTest";
     s.appid = 730;
-    s.dir   = tmp.filePath(QStringLiteral("serverdir"));
-    s.backupFolder = tmp.filePath(QStringLiteral("backups"));
+    s.dir   = tmp.filePath("serverdir");
+    s.backupFolder = tmp.filePath("backups");
     s.mods  = { 111 };
-    mgr.servers() << s;
+    mgr.servers().push_back(s);
 
     // SteamCMD is not available in test environment, so updateMods should
     // fail gracefully and return false
     bool result = mgr.updateMods(mgr.servers()[0]);
-    QVERIFY(!result);  // Expected to fail since steamcmd is not available
+    EXPECT_FALSE(result);  // Expected to fail since steamcmd is not available
 }
 
 // ---------------------------------------------------------------------------
 // Discord webhook URL field tests
 // ---------------------------------------------------------------------------
 
-void TestServerConfig::testDiscordWebhookUrlPersistence()
+TEST(ServerConfig, DiscordWebhookUrlPersistence)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
 
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    std::string configPath = tmp.filePath("servers.json");
     ServerManager mgr(configPath);
 
     ServerConfig s;
-    s.name  = QStringLiteral("WebhookServer");
+    s.name  = "WebhookServer";
     s.appid = 730;
-    s.dir   = QStringLiteral("/srv/webhook");
-    s.discordWebhookUrl = QStringLiteral("https://discord.com/api/webhooks/123/abc");
-    mgr.servers() << s;
-    QVERIFY(mgr.saveConfig());
+    s.dir   = "/srv/webhook";
+    s.discordWebhookUrl = "https://discord.com/api/webhooks/123/abc";
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.saveConfig());
 
     // Reload and verify
     ServerManager mgr2(configPath);
-    QVERIFY(mgr2.loadConfig());
-    QCOMPARE(mgr2.servers().size(), 1);
-    QCOMPARE(mgr2.servers().first().discordWebhookUrl,
-             QStringLiteral("https://discord.com/api/webhooks/123/abc"));
+    ASSERT_TRUE(mgr2.loadConfig());
+    EXPECT_EQ(mgr2.servers().size(), static_cast<size_t>(1));
+    EXPECT_EQ(mgr2.servers().front().discordWebhookUrl,
+             "https://discord.com/api/webhooks/123/abc");
 }
 
-void TestServerConfig::testDiscordWebhookUrlDefaultEmpty()
+TEST(ServerConfig, DiscordWebhookUrlDefaultEmpty)
 {
     ServerConfig s;
-    QVERIFY(s.discordWebhookUrl.isEmpty());
+    ASSERT_TRUE(s.discordWebhookUrl.empty());
 }
 
-void TestServerConfig::testDiscordWebhookUrlExportImport()
+TEST(ServerConfig, DiscordWebhookUrlExportImport)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
 
-    ServerManager mgr1(tmp.filePath(QStringLiteral("servers1.json")));
+    ServerManager mgr1(tmp.filePath("servers1.json"));
     ServerConfig s;
-    s.name  = QStringLiteral("WebhookExport");
+    s.name  = "WebhookExport";
     s.appid = 730;
-    s.dir   = QStringLiteral("/srv/webhook");
-    s.discordWebhookUrl = QStringLiteral("https://discord.com/api/webhooks/456/def");
-    mgr1.servers() << s;
+    s.dir   = "/srv/webhook";
+    s.discordWebhookUrl = "https://discord.com/api/webhooks/456/def";
+    mgr1.servers().push_back(s);
 
-    QString exportPath = tmp.filePath(QStringLiteral("exported.json"));
-    QVERIFY(mgr1.exportServerConfig(QStringLiteral("WebhookExport"), exportPath));
+    std::string exportPath = tmp.filePath("exported.json");
+    ASSERT_TRUE(mgr1.exportServerConfig("WebhookExport", exportPath));
 
-    ServerManager mgr2(tmp.filePath(QStringLiteral("servers2.json")));
-    QString error = mgr2.importServerConfig(exportPath);
-    QVERIFY2(error.isEmpty(), qPrintable(QStringLiteral("Import failed: ") + error));
+    ServerManager mgr2(tmp.filePath("servers2.json"));
+    std::string error = mgr2.importServerConfig(exportPath);
+    ASSERT_TRUE(error.empty()) << "Import failed: " << error;
 
-    QCOMPARE(mgr2.servers().size(), 1);
-    QCOMPARE(mgr2.servers().first().discordWebhookUrl,
-             QStringLiteral("https://discord.com/api/webhooks/456/def"));
+    EXPECT_EQ(mgr2.servers().size(), static_cast<size_t>(1));
+    EXPECT_EQ(mgr2.servers().front().discordWebhookUrl,
+             "https://discord.com/api/webhooks/456/def");
 }
 
 // ---------------------------------------------------------------------------
 // Auto-start on launch tests
 // ---------------------------------------------------------------------------
 
-void TestServerConfig::testAutoStartOnLaunchPersistence()
+TEST(ServerConfig, AutoStartOnLaunchPersistence)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
 
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    std::string configPath = tmp.filePath("servers.json");
     ServerManager mgr(configPath);
 
     ServerConfig s;
-    s.name  = QStringLiteral("AutoStartServer");
+    s.name  = "AutoStartServer";
     s.appid = 730;
-    s.dir   = QStringLiteral("/srv/autostart");
+    s.dir   = "/srv/autostart";
     s.autoStartOnLaunch = true;
-    mgr.servers() << s;
-    QVERIFY(mgr.saveConfig());
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.saveConfig());
 
     ServerManager mgr2(configPath);
-    QVERIFY(mgr2.loadConfig());
-    QCOMPARE(mgr2.servers().size(), 1);
-    QCOMPARE(mgr2.servers().first().autoStartOnLaunch, true);
+    ASSERT_TRUE(mgr2.loadConfig());
+    EXPECT_EQ(mgr2.servers().size(), static_cast<size_t>(1));
+    EXPECT_EQ(mgr2.servers().front().autoStartOnLaunch, true);
 }
 
-void TestServerConfig::testAutoStartOnLaunchDefaultFalse()
+TEST(ServerConfig, AutoStartOnLaunchDefaultFalse)
 {
     ServerConfig s;
-    QCOMPARE(s.autoStartOnLaunch, false);
+    EXPECT_EQ(s.autoStartOnLaunch, false);
 }
 
-void TestServerConfig::testAutoStartServersMethod()
+TEST(ServerConfig, AutoStartServersMethod)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
 
-    ServerManager mgr(tmp.filePath(QStringLiteral("servers.json")));
+    ServerManager mgr(tmp.filePath("servers.json"));
 
     ServerConfig s1;
-    s1.name  = QStringLiteral("Server1");
+    s1.name  = "Server1";
     s1.appid = 730;
-    s1.dir   = QStringLiteral("/srv/s1");
+    s1.dir   = "/srv/s1";
     s1.autoStartOnLaunch = true;
 
     ServerConfig s2;
-    s2.name  = QStringLiteral("Server2");
+    s2.name  = "Server2";
     s2.appid = 730;
-    s2.dir   = QStringLiteral("/srv/s2");
+    s2.dir   = "/srv/s2";
     s2.autoStartOnLaunch = false;
 
-    mgr.servers() << s1 << s2;
+    mgr.servers().push_back(s1);
+    mgr.servers().push_back(s2);
 
     // autoStartServers should not crash even when executables don't exist
     mgr.autoStartServers();
 
+    // Give forked children time to exec and exit (Linux: fork always succeeds)
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    mgr.tick();
+
     // Server1 should have had a start attempt (won't actually run, but
     // autoStartServers should gracefully handle missing executables)
-    QVERIFY(!mgr.isServerRunning(mgr.servers()[0]));
-    QVERIFY(!mgr.isServerRunning(mgr.servers()[1]));
+    EXPECT_FALSE(mgr.isServerRunning(mgr.servers()[0]));
+    EXPECT_FALSE(mgr.isServerRunning(mgr.servers()[1]));
 }
 
 // ---------------------------------------------------------------------------
 // Scheduled RCON commands tests
 // ---------------------------------------------------------------------------
 
-void TestServerConfig::testScheduledRconCommandsPersistence()
+TEST(ServerConfig, ScheduledRconCommandsPersistence)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
 
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    std::string configPath = tmp.filePath("servers.json");
     ServerManager mgr(configPath);
 
     ServerConfig s;
-    s.name  = QStringLiteral("RconCmdServer");
+    s.name  = "RconCmdServer";
     s.appid = 730;
-    s.dir   = QStringLiteral("/srv/rconcmd");
-    s.scheduledRconCommands = { QStringLiteral("say Hello"), QStringLiteral("status") };
+    s.dir   = "/srv/rconcmd";
+    s.scheduledRconCommands = { "say Hello", "status" };
     s.rconCommandIntervalMinutes = 15;
-    mgr.servers() << s;
-    QVERIFY(mgr.saveConfig());
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.saveConfig());
 
     ServerManager mgr2(configPath);
-    QVERIFY(mgr2.loadConfig());
-    QCOMPARE(mgr2.servers().size(), 1);
-    QCOMPARE(mgr2.servers().first().scheduledRconCommands,
-             QStringList({ QStringLiteral("say Hello"), QStringLiteral("status") }));
-    QCOMPARE(mgr2.servers().first().rconCommandIntervalMinutes, 15);
+    ASSERT_TRUE(mgr2.loadConfig());
+    EXPECT_EQ(mgr2.servers().size(), static_cast<size_t>(1));
+    EXPECT_EQ(mgr2.servers().front().scheduledRconCommands,
+             std::vector<std::string>({ "say Hello", "status" }));
+    EXPECT_EQ(mgr2.servers().front().rconCommandIntervalMinutes, 15);
 }
 
-void TestServerConfig::testScheduledRconCommandsDefaultEmpty()
+TEST(ServerConfig, ScheduledRconCommandsDefaultEmpty)
 {
     ServerConfig s;
-    QVERIFY(s.scheduledRconCommands.isEmpty());
-    QCOMPARE(s.rconCommandIntervalMinutes, 0);
+    ASSERT_TRUE(s.scheduledRconCommands.empty());
+    EXPECT_EQ(s.rconCommandIntervalMinutes, 0);
 }
 
-void TestServerConfig::testRconCommandIntervalValidation()
+TEST(ServerConfig, RconCommandIntervalValidation)
 {
     ServerConfig s;
-    s.name  = QStringLiteral("ValidServer");
+    s.name  = "ValidServer";
     s.appid = 730;
-    s.dir   = QStringLiteral("/srv/valid");
+    s.dir   = "/srv/valid";
 
     // Valid interval
     s.rconCommandIntervalMinutes = 10;
-    QVERIFY(s.validate().isEmpty());
+    ASSERT_TRUE(s.validate().empty());
 
     // Zero is valid (disabled)
     s.rconCommandIntervalMinutes = 0;
-    QVERIFY(s.validate().isEmpty());
+    ASSERT_TRUE(s.validate().empty());
 
     // Negative is invalid
     s.rconCommandIntervalMinutes = -5;
-    QVERIFY(!s.validate().isEmpty());
-    QVERIFY(s.validate().first().contains(QStringLiteral("RCON command interval")));
+    EXPECT_FALSE(s.validate().empty());
+    ASSERT_TRUE(strContains(s.validate().front(), "RCON command interval"));
 }
 
-void TestServerConfig::testSchedulerRconTimer()
+TEST(ServerConfig, SchedulerRconTimer)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
 
-    ServerManager mgr(tmp.filePath(QStringLiteral("servers.json")));
+    ServerManager mgr(tmp.filePath("servers.json"));
     ServerConfig s;
-    s.name = QStringLiteral("RconTimerServer");
+    s.name = "RconTimerServer";
     s.appid = 730;
     s.dir = tmp.path();
     s.rconCommandIntervalMinutes = 5;
-    s.scheduledRconCommands = { QStringLiteral("status") };
-    mgr.servers() << s;
+    s.scheduledRconCommands = { "status" };
+    mgr.servers().push_back(s);
 
     SchedulerModule scheduler(&mgr);
 
     // Start and stop should work without crashes
-    scheduler.startScheduler(QStringLiteral("RconTimerServer"));
-    scheduler.stopScheduler(QStringLiteral("RconTimerServer"));
+    scheduler.startScheduler("RconTimerServer");
+    scheduler.stopScheduler("RconTimerServer");
 
     // startAll / stopAll should also work
     scheduler.startAll();
@@ -1559,761 +1371,756 @@ void TestServerConfig::testSchedulerRconTimer()
 // Favorite servers tests
 // ---------------------------------------------------------------------------
 
-void TestServerConfig::testFavoritePersistence()
+TEST(ServerConfig, FavoritePersistence)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
 
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    std::string configPath = tmp.filePath("servers.json");
     ServerManager mgr(configPath);
 
     ServerConfig s;
-    s.name  = QStringLiteral("FavServer");
+    s.name  = "FavServer";
     s.appid = 730;
-    s.dir   = QStringLiteral("/srv/fav");
+    s.dir   = "/srv/fav";
     s.favorite = true;
-    mgr.servers() << s;
-    QVERIFY(mgr.saveConfig());
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.saveConfig());
 
     ServerManager mgr2(configPath);
-    QVERIFY(mgr2.loadConfig());
-    QCOMPARE(mgr2.servers().size(), 1);
-    QCOMPARE(mgr2.servers().first().favorite, true);
+    ASSERT_TRUE(mgr2.loadConfig());
+    EXPECT_EQ(mgr2.servers().size(), static_cast<size_t>(1));
+    EXPECT_EQ(mgr2.servers().front().favorite, true);
 }
 
-void TestServerConfig::testFavoriteDefaultFalse()
+TEST(ServerConfig, FavoriteDefaultFalse)
 {
     ServerConfig s;
-    QCOMPARE(s.favorite, false);
+    EXPECT_EQ(s.favorite, false);
 }
 
-void TestServerConfig::testFavoriteExportImport()
+TEST(ServerConfig, FavoriteExportImport)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
 
-    ServerManager mgr1(tmp.filePath(QStringLiteral("servers1.json")));
+    ServerManager mgr1(tmp.filePath("servers1.json"));
     ServerConfig s;
-    s.name  = QStringLiteral("FavExport");
+    s.name  = "FavExport";
     s.appid = 730;
-    s.dir   = QStringLiteral("/srv/fav");
+    s.dir   = "/srv/fav";
     s.favorite = true;
-    mgr1.servers() << s;
+    mgr1.servers().push_back(s);
 
-    QString exportPath = tmp.filePath(QStringLiteral("exported.json"));
-    QVERIFY(mgr1.exportServerConfig(QStringLiteral("FavExport"), exportPath));
+    std::string exportPath = tmp.filePath("exported.json");
+    ASSERT_TRUE(mgr1.exportServerConfig("FavExport", exportPath));
 
-    ServerManager mgr2(tmp.filePath(QStringLiteral("servers2.json")));
-    QString error = mgr2.importServerConfig(exportPath);
-    QVERIFY2(error.isEmpty(), qPrintable(QStringLiteral("Import failed: ") + error));
+    ServerManager mgr2(tmp.filePath("servers2.json"));
+    std::string error = mgr2.importServerConfig(exportPath);
+    ASSERT_TRUE(error.empty()) << "Import failed: " << error;
 
-    QCOMPARE(mgr2.servers().size(), 1);
-    QCOMPARE(mgr2.servers().first().favorite, true);
+    EXPECT_EQ(mgr2.servers().size(), static_cast<size_t>(1));
+    EXPECT_EQ(mgr2.servers().front().favorite, true);
 }
 
 // ---------------------------------------------------------------------------
 // Validation: RCON command interval
 // ---------------------------------------------------------------------------
 
-void TestServerConfig::testValidateRconIntervalNegative()
+TEST(ServerConfig, ValidateRconIntervalNegative)
 {
     ServerConfig s;
-    s.name  = QStringLiteral("IntervalTest");
+    s.name  = "IntervalTest";
     s.appid = 730;
-    s.dir   = QStringLiteral("/srv/interval");
+    s.dir   = "/srv/interval";
     s.rconCommandIntervalMinutes = -1;
 
-    QStringList errors = s.validate();
-    QVERIFY(!errors.isEmpty());
+    std::vector<std::string> errors = s.validate();
+    EXPECT_FALSE(errors.empty());
     bool found = false;
-    for (const QString &e : errors) {
-        if (e.contains(QStringLiteral("RCON command interval")))
+    for (const auto &e : errors) {
+        if (strContains(e, "RCON command interval"))
             found = true;
     }
-    QVERIFY(found);
+    ASSERT_TRUE(found);
 }
 
 // ---------------------------------------------------------------------------
 // RCON password obfuscation tests
 // ---------------------------------------------------------------------------
 
-void TestServerConfig::testRconPasswordObfuscatedOnDisk()
+TEST(ServerConfig, RconPasswordObfuscatedOnDisk)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
 
     ServerManager mgr(configPath);
     ServerConfig s;
-    s.name  = QStringLiteral("ObfTest");
+    s.name  = "ObfTest";
     s.appid = 730;
-    s.dir   = QStringLiteral("/srv/obf");
-    s.rcon.password = QStringLiteral("mySecret123");
-    mgr.servers() << s;
-    QVERIFY(mgr.saveConfig());
+    s.dir   = "/srv/obf";
+    s.rcon.password = "mySecret123";
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.saveConfig());
 
     // Read raw JSON and verify password is not stored in plaintext
-    QFile file(configPath);
-    QVERIFY(file.open(QIODevice::ReadOnly));
-    QByteArray raw = file.readAll();
-    QVERIFY(!raw.contains("mySecret123"));
-    QVERIFY(raw.contains("obf:"));
+    std::string raw = readFile(configPath);
+    ASSERT_FALSE(raw.empty());
+    EXPECT_FALSE(strContains(raw, "mySecret123"));
+    ASSERT_TRUE(strContains(raw, "obf:"));
 }
 
-void TestServerConfig::testRconPasswordLegacyPlaintext()
+TEST(ServerConfig, RconPasswordLegacyPlaintext)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
 
     // Write legacy plaintext config
-    QJsonArray arr;
-    QJsonObject obj;
-    obj[QStringLiteral("name")]  = QStringLiteral("Legacy");
-    obj[QStringLiteral("appid")] = 730;
-    obj[QStringLiteral("dir")]   = QStringLiteral("/srv/legacy");
-    QJsonObject rcon;
-    rcon[QStringLiteral("host")]     = QStringLiteral("127.0.0.1");
-    rcon[QStringLiteral("port")]     = 27015;
-    rcon[QStringLiteral("password")] = QStringLiteral("plainPass");
-    obj[QStringLiteral("rcon")] = rcon;
-    arr << obj;
+    nlohmann::json arr = nlohmann::json::array();
+    nlohmann::json obj = nlohmann::json::object();
+    obj["name"] = "Legacy";
+    obj["appid"] = 730;
+    obj["dir"] = "/srv/legacy";
+    nlohmann::json rcon;
+    rcon["host"] = "127.0.0.1";
+    rcon["port"] = 27015;
+    rcon["password"] = "plainPass";
+    obj["rcon"] = rcon;
+    arr.push_back(obj);
 
-    QFile file(configPath);
-    QVERIFY(file.open(QIODevice::WriteOnly));
-    file.write(QJsonDocument(arr).toJson());
-    file.close();
+    writeFile(configPath, arr.dump());
 
     ServerManager mgr(configPath);
-    QVERIFY(mgr.loadConfig());
-    QCOMPARE(mgr.servers().first().rcon.password, QStringLiteral("plainPass"));
+    ASSERT_TRUE(mgr.loadConfig());
+    EXPECT_EQ(mgr.servers().front().rcon.password, "plainPass");
 }
 
-void TestServerConfig::testRconPasswordRoundTrip()
+TEST(ServerConfig, RconPasswordRoundTrip)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
 
     ServerManager mgr(configPath);
     ServerConfig s;
-    s.name  = QStringLiteral("RoundTrip");
+    s.name  = "RoundTrip";
     s.appid = 730;
-    s.dir   = QStringLiteral("/srv/rt");
-    s.rcon.password = QStringLiteral("p@$$w0rd!&<>\"");
-    mgr.servers() << s;
-    QVERIFY(mgr.saveConfig());
+    s.dir   = "/srv/rt";
+    std::string specialPass = "p@$$w0rd!&<>\""; s.rcon.password = specialPass;
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.saveConfig());
 
     ServerManager mgr2(configPath);
-    QVERIFY(mgr2.loadConfig());
-    QCOMPARE(mgr2.servers().first().rcon.password, QStringLiteral("p@$$w0rd!&<>\""));
+    ASSERT_TRUE(mgr2.loadConfig());
+    EXPECT_EQ(mgr2.servers().front().rcon.password, specialPass);
 }
 
 // ---------------------------------------------------------------------------
 // Console logging tests
 // ---------------------------------------------------------------------------
 
-void TestServerConfig::testConsoleLoggingPersistence()
+TEST(ServerConfig, ConsoleLoggingPersistence)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
 
     ServerManager mgr(configPath);
     ServerConfig s;
-    s.name  = QStringLiteral("ConsoleLogTest");
+    s.name  = "ConsoleLogTest";
     s.appid = 730;
-    s.dir   = QStringLiteral("/srv/cl");
+    s.dir   = "/srv/cl";
     s.consoleLogging = true;
-    mgr.servers() << s;
-    QVERIFY(mgr.saveConfig());
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.saveConfig());
 
     ServerManager mgr2(configPath);
-    QVERIFY(mgr2.loadConfig());
-    QCOMPARE(mgr2.servers().first().consoleLogging, true);
+    ASSERT_TRUE(mgr2.loadConfig());
+    EXPECT_EQ(mgr2.servers().front().consoleLogging, true);
 }
 
-void TestServerConfig::testConsoleLoggingDefaultFalse()
+TEST(ServerConfig, ConsoleLoggingDefaultFalse)
 {
     ServerConfig s;
-    QCOMPARE(s.consoleLogging, false);
+    EXPECT_EQ(s.consoleLogging, false);
 }
 
-void TestServerConfig::testConsoleLogWriterAppend()
+TEST(ServerConfig, ConsoleLogWriterAppend)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
 
-    ConsoleLogWriter::append(tmp.path(), QStringLiteral("TestSrv"),
-                             QStringLiteral("> status"));
-    ConsoleLogWriter::append(tmp.path(), QStringLiteral("TestSrv"),
-                             QStringLiteral("players: 5"));
+    ConsoleLogWriter::append(tmp.path(), "TestSrv",
+                             "> status");
+    ConsoleLogWriter::append(tmp.path(), "TestSrv",
+                             "players: 5");
 
-    QStringList logs = ConsoleLogWriter::listLogs(tmp.path());
-    QVERIFY(!logs.isEmpty());
+    std::vector<std::string> logs = ConsoleLogWriter::listLogs(tmp.path());
+    EXPECT_FALSE(logs.empty());
 
-    QFile file(tmp.path() + QStringLiteral("/ConsoleLogs/") + logs.first());
-    QVERIFY(file.open(QIODevice::ReadOnly | QIODevice::Text));
-    QString content = QString::fromUtf8(file.readAll());
-    QVERIFY(content.contains(QStringLiteral("> status")));
-    QVERIFY(content.contains(QStringLiteral("players: 5")));
-    QVERIFY(content.contains(QStringLiteral("[TestSrv]")));
+    std::string content = readFile(tmp.path() + "/ConsoleLogs/" + logs.front());
+    ASSERT_FALSE(content.empty());
+    ASSERT_TRUE(strContains(content, "> status"));
+    ASSERT_TRUE(strContains(content, "players: 5"));
+    ASSERT_TRUE(strContains(content, "[TestSrv]"));
 }
 
 // ---------------------------------------------------------------------------
 // Webhook template tests
 // ---------------------------------------------------------------------------
 
-void TestServerConfig::testWebhookTemplatePersistence()
+TEST(ServerConfig, WebhookTemplatePersistence)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
 
     ServerManager mgr(configPath);
     ServerConfig s;
-    s.name  = QStringLiteral("WHTpl");
+    s.name  = "WHTpl";
     s.appid = 730;
-    s.dir   = QStringLiteral("/srv/wh");
-    s.webhookTemplate = QStringLiteral("{server} just {event} at {timestamp}!");
-    mgr.servers() << s;
-    QVERIFY(mgr.saveConfig());
+    s.dir   = "/srv/wh";
+    s.webhookTemplate = "{server} just {event} at {timestamp}!";
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.saveConfig());
 
     ServerManager mgr2(configPath);
-    QVERIFY(mgr2.loadConfig());
-    QCOMPARE(mgr2.servers().first().webhookTemplate,
-             QStringLiteral("{server} just {event} at {timestamp}!"));
+    ASSERT_TRUE(mgr2.loadConfig());
+    EXPECT_EQ(mgr2.servers().front().webhookTemplate,
+             "{server} just {event} at {timestamp}!");
 }
 
-void TestServerConfig::testWebhookTemplateDefaultEmpty()
+TEST(ServerConfig, WebhookTemplateDefaultEmpty)
 {
     ServerConfig s;
-    QVERIFY(s.webhookTemplate.isEmpty());
+    ASSERT_TRUE(s.webhookTemplate.empty());
 }
 
-void TestServerConfig::testWebhookTemplateFormatMessage()
+TEST(ServerConfig, WebhookTemplateFormatMessage)
 {
-    QString tpl = QStringLiteral("{server} - {event}");
-    QString result = WebhookModule::formatMessage(tpl,
-                                                  QStringLiteral("MyServer"),
-                                                  QStringLiteral("Server started."));
-    QCOMPARE(result, QStringLiteral("MyServer - Server started."));
+    std::string tpl = "{server} - {event}";
+    std::string result = WebhookModule::formatMessage(tpl,
+                                                  "MyServer",
+                                                  "Server started.");
+    EXPECT_EQ(result, "MyServer - Server started.");
 
     // Verify timestamp placeholder is replaced
-    QString tpl2 = QStringLiteral("{timestamp}");
-    QString result2 = WebhookModule::formatMessage(tpl2,
-                                                   QStringLiteral("S"), QStringLiteral("E"));
-    QVERIFY(!result2.contains(QStringLiteral("{timestamp}")));
-    QVERIFY(!result2.isEmpty());
+    std::string tpl2 = "{timestamp}";
+    std::string result2 = WebhookModule::formatMessage(tpl2,
+                                                   "S", "E");
+    EXPECT_FALSE(strContains(result2, "{timestamp}"));
+    EXPECT_FALSE(result2.empty());
 }
 
-void TestServerConfig::testWebhookTemplateExportImport()
+TEST(ServerConfig, WebhookTemplateExportImport)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
-    QString exportPath = tmp.filePath(QStringLiteral("export.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
+    std::string exportPath = tmp.filePath("export.json");
 
     ServerManager mgr(configPath);
     ServerConfig s;
-    s.name  = QStringLiteral("WHTplExp");
+    s.name  = "WHTplExp";
     s.appid = 730;
-    s.dir   = QStringLiteral("/srv/whe");
-    s.webhookTemplate = QStringLiteral("Alert: {event}");
-    mgr.servers() << s;
-    QVERIFY(mgr.saveConfig());
+    s.dir   = "/srv/whe";
+    s.webhookTemplate = "Alert: {event}";
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.saveConfig());
 
-    QVERIFY(mgr.exportServerConfig(QStringLiteral("WHTplExp"), exportPath));
+    ASSERT_TRUE(mgr.exportServerConfig("WHTplExp", exportPath));
 
-    ServerManager mgr2(tmp.filePath(QStringLiteral("servers2.json")));
-    QString err = mgr2.importServerConfig(exportPath);
-    QVERIFY2(err.isEmpty(), qPrintable(err));
-    QCOMPARE(mgr2.servers().first().webhookTemplate, QStringLiteral("Alert: {event}"));
+    ServerManager mgr2(tmp.filePath("servers2.json"));
+    std::string err = mgr2.importServerConfig(exportPath);
+    ASSERT_TRUE(err.empty()) << (err);
+    EXPECT_EQ(mgr2.servers().front().webhookTemplate, "Alert: {event}");
 }
 
 // ---------------------------------------------------------------------------
 // Maintenance window tests
 // ---------------------------------------------------------------------------
 
-void TestServerConfig::testMaintenanceWindowPersistence()
+TEST(ServerConfig, MaintenanceWindowPersistence)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
 
     ServerManager mgr(configPath);
     ServerConfig s;
-    s.name  = QStringLiteral("MaintTest");
+    s.name  = "MaintTest";
     s.appid = 730;
-    s.dir   = QStringLiteral("/srv/maint");
+    s.dir   = "/srv/maint";
     s.maintenanceStartHour = 2;
     s.maintenanceEndHour   = 6;
-    mgr.servers() << s;
-    QVERIFY(mgr.saveConfig());
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.saveConfig());
 
     ServerManager mgr2(configPath);
-    QVERIFY(mgr2.loadConfig());
-    QCOMPARE(mgr2.servers().first().maintenanceStartHour, 2);
-    QCOMPARE(mgr2.servers().first().maintenanceEndHour,   6);
+    ASSERT_TRUE(mgr2.loadConfig());
+    EXPECT_EQ(mgr2.servers().front().maintenanceStartHour, 2);
+    EXPECT_EQ(mgr2.servers().front().maintenanceEndHour,   6);
 }
 
-void TestServerConfig::testMaintenanceWindowDefaultDisabled()
+TEST(ServerConfig, MaintenanceWindowDefaultDisabled)
 {
     ServerConfig s;
-    QCOMPARE(s.maintenanceStartHour, -1);
-    QCOMPARE(s.maintenanceEndHour,   -1);
+    EXPECT_EQ(s.maintenanceStartHour, -1);
+    EXPECT_EQ(s.maintenanceEndHour,   -1);
 }
 
-void TestServerConfig::testMaintenanceWindowValidation()
+TEST(ServerConfig, MaintenanceWindowValidation)
 {
     ServerConfig s;
-    s.name  = QStringLiteral("MaintVal");
+    s.name  = "MaintVal";
     s.appid = 730;
-    s.dir   = QStringLiteral("/srv/mv");
+    s.dir   = "/srv/mv";
 
     // Valid: disabled
     s.maintenanceStartHour = -1;
     s.maintenanceEndHour   = -1;
-    QVERIFY(s.validate().isEmpty());
+    ASSERT_TRUE(s.validate().empty());
 
     // Valid: normal range
     s.maintenanceStartHour = 2;
     s.maintenanceEndHour   = 6;
-    QVERIFY(s.validate().isEmpty());
+    ASSERT_TRUE(s.validate().empty());
 
     // Invalid: hour out of range
     s.maintenanceStartHour = 25;
-    QStringList errors = s.validate();
-    QVERIFY(!errors.isEmpty());
+    std::vector<std::string> errors = s.validate();
+    EXPECT_FALSE(errors.empty());
     bool found = false;
-    for (const QString &e : errors) {
-        if (e.contains(QStringLiteral("Maintenance start hour")))
+    for (const auto &e : errors) {
+        if (strContains(e, "Maintenance start hour"))
             found = true;
     }
-    QVERIFY(found);
+    ASSERT_TRUE(found);
 
     // Invalid: end hour out of range
     s.maintenanceStartHour = 2;
     s.maintenanceEndHour   = 30;
     errors = s.validate();
-    QVERIFY(!errors.isEmpty());
+    EXPECT_FALSE(errors.empty());
     found = false;
-    for (const QString &e : errors) {
-        if (e.contains(QStringLiteral("Maintenance end hour")))
+    for (const auto &e : errors) {
+        if (strContains(e, "Maintenance end hour"))
             found = true;
     }
-    QVERIFY(found);
+    ASSERT_TRUE(found);
 }
 
-void TestServerConfig::testMaintenanceWindowExportImport()
+TEST(ServerConfig, MaintenanceWindowExportImport)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
-    QString exportPath = tmp.filePath(QStringLiteral("export.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
+    std::string exportPath = tmp.filePath("export.json");
 
     ServerManager mgr(configPath);
     ServerConfig s;
-    s.name  = QStringLiteral("MaintExp");
+    s.name  = "MaintExp";
     s.appid = 730;
-    s.dir   = QStringLiteral("/srv/me");
+    s.dir   = "/srv/me";
     s.maintenanceStartHour = 22;
     s.maintenanceEndHour   = 4;
-    mgr.servers() << s;
-    QVERIFY(mgr.saveConfig());
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.saveConfig());
 
-    QVERIFY(mgr.exportServerConfig(QStringLiteral("MaintExp"), exportPath));
+    ASSERT_TRUE(mgr.exportServerConfig("MaintExp", exportPath));
 
-    ServerManager mgr2(tmp.filePath(QStringLiteral("servers2.json")));
-    QString err = mgr2.importServerConfig(exportPath);
-    QVERIFY2(err.isEmpty(), qPrintable(err));
-    QCOMPARE(mgr2.servers().first().maintenanceStartHour, 22);
-    QCOMPARE(mgr2.servers().first().maintenanceEndHour,    4);
+    ServerManager mgr2(tmp.filePath("servers2.json"));
+    std::string err = mgr2.importServerConfig(exportPath);
+    ASSERT_TRUE(err.empty()) << (err);
+    EXPECT_EQ(mgr2.servers().front().maintenanceStartHour, 22);
+    EXPECT_EQ(mgr2.servers().front().maintenanceEndHour,    4);
 }
 
 // ---------------------------------------------------------------------------
 // Backup compression level tests
 // ---------------------------------------------------------------------------
 
-void TestServerConfig::testBackupCompressionLevelPersistence()
+TEST(ServerConfig, BackupCompressionLevelPersistence)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
 
     ServerManager mgr(configPath);
     ServerConfig s;
-    s.name  = QStringLiteral("CompTest");
+    s.name  = "CompTest";
     s.appid = 730;
-    s.dir   = QStringLiteral("/srv/comp");
+    s.dir   = "/srv/comp";
     s.backupCompressionLevel = 9;
-    mgr.servers() << s;
-    QVERIFY(mgr.saveConfig());
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.saveConfig());
 
     ServerManager mgr2(configPath);
-    QVERIFY(mgr2.loadConfig());
-    QCOMPARE(mgr2.servers().first().backupCompressionLevel, 9);
+    ASSERT_TRUE(mgr2.loadConfig());
+    EXPECT_EQ(mgr2.servers().front().backupCompressionLevel, 9);
 }
 
-void TestServerConfig::testBackupCompressionLevelDefault()
+TEST(ServerConfig, BackupCompressionLevelDefault)
 {
     ServerConfig s;
-    QCOMPARE(s.backupCompressionLevel, 6);
+    EXPECT_EQ(s.backupCompressionLevel, 6);
 }
 
-void TestServerConfig::testBackupCompressionLevelValidation()
+TEST(ServerConfig, BackupCompressionLevelValidation)
 {
     ServerConfig s;
-    s.name  = QStringLiteral("CompVal");
+    s.name  = "CompVal";
     s.appid = 730;
-    s.dir   = QStringLiteral("/srv/cv");
+    s.dir   = "/srv/cv";
 
     // Valid: 0
     s.backupCompressionLevel = 0;
-    QVERIFY(s.validate().isEmpty());
+    ASSERT_TRUE(s.validate().empty());
 
     // Valid: 9
     s.backupCompressionLevel = 9;
-    QVERIFY(s.validate().isEmpty());
+    ASSERT_TRUE(s.validate().empty());
 
     // Invalid: negative
     s.backupCompressionLevel = -1;
-    QStringList errors = s.validate();
-    QVERIFY(!errors.isEmpty());
+    std::vector<std::string> errors = s.validate();
+    EXPECT_FALSE(errors.empty());
     bool found = false;
-    for (const QString &e : errors) {
-        if (e.contains(QStringLiteral("Backup compression level")))
+    for (const auto &e : errors) {
+        if (strContains(e, "Backup compression level"))
             found = true;
     }
-    QVERIFY(found);
+    ASSERT_TRUE(found);
 
     // Invalid: too high
     s.backupCompressionLevel = 10;
     errors = s.validate();
-    QVERIFY(!errors.isEmpty());
+    EXPECT_FALSE(errors.empty());
     found = false;
-    for (const QString &e : errors) {
-        if (e.contains(QStringLiteral("Backup compression level")))
+    for (const auto &e : errors) {
+        if (strContains(e, "Backup compression level"))
             found = true;
     }
-    QVERIFY(found);
+    ASSERT_TRUE(found);
 }
 
-void TestServerConfig::testBackupCompressionLevelExportImport()
+TEST(ServerConfig, BackupCompressionLevelExportImport)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
-    QString exportPath = tmp.filePath(QStringLiteral("export.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
+    std::string exportPath = tmp.filePath("export.json");
 
     ServerManager mgr(configPath);
     ServerConfig s;
-    s.name  = QStringLiteral("CompExp");
+    s.name  = "CompExp";
     s.appid = 730;
-    s.dir   = QStringLiteral("/srv/ce");
+    s.dir   = "/srv/ce";
     s.backupCompressionLevel = 3;
-    mgr.servers() << s;
-    QVERIFY(mgr.saveConfig());
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.saveConfig());
 
-    QVERIFY(mgr.exportServerConfig(QStringLiteral("CompExp"), exportPath));
+    ASSERT_TRUE(mgr.exportServerConfig("CompExp", exportPath));
 
-    ServerManager mgr2(tmp.filePath(QStringLiteral("servers2.json")));
-    QString err = mgr2.importServerConfig(exportPath);
-    QVERIFY2(err.isEmpty(), qPrintable(err));
-    QCOMPARE(mgr2.servers().first().backupCompressionLevel, 3);
+    ServerManager mgr2(tmp.filePath("servers2.json"));
+    std::string err = mgr2.importServerConfig(exportPath);
+    ASSERT_TRUE(err.empty()) << (err);
+    EXPECT_EQ(mgr2.servers().front().backupCompressionLevel, 3);
 }
 
 // ---------------------------------------------------------------------------
 // Max players tests
 // ---------------------------------------------------------------------------
 
-void TestServerConfig::testMaxPlayersDefault()
+TEST(ServerConfig, MaxPlayersDefault)
 {
     ServerConfig s;
-    QCOMPARE(s.maxPlayers, 0);
+    EXPECT_EQ(s.maxPlayers, 0);
 }
 
-void TestServerConfig::testMaxPlayersPersistence()
+TEST(ServerConfig, MaxPlayersPersistence)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
 
     ServerManager mgr(configPath);
     ServerConfig s;
-    s.name  = QStringLiteral("MaxPTest");
+    s.name  = "MaxPTest";
     s.appid = 730;
-    s.dir   = QStringLiteral("/srv/mp");
+    s.dir   = "/srv/mp";
     s.maxPlayers = 64;
-    mgr.servers() << s;
-    QVERIFY(mgr.saveConfig());
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.saveConfig());
 
     ServerManager mgr2(configPath);
-    QVERIFY(mgr2.loadConfig());
-    QCOMPARE(mgr2.servers().first().maxPlayers, 64);
+    ASSERT_TRUE(mgr2.loadConfig());
+    EXPECT_EQ(mgr2.servers().front().maxPlayers, 64);
 }
 
-void TestServerConfig::testMaxPlayersValidation()
+TEST(ServerConfig, MaxPlayersValidation)
 {
     ServerConfig s;
-    s.name  = QStringLiteral("MaxPVal");
+    s.name  = "MaxPVal";
     s.appid = 730;
-    s.dir   = QStringLiteral("/srv/mpv");
+    s.dir   = "/srv/mpv";
 
     // Valid: 0 (unlimited)
     s.maxPlayers = 0;
-    QVERIFY(s.validate().isEmpty());
+    ASSERT_TRUE(s.validate().empty());
 
     // Valid: positive
     s.maxPlayers = 100;
-    QVERIFY(s.validate().isEmpty());
+    ASSERT_TRUE(s.validate().empty());
 
     // Invalid: negative
     s.maxPlayers = -1;
-    QStringList errors = s.validate();
-    QVERIFY(!errors.isEmpty());
+    std::vector<std::string> errors = s.validate();
+    EXPECT_FALSE(errors.empty());
     bool found = false;
-    for (const QString &e : errors) {
-        if (e.contains(QStringLiteral("Max players")))
+    for (const auto &e : errors) {
+        if (strContains(e, "Max players"))
             found = true;
     }
-    QVERIFY(found);
+    ASSERT_TRUE(found);
 }
 
-void TestServerConfig::testMaxPlayersExportImport()
+TEST(ServerConfig, MaxPlayersExportImport)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
-    QString exportPath = tmp.filePath(QStringLiteral("export.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
+    std::string exportPath = tmp.filePath("export.json");
 
     ServerManager mgr(configPath);
     ServerConfig s;
-    s.name  = QStringLiteral("MaxPExp");
+    s.name  = "MaxPExp";
     s.appid = 730;
-    s.dir   = QStringLiteral("/srv/mpe");
+    s.dir   = "/srv/mpe";
     s.maxPlayers = 32;
-    mgr.servers() << s;
-    QVERIFY(mgr.saveConfig());
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.saveConfig());
 
-    QVERIFY(mgr.exportServerConfig(QStringLiteral("MaxPExp"), exportPath));
+    ASSERT_TRUE(mgr.exportServerConfig("MaxPExp", exportPath));
 
-    ServerManager mgr2(tmp.filePath(QStringLiteral("servers2.json")));
-    QString err = mgr2.importServerConfig(exportPath);
-    QVERIFY2(err.isEmpty(), qPrintable(err));
-    QCOMPARE(mgr2.servers().first().maxPlayers, 32);
+    ServerManager mgr2(tmp.filePath("servers2.json"));
+    std::string err = mgr2.importServerConfig(exportPath);
+    ASSERT_TRUE(err.empty()) << (err);
+    EXPECT_EQ(mgr2.servers().front().maxPlayers, 32);
 }
 
 // ---------------------------------------------------------------------------
 // Restart warning tests
 // ---------------------------------------------------------------------------
 
-void TestServerConfig::testRestartWarningMinutesDefault()
+TEST(ServerConfig, RestartWarningMinutesDefault)
 {
     ServerConfig s;
-    QCOMPARE(s.restartWarningMinutes, 15);
+    EXPECT_EQ(s.restartWarningMinutes, 15);
 }
 
-void TestServerConfig::testRestartWarningMinutesPersistence()
+TEST(ServerConfig, RestartWarningMinutesPersistence)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
 
     ServerManager mgr(configPath);
     ServerConfig s;
-    s.name  = QStringLiteral("RWTest");
+    s.name  = "RWTest";
     s.appid = 730;
-    s.dir   = QStringLiteral("/srv/rw");
+    s.dir   = "/srv/rw";
     s.restartWarningMinutes = 10;
-    mgr.servers() << s;
-    QVERIFY(mgr.saveConfig());
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.saveConfig());
 
     ServerManager mgr2(configPath);
-    QVERIFY(mgr2.loadConfig());
-    QCOMPARE(mgr2.servers().first().restartWarningMinutes, 10);
+    ASSERT_TRUE(mgr2.loadConfig());
+    EXPECT_EQ(mgr2.servers().front().restartWarningMinutes, 10);
 }
 
-void TestServerConfig::testRestartWarningMinutesValidation()
+TEST(ServerConfig, RestartWarningMinutesValidation)
 {
     ServerConfig s;
-    s.name  = QStringLiteral("RWVal");
+    s.name  = "RWVal";
     s.appid = 730;
-    s.dir   = QStringLiteral("/srv/rwv");
+    s.dir   = "/srv/rwv";
 
     // Valid: 0 (disabled)
     s.restartWarningMinutes = 0;
-    QVERIFY(s.validate().isEmpty());
+    ASSERT_TRUE(s.validate().empty());
 
     // Valid: positive
     s.restartWarningMinutes = 30;
-    QVERIFY(s.validate().isEmpty());
+    ASSERT_TRUE(s.validate().empty());
 
     // Invalid: negative
     s.restartWarningMinutes = -5;
-    QStringList errors = s.validate();
-    QVERIFY(!errors.isEmpty());
+    std::vector<std::string> errors = s.validate();
+    EXPECT_FALSE(errors.empty());
     bool found = false;
-    for (const QString &e : errors) {
-        if (e.contains(QStringLiteral("Restart warning")))
+    for (const auto &e : errors) {
+        if (strContains(e, "Restart warning"))
             found = true;
     }
-    QVERIFY(found);
+    ASSERT_TRUE(found);
 }
 
-void TestServerConfig::testRestartWarningMessagePersistence()
+TEST(ServerConfig, RestartWarningMessagePersistence)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
 
     ServerManager mgr(configPath);
     ServerConfig s;
-    s.name  = QStringLiteral("RWMsgTest");
+    s.name  = "RWMsgTest";
     s.appid = 730;
-    s.dir   = QStringLiteral("/srv/rwm");
-    s.restartWarningMessage = QStringLiteral("Reboot in {minutes} min!");
-    mgr.servers() << s;
-    QVERIFY(mgr.saveConfig());
+    s.dir   = "/srv/rwm";
+    s.restartWarningMessage = "Reboot in {minutes} min!";
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.saveConfig());
 
     ServerManager mgr2(configPath);
-    QVERIFY(mgr2.loadConfig());
-    QCOMPARE(mgr2.servers().first().restartWarningMessage,
-             QStringLiteral("Reboot in {minutes} min!"));
+    ASSERT_TRUE(mgr2.loadConfig());
+    EXPECT_EQ(mgr2.servers().front().restartWarningMessage,
+             "Reboot in {minutes} min!");
 }
 
-void TestServerConfig::testRestartWarningMessageDefault()
+TEST(ServerConfig, RestartWarningMessageDefault)
 {
     ServerConfig s;
-    QVERIFY(s.restartWarningMessage.isEmpty());
+    ASSERT_TRUE(s.restartWarningMessage.empty());
 }
 
-void TestServerConfig::testRestartWarningFormatDefault()
+TEST(ServerConfig, RestartWarningFormatDefault)
 {
     ServerConfig s;
-    QString msg = s.formatRestartWarning(5);
-    QVERIFY(msg.contains(QStringLiteral("5")));
-    QVERIFY(msg.contains(QStringLiteral("restart")));
+    std::string msg = s.formatRestartWarning(5);
+    ASSERT_TRUE(strContains(msg, "5"));
+    ASSERT_TRUE(strContains(msg, "restart"));
     // Default message should mention saving progress
-    QVERIFY(msg.contains(QStringLiteral("save")));
+    ASSERT_TRUE(strContains(msg, "save"));
 }
 
-void TestServerConfig::testRestartWarningFormatCustom()
+TEST(ServerConfig, RestartWarningFormatCustom)
 {
     ServerConfig s;
-    s.restartWarningMessage = QStringLiteral("Server down in {minutes} min! Get ready.");
-    QString msg = s.formatRestartWarning(3);
-    QCOMPARE(msg, QStringLiteral("Server down in 3 min! Get ready."));
+    s.restartWarningMessage = "Server down in {minutes} min! Get ready.";
+    std::string msg = s.formatRestartWarning(3);
+    EXPECT_EQ(msg, "Server down in 3 min! Get ready.");
 }
 
-void TestServerConfig::testRestartWarningExportImport()
+TEST(ServerConfig, RestartWarningExportImport)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
-    QString exportPath = tmp.filePath(QStringLiteral("export.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
+    std::string exportPath = tmp.filePath("export.json");
 
     ServerManager mgr(configPath);
     ServerConfig s;
-    s.name  = QStringLiteral("RWExp");
+    s.name  = "RWExp";
     s.appid = 730;
-    s.dir   = QStringLiteral("/srv/rwe");
+    s.dir   = "/srv/rwe";
     s.restartWarningMinutes = 20;
-    s.restartWarningMessage = QStringLiteral("Restart in {minutes}m");
-    mgr.servers() << s;
-    QVERIFY(mgr.saveConfig());
+    s.restartWarningMessage = "Restart in {minutes}m";
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.saveConfig());
 
-    QVERIFY(mgr.exportServerConfig(QStringLiteral("RWExp"), exportPath));
+    ASSERT_TRUE(mgr.exportServerConfig("RWExp", exportPath));
 
-    ServerManager mgr2(tmp.filePath(QStringLiteral("servers2.json")));
-    QString err = mgr2.importServerConfig(exportPath);
-    QVERIFY2(err.isEmpty(), qPrintable(err));
-    QCOMPARE(mgr2.servers().first().restartWarningMinutes, 20);
-    QCOMPARE(mgr2.servers().first().restartWarningMessage,
-             QStringLiteral("Restart in {minutes}m"));
+    ServerManager mgr2(tmp.filePath("servers2.json"));
+    std::string err = mgr2.importServerConfig(exportPath);
+    ASSERT_TRUE(err.empty()) << (err);
+    EXPECT_EQ(mgr2.servers().front().restartWarningMinutes, 20);
+    EXPECT_EQ(mgr2.servers().front().restartWarningMessage,
+             "Restart in {minutes}m");
 }
 
 // ---------------------------------------------------------------------------
 // Pending update tracking tests
 // ---------------------------------------------------------------------------
 
-void TestServerConfig::testPendingUpdateDefault()
+TEST(ServerConfig, PendingUpdateDefault)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    ServerManager mgr(tmp.filePath(QStringLiteral("servers.json")));
-    QVERIFY(!mgr.hasPendingUpdate(QStringLiteral("AnyServer")));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    ServerManager mgr(tmp.filePath("servers.json"));
+    EXPECT_FALSE(mgr.hasPendingUpdate("AnyServer"));
 }
 
-void TestServerConfig::testPendingUpdateSetClear()
+TEST(ServerConfig, PendingUpdateSetClear)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    ServerManager mgr(tmp.filePath(QStringLiteral("servers.json")));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    ServerManager mgr(tmp.filePath("servers.json"));
 
-    mgr.setPendingUpdate(QStringLiteral("Server1"), true);
-    QVERIFY(mgr.hasPendingUpdate(QStringLiteral("Server1")));
-    QVERIFY(!mgr.hasPendingUpdate(QStringLiteral("Server2")));
+    mgr.setPendingUpdate("Server1", true);
+    ASSERT_TRUE(mgr.hasPendingUpdate("Server1"));
+    EXPECT_FALSE(mgr.hasPendingUpdate("Server2"));
 
-    mgr.setPendingUpdate(QStringLiteral("Server1"), false);
-    QVERIFY(!mgr.hasPendingUpdate(QStringLiteral("Server1")));
+    mgr.setPendingUpdate("Server1", false);
+    EXPECT_FALSE(mgr.hasPendingUpdate("Server1"));
 }
 
-void TestServerConfig::testPendingModUpdateDefault()
+TEST(ServerConfig, PendingModUpdateDefault)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    ServerManager mgr(tmp.filePath(QStringLiteral("servers.json")));
-    QVERIFY(!mgr.hasPendingModUpdate(QStringLiteral("AnyServer")));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    ServerManager mgr(tmp.filePath("servers.json"));
+    EXPECT_FALSE(mgr.hasPendingModUpdate("AnyServer"));
 }
 
-void TestServerConfig::testPendingModUpdateSetClear()
+TEST(ServerConfig, PendingModUpdateSetClear)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    ServerManager mgr(tmp.filePath(QStringLiteral("servers.json")));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    ServerManager mgr(tmp.filePath("servers.json"));
 
-    mgr.setPendingModUpdate(QStringLiteral("Server1"), true);
-    QVERIFY(mgr.hasPendingModUpdate(QStringLiteral("Server1")));
-    QVERIFY(!mgr.hasPendingModUpdate(QStringLiteral("Server2")));
+    mgr.setPendingModUpdate("Server1", true);
+    ASSERT_TRUE(mgr.hasPendingModUpdate("Server1"));
+    EXPECT_FALSE(mgr.hasPendingModUpdate("Server2"));
 
-    mgr.setPendingModUpdate(QStringLiteral("Server1"), false);
-    QVERIFY(!mgr.hasPendingModUpdate(QStringLiteral("Server1")));
+    mgr.setPendingModUpdate("Server1", false);
+    EXPECT_FALSE(mgr.hasPendingModUpdate("Server1"));
 }
 
 // ---------------------------------------------------------------------------
 // Resource monitoring tests
 // ---------------------------------------------------------------------------
 
-void TestServerConfig::testResourceMonitorTrackUntrack()
+TEST(ServerConfig, ResourceMonitorTrackUntrack)
 {
     ResourceMonitor mon;
-    mon.trackProcess(QStringLiteral("S1"), 12345);
-    QCOMPARE(mon.allUsage().size(), 0); // no poll yet
+    mon.trackProcess("S1", 12345);
+    EXPECT_EQ(mon.allUsage().size(), static_cast<size_t>(0)); // no poll yet
 
-    mon.untrackProcess(QStringLiteral("S1"));
-    QCOMPARE(mon.allUsage().size(), 0);
+    mon.untrackProcess("S1");
+    EXPECT_EQ(mon.allUsage().size(), static_cast<size_t>(0));
 }
 
-void TestServerConfig::testResourceMonitorUsageDefault()
+TEST(ServerConfig, ResourceMonitorUsageDefault)
 {
     ResourceMonitor mon;
-    ResourceUsage ru = mon.usage(QStringLiteral("NonExistent"));
-    QCOMPARE(ru.cpuPercent, 0.0);
-    QCOMPARE(ru.memoryBytes, static_cast<qint64>(0));
+    ResourceUsage ru = mon.usage("NonExistent");
+    EXPECT_EQ(ru.cpuPercent, 0.0);
+    EXPECT_EQ(ru.memoryBytes, static_cast<int64_t>(0));
 }
 
-void TestServerConfig::testResourceMonitorPollInterval()
+TEST(ServerConfig, ResourceMonitorPollInterval)
 {
     ResourceMonitor mon;
-    QCOMPARE(mon.pollIntervalMs(), 5000); // default
+    EXPECT_EQ(mon.pollIntervalMs(), 5000); // default
     mon.setPollIntervalMs(2000);
-    QCOMPARE(mon.pollIntervalMs(), 2000);
+    EXPECT_EQ(mon.pollIntervalMs(), 2000);
     mon.setPollIntervalMs(-1);
-    QCOMPARE(mon.pollIntervalMs(), 1000); // clamped to 1s
+    EXPECT_EQ(mon.pollIntervalMs(), 1000); // clamped to 1s
 }
 
-void TestServerConfig::testResourceMonitorStartStop()
+TEST(ServerConfig, ResourceMonitorStartStop)
 {
     ResourceMonitor mon;
     mon.start();
@@ -2324,1129 +2131,1161 @@ void TestServerConfig::testResourceMonitorStartStop()
     mon.stop();
 }
 
-void TestServerConfig::testResourceMonitorReadUsageInvalidPid()
+TEST(ServerConfig, ResourceMonitorReadUsageInvalidPid)
 {
     ResourceUsage ru = ResourceMonitor::readUsage(-1);
-    QCOMPARE(ru.cpuPercent, 0.0);
-    QCOMPARE(ru.memoryBytes, static_cast<qint64>(0));
+    EXPECT_EQ(ru.cpuPercent, 0.0);
+    EXPECT_EQ(ru.memoryBytes, static_cast<int64_t>(0));
 
     ru = ResourceMonitor::readUsage(0);
-    QCOMPARE(ru.cpuPercent, 0.0);
-    QCOMPARE(ru.memoryBytes, static_cast<qint64>(0));
+    EXPECT_EQ(ru.cpuPercent, 0.0);
+    EXPECT_EQ(ru.memoryBytes, static_cast<int64_t>(0));
 }
 
-void TestServerConfig::testCpuAlertThresholdDefault()
+TEST(ServerConfig, CpuAlertThresholdDefault)
 {
     ServerConfig s;
-    QCOMPARE(s.cpuAlertThreshold, 90.0);
+    EXPECT_EQ(s.cpuAlertThreshold, 90.0);
 }
 
-void TestServerConfig::testCpuAlertThresholdPersistence()
+TEST(ServerConfig, CpuAlertThresholdPersistence)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
 
     ServerManager mgr(configPath);
     ServerConfig s;
-    s.name = QStringLiteral("CpuTest");
+    s.name = "CpuTest";
     s.appid = 1;
-    s.dir = QStringLiteral("/srv/cpu");
+    s.dir = "/srv/cpu";
     s.cpuAlertThreshold = 75.5;
-    mgr.servers() << s;
-    QVERIFY(mgr.saveConfig());
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.saveConfig());
 
     ServerManager mgr2(configPath);
-    QVERIFY(mgr2.loadConfig());
-    QCOMPARE(mgr2.servers().size(), 1);
-    QCOMPARE(mgr2.servers().at(0).cpuAlertThreshold, 75.5);
+    ASSERT_TRUE(mgr2.loadConfig());
+    EXPECT_EQ(mgr2.servers().size(), static_cast<size_t>(1));
+    EXPECT_EQ(mgr2.servers().at(0).cpuAlertThreshold, 75.5);
 }
 
-void TestServerConfig::testCpuAlertThresholdValidation()
+TEST(ServerConfig, CpuAlertThresholdValidation)
 {
     ServerConfig s;
-    s.name = QStringLiteral("V");
+    s.name = "V";
     s.appid = 1;
-    s.dir = QStringLiteral("/d");
+    s.dir = "/d";
     s.cpuAlertThreshold = -10.0;
-    QStringList errors = s.validate();
-    QVERIFY(errors.size() >= 1);
+    std::vector<std::string> errors = s.validate();
+    ASSERT_TRUE(errors.size() >= 1);
     bool found = false;
-    for (const QString &e : errors) {
-        if (e.contains(QStringLiteral("CPU alert")))
+    for (const auto &e : errors) {
+        if (strContains(e, "CPU alert"))
             found = true;
     }
-    QVERIFY(found);
+    ASSERT_TRUE(found);
 }
 
-void TestServerConfig::testMemAlertThresholdDefault()
+TEST(ServerConfig, MemAlertThresholdDefault)
 {
     ServerConfig s;
-    QCOMPARE(s.memAlertThresholdMB, 0.0);
+    EXPECT_EQ(s.memAlertThresholdMB, 0.0);
 }
 
-void TestServerConfig::testMemAlertThresholdPersistence()
+TEST(ServerConfig, MemAlertThresholdPersistence)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
 
     ServerManager mgr(configPath);
     ServerConfig s;
-    s.name = QStringLiteral("MemTest");
+    s.name = "MemTest";
     s.appid = 1;
-    s.dir = QStringLiteral("/srv/mem");
+    s.dir = "/srv/mem";
     s.memAlertThresholdMB = 2048.0;
-    mgr.servers() << s;
-    QVERIFY(mgr.saveConfig());
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.saveConfig());
 
     ServerManager mgr2(configPath);
-    QVERIFY(mgr2.loadConfig());
-    QCOMPARE(mgr2.servers().at(0).memAlertThresholdMB, 2048.0);
+    ASSERT_TRUE(mgr2.loadConfig());
+    EXPECT_EQ(mgr2.servers().at(0).memAlertThresholdMB, 2048.0);
 }
 
-void TestServerConfig::testMemAlertThresholdValidation()
+TEST(ServerConfig, MemAlertThresholdValidation)
 {
     ServerConfig s;
-    s.name = QStringLiteral("V");
+    s.name = "V";
     s.appid = 1;
-    s.dir = QStringLiteral("/d");
+    s.dir = "/d";
     s.memAlertThresholdMB = -100.0;
-    QStringList errors = s.validate();
+    std::vector<std::string> errors = s.validate();
     bool found = false;
-    for (const QString &e : errors) {
-        if (e.contains(QStringLiteral("Memory alert")))
+    for (const auto &e : errors) {
+        if (strContains(e, "Memory alert"))
             found = true;
     }
-    QVERIFY(found);
+    ASSERT_TRUE(found);
 }
 
-void TestServerConfig::testResourceAlertThresholdsExportImport()
+TEST(ServerConfig, ResourceAlertThresholdsExportImport)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
-    QString exportPath = tmp.filePath(QStringLiteral("export.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
+    std::string exportPath = tmp.filePath("export.json");
 
     ServerManager mgr(configPath);
     ServerConfig s;
-    s.name = QStringLiteral("ResExp");
+    s.name = "ResExp";
     s.appid = 1;
-    s.dir = QStringLiteral("/srv/res");
+    s.dir = "/srv/res";
     s.cpuAlertThreshold = 80.0;
     s.memAlertThresholdMB = 4096.0;
-    mgr.servers() << s;
-    QVERIFY(mgr.exportServerConfig(QStringLiteral("ResExp"), exportPath));
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.exportServerConfig("ResExp", exportPath));
 
-    ServerManager mgr2(tmp.filePath(QStringLiteral("servers2.json")));
-    QVERIFY(mgr2.importServerConfig(exportPath).isEmpty());
-    QCOMPARE(mgr2.servers().at(0).cpuAlertThreshold, 80.0);
-    QCOMPARE(mgr2.servers().at(0).memAlertThresholdMB, 4096.0);
+    ServerManager mgr2(tmp.filePath("servers2.json"));
+    ASSERT_TRUE(mgr2.importServerConfig(exportPath).empty());
+    EXPECT_EQ(mgr2.servers().at(0).cpuAlertThreshold, 80.0);
+    EXPECT_EQ(mgr2.servers().at(0).memAlertThresholdMB, 4096.0);
 }
 
-void TestServerConfig::testResourceAlertSignal()
+TEST(ServerConfig, ResourceAlertSignal)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    ServerManager mgr(tmp.filePath(QStringLiteral("servers.json")));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    ServerManager mgr(tmp.filePath("servers.json"));
 
-    // Verify signal exists by connecting to it
-    QSignalSpy spy(&mgr, &ServerManager::resourceAlert);
-    QVERIFY(spy.isValid());
+    // Verify the onResourceAlert callback mechanism works
+    int alertCount = 0;
+    mgr.onResourceAlert = [&alertCount](const std::string &, const std::string &) {
+        ++alertCount;
+    };
+    EXPECT_EQ(alertCount, 0);
 }
 
 // ---------------------------------------------------------------------------
 // Event hook tests
 // ---------------------------------------------------------------------------
 
-void TestServerConfig::testEventHookKnownEvents()
+TEST(ServerConfig, EventHookKnownEvents)
 {
-    QStringList events = EventHookManager::knownEvents();
-    QVERIFY(events.contains(QStringLiteral("onStart")));
-    QVERIFY(events.contains(QStringLiteral("onStop")));
-    QVERIFY(events.contains(QStringLiteral("onCrash")));
-    QVERIFY(events.contains(QStringLiteral("onBackup")));
-    QVERIFY(events.contains(QStringLiteral("onUpdate")));
-    QCOMPARE(events.size(), 5);
+    std::vector<std::string> events = EventHookManager::knownEvents();
+    ASSERT_TRUE(vectorContains(events, std::string("onStart")));
+    ASSERT_TRUE(vectorContains(events, std::string("onStop")));
+    ASSERT_TRUE(vectorContains(events, std::string("onCrash")));
+    ASSERT_TRUE(vectorContains(events, std::string("onBackup")));
+    ASSERT_TRUE(vectorContains(events, std::string("onUpdate")));
+    EXPECT_EQ(events.size(), static_cast<size_t>(5));
 }
 
-void TestServerConfig::testEventHookFireEmpty()
+TEST(ServerConfig, EventHookFireEmpty)
 {
     EventHookManager ehm;
-    QSignalSpy spy(&ehm, &EventHookManager::hookFinished);
+    int hookCallbackCount = 0;
+    ehm.onHookFinished = [&hookCallbackCount](const std::string &, const std::string &,
+                                                int, const std::string &) {
+        ++hookCallbackCount;
+    };
     // Firing with empty script should do nothing
-    ehm.fireHook(QStringLiteral("S"), QStringLiteral("/tmp"), QStringLiteral("onStart"), QString());
-    QCOMPARE(spy.count(), 0);
+    ehm.fireHook("S", "/tmp", "onStart", "");
+    EXPECT_EQ(hookCallbackCount, 0);
 }
 
-void TestServerConfig::testEventHookFireMissing()
+TEST(ServerConfig, EventHookFireMissing)
 {
     EventHookManager ehm;
-    QSignalSpy spy(&ehm, &EventHookManager::hookFinished);
-    ehm.fireHook(QStringLiteral("S"), QStringLiteral("/tmp"),
-                 QStringLiteral("onStart"),
-                 QStringLiteral("/nonexistent_script_12345.sh"));
-    QCOMPARE(spy.count(), 1);
+    int lastExitCode = 999;
+    ehm.onHookFinished = [&lastExitCode](const std::string &, const std::string &,
+                                           int exitCode, const std::string &) {
+        lastExitCode = exitCode;
+    };
+    ehm.fireHook("S", "/tmp", "onStart", "/nonexistent_script_12345.sh");
     // Exit code should be -1 for not found
-    QCOMPARE(spy.at(0).at(2).toInt(), -1);
+    EXPECT_EQ(lastExitCode, -1);
 }
 
-void TestServerConfig::testEventHookFireScript()
+TEST(ServerConfig, EventHookFireScript)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
 
     // Create a simple test script
-    QString scriptPath = tmp.filePath(QStringLiteral("hook.sh"));
-    QFile f(scriptPath);
-    QVERIFY(f.open(QIODevice::WriteOnly));
-    f.write("#!/bin/sh\necho \"hook ran: $SSA_SERVER_NAME $SSA_EVENT\"\n");
-    f.close();
-    f.setPermissions(QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner);
+    std::string scriptPath = tmp.filePath("hook.sh");
+    { std::ofstream f(scriptPath); ASSERT_TRUE(f.is_open()); f << "#!/bin/sh\necho \"hook ran: $SSA_SERVER_NAME $SSA_EVENT\"\n"; }
+    std::filesystem::permissions(scriptPath, std::filesystem::perms::owner_all);
 
     EventHookManager ehm;
-    QSignalSpy spy(&ehm, &EventHookManager::hookFinished);
-    ehm.fireHook(QStringLiteral("TestSrv"), tmp.path(),
-                 QStringLiteral("onStart"), scriptPath);
+    std::string cbServerName, cbEvent, cbOutput;
+    int cbExitCode = -999;
+    std::atomic<bool> hookDone{false};
+    ehm.onHookFinished = [&](const std::string &sn, const std::string &ev,
+                              int ec, const std::string &out) {
+        cbServerName = sn;
+        cbEvent = ev;
+        cbExitCode = ec;
+        cbOutput = out;
+        hookDone.store(true);
+    };
+    ehm.fireHook("TestSrv", tmp.path(), "onStart", scriptPath);
 
-    // Wait for the script to finish
-    QVERIFY(spy.wait(5000));
-    QCOMPARE(spy.count(), 1);
-    QCOMPARE(spy.at(0).at(0).toString(), QStringLiteral("TestSrv"));
-    QCOMPARE(spy.at(0).at(1).toString(), QStringLiteral("onStart"));
-    QCOMPARE(spy.at(0).at(2).toInt(), 0); // exit code 0
-    QVERIFY(spy.at(0).at(3).toString().contains(QStringLiteral("hook ran: TestSrv onStart")));
+    // Wait for the async hook to finish (up to 5 seconds)
+    for (int i = 0; i < 50 && !hookDone.load(); ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    EXPECT_TRUE(hookDone.load());
+    EXPECT_EQ(cbServerName, "TestSrv");
+    EXPECT_EQ(cbEvent, "onStart");
+    EXPECT_EQ(cbExitCode, 0);
+    ASSERT_TRUE(strContains(cbOutput, "hook ran: TestSrv onStart"));
 }
 
-void TestServerConfig::testEventHookTimeout()
+TEST(ServerConfig, EventHookTimeout)
 {
     EventHookManager ehm;
-    QCOMPARE(ehm.timeoutSeconds(), 0); // default = fire-and-forget
+    EXPECT_EQ(ehm.timeoutSeconds(), 0); // default = fire-and-forget
     ehm.setTimeoutSeconds(10);
-    QCOMPARE(ehm.timeoutSeconds(), 10);
+    EXPECT_EQ(ehm.timeoutSeconds(), 10);
     ehm.setTimeoutSeconds(-5);
-    QCOMPARE(ehm.timeoutSeconds(), 0); // clamped to 0
+    EXPECT_EQ(ehm.timeoutSeconds(), 0); // clamped to 0
 }
 
-void TestServerConfig::testEventHooksPersistence()
+TEST(ServerConfig, EventHooksPersistence)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
 
     ServerManager mgr(configPath);
     ServerConfig s;
-    s.name = QStringLiteral("HookTest");
+    s.name = "HookTest";
     s.appid = 1;
-    s.dir = QStringLiteral("/srv/hook");
-    s.eventHooks[QStringLiteral("onStart")] = QStringLiteral("/scripts/start.sh");
-    s.eventHooks[QStringLiteral("onCrash")] = QStringLiteral("/scripts/crash.sh");
-    mgr.servers() << s;
-    QVERIFY(mgr.saveConfig());
+    s.dir = "/srv/hook";
+    s.eventHooks["onStart"] = "/scripts/start.sh";
+    s.eventHooks["onCrash"] = "/scripts/crash.sh";
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.saveConfig());
 
     ServerManager mgr2(configPath);
-    QVERIFY(mgr2.loadConfig());
+    ASSERT_TRUE(mgr2.loadConfig());
     const ServerConfig &loaded = mgr2.servers().at(0);
-    QCOMPARE(loaded.eventHooks.size(), 2);
-    QCOMPARE(loaded.eventHooks.value(QStringLiteral("onStart")),
-             QStringLiteral("/scripts/start.sh"));
-    QCOMPARE(loaded.eventHooks.value(QStringLiteral("onCrash")),
-             QStringLiteral("/scripts/crash.sh"));
+    EXPECT_EQ(loaded.eventHooks.size(), 2);
+    EXPECT_EQ(loaded.eventHooks.at("onStart"),
+             "/scripts/start.sh");
+    EXPECT_EQ(loaded.eventHooks.at("onCrash"),
+             "/scripts/crash.sh");
 }
 
-void TestServerConfig::testEventHooksDefaultEmpty()
+TEST(ServerConfig, EventHooksDefaultEmpty)
 {
     ServerConfig s;
-    QVERIFY(s.eventHooks.isEmpty());
+    ASSERT_TRUE(s.eventHooks.empty());
 }
 
-void TestServerConfig::testEventHooksExportImport()
+TEST(ServerConfig, EventHooksExportImport)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
-    QString exportPath = tmp.filePath(QStringLiteral("export.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
+    std::string exportPath = tmp.filePath("export.json");
 
     ServerManager mgr(configPath);
     ServerConfig s;
-    s.name = QStringLiteral("HookExp");
+    s.name = "HookExp";
     s.appid = 1;
-    s.dir = QStringLiteral("/srv/hookexp");
-    s.eventHooks[QStringLiteral("onBackup")] = QStringLiteral("hooks/backup.sh");
-    mgr.servers() << s;
-    QVERIFY(mgr.exportServerConfig(QStringLiteral("HookExp"), exportPath));
+    s.dir = "/srv/hookexp";
+    s.eventHooks["onBackup"] = "hooks/backup.sh";
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.exportServerConfig("HookExp", exportPath));
 
-    ServerManager mgr2(tmp.filePath(QStringLiteral("servers2.json")));
-    QVERIFY(mgr2.importServerConfig(exportPath).isEmpty());
-    QCOMPARE(mgr2.servers().at(0).eventHooks.value(QStringLiteral("onBackup")),
-             QStringLiteral("hooks/backup.sh"));
+    ServerManager mgr2(tmp.filePath("servers2.json"));
+    ASSERT_TRUE(mgr2.importServerConfig(exportPath).empty());
+    EXPECT_EQ(mgr2.servers().at(0).eventHooks.at("onBackup"),
+             "hooks/backup.sh");
 }
 
 // ---------------------------------------------------------------------------
 // Tags tests
 // ---------------------------------------------------------------------------
 
-void TestServerConfig::testTagsDefault()
+TEST(ServerConfig, TagsDefault)
 {
     ServerConfig s;
-    QVERIFY(s.tags.isEmpty());
+    ASSERT_TRUE(s.tags.empty());
 }
 
-void TestServerConfig::testTagsPersistence()
+TEST(ServerConfig, TagsPersistence)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
 
     ServerManager mgr(configPath);
     ServerConfig s;
-    s.name = QStringLiteral("TagTest");
+    s.name = "TagTest";
     s.appid = 1;
-    s.dir = QStringLiteral("/srv/tag");
-    s.tags << QStringLiteral("production") << QStringLiteral("ark");
-    mgr.servers() << s;
-    QVERIFY(mgr.saveConfig());
+    s.dir = "/srv/tag";
+    s.tags.push_back("production"); s.tags.push_back("ark");
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.saveConfig());
 
     ServerManager mgr2(configPath);
-    QVERIFY(mgr2.loadConfig());
-    QCOMPARE(mgr2.servers().at(0).tags.size(), 2);
-    QCOMPARE(mgr2.servers().at(0).tags.at(0), QStringLiteral("production"));
-    QCOMPARE(mgr2.servers().at(0).tags.at(1), QStringLiteral("ark"));
+    ASSERT_TRUE(mgr2.loadConfig());
+    EXPECT_EQ(mgr2.servers().at(0).tags.size(), 2);
+    EXPECT_EQ(mgr2.servers().at(0).tags.at(0), "production");
+    EXPECT_EQ(mgr2.servers().at(0).tags.at(1), "ark");
 }
 
-void TestServerConfig::testTagsExportImport()
+TEST(ServerConfig, TagsExportImport)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
-    QString exportPath = tmp.filePath(QStringLiteral("export.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
+    std::string exportPath = tmp.filePath("export.json");
 
     ServerManager mgr(configPath);
     ServerConfig s;
-    s.name = QStringLiteral("TagExp");
+    s.name = "TagExp";
     s.appid = 1;
-    s.dir = QStringLiteral("/srv/tagexp");
-    s.tags << QStringLiteral("cluster-a") << QStringLiteral("pvp");
-    mgr.servers() << s;
-    QVERIFY(mgr.exportServerConfig(QStringLiteral("TagExp"), exportPath));
+    s.dir = "/srv/tagexp";
+    s.tags.push_back("cluster-a"); s.tags.push_back("pvp");
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.exportServerConfig("TagExp", exportPath));
 
-    ServerManager mgr2(tmp.filePath(QStringLiteral("servers2.json")));
-    QVERIFY(mgr2.importServerConfig(exportPath).isEmpty());
-    QCOMPARE(mgr2.servers().at(0).tags.size(), 2);
-    QCOMPARE(mgr2.servers().at(0).tags.at(0), QStringLiteral("cluster-a"));
-    QCOMPARE(mgr2.servers().at(0).tags.at(1), QStringLiteral("pvp"));
+    ServerManager mgr2(tmp.filePath("servers2.json"));
+    ASSERT_TRUE(mgr2.importServerConfig(exportPath).empty());
+    EXPECT_EQ(mgr2.servers().at(0).tags.size(), 2);
+    EXPECT_EQ(mgr2.servers().at(0).tags.at(0), "cluster-a");
+    EXPECT_EQ(mgr2.servers().at(0).tags.at(1), "pvp");
 }
 
-void TestServerConfig::testTagsMultiple()
+TEST(ServerConfig, TagsMultiple)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
 
     ServerManager mgr(configPath);
     ServerConfig s1;
-    s1.name = QStringLiteral("S1");
+    s1.name = "S1";
     s1.appid = 1;
-    s1.dir = QStringLiteral("/srv/s1");
-    s1.tags << QStringLiteral("pve") << QStringLiteral("eu");
+    s1.dir = "/srv/s1";
+    s1.tags.push_back("pve"); s1.tags.push_back("eu");
 
     ServerConfig s2;
-    s2.name = QStringLiteral("S2");
+    s2.name = "S2";
     s2.appid = 2;
-    s2.dir = QStringLiteral("/srv/s2");
-    s2.tags << QStringLiteral("pvp") << QStringLiteral("us");
+    s2.dir = "/srv/s2";
+    s2.tags.push_back("pvp"); s2.tags.push_back("us");
 
-    mgr.servers() << s1 << s2;
-    QVERIFY(mgr.saveConfig());
+    mgr.servers().push_back(s1);
+    mgr.servers().push_back(s2);
+    ASSERT_TRUE(mgr.saveConfig());
 
     ServerManager mgr2(configPath);
-    QVERIFY(mgr2.loadConfig());
-    QCOMPARE(mgr2.servers().size(), 2);
-    QCOMPARE(mgr2.servers().at(0).tags, QStringList({QStringLiteral("pve"), QStringLiteral("eu")}));
-    QCOMPARE(mgr2.servers().at(1).tags, QStringList({QStringLiteral("pvp"), QStringLiteral("us")}));
+    ASSERT_TRUE(mgr2.loadConfig());
+    EXPECT_EQ(mgr2.servers().size(), static_cast<size_t>(2));
+    EXPECT_EQ(mgr2.servers().at(0).tags, std::vector<std::string>({"pve", "eu"}));
+    EXPECT_EQ(mgr2.servers().at(1).tags, std::vector<std::string>({"pvp", "us"}));
 }
 
 // ---------------------------------------------------------------------------
 // Server group tests
 // ---------------------------------------------------------------------------
 
-void TestServerConfig::testGroupDefault()
+TEST(ServerConfig, GroupDefault)
 {
     ServerConfig s;
-    QVERIFY(s.group.isEmpty());
+    ASSERT_TRUE(s.group.empty());
 }
 
-void TestServerConfig::testGroupPersistence()
+TEST(ServerConfig, GroupPersistence)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
 
     ServerManager mgr(configPath);
     ServerConfig s;
-    s.name = QStringLiteral("GroupTest");
+    s.name = "GroupTest";
     s.appid = 1;
-    s.dir = QStringLiteral("/srv/grp");
-    s.group = QStringLiteral("Production");
-    mgr.servers() << s;
-    QVERIFY(mgr.saveConfig());
+    s.dir = "/srv/grp";
+    s.group = "Production";
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.saveConfig());
 
     ServerManager mgr2(configPath);
-    QVERIFY(mgr2.loadConfig());
-    QCOMPARE(mgr2.servers().at(0).group, QStringLiteral("Production"));
+    ASSERT_TRUE(mgr2.loadConfig());
+    EXPECT_EQ(mgr2.servers().at(0).group, "Production");
 }
 
-void TestServerConfig::testGroupExportImport()
+TEST(ServerConfig, GroupExportImport)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
-    QString exportPath = tmp.filePath(QStringLiteral("export.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
+    std::string exportPath = tmp.filePath("export.json");
 
     ServerManager mgr(configPath);
     ServerConfig s;
-    s.name = QStringLiteral("GrpExp");
+    s.name = "GrpExp";
     s.appid = 1;
-    s.dir = QStringLiteral("/srv/grpexp");
-    s.group = QStringLiteral("Testing");
-    mgr.servers() << s;
-    QVERIFY(mgr.exportServerConfig(QStringLiteral("GrpExp"), exportPath));
+    s.dir = "/srv/grpexp";
+    s.group = "Testing";
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.exportServerConfig("GrpExp", exportPath));
 
-    ServerManager mgr2(tmp.filePath(QStringLiteral("servers2.json")));
-    QVERIFY(mgr2.importServerConfig(exportPath).isEmpty());
-    QCOMPARE(mgr2.servers().at(0).group, QStringLiteral("Testing"));
+    ServerManager mgr2(tmp.filePath("servers2.json"));
+    ASSERT_TRUE(mgr2.importServerConfig(exportPath).empty());
+    EXPECT_EQ(mgr2.servers().at(0).group, "Testing");
 }
 
 // ---------------------------------------------------------------------------
 // Startup priority tests
 // ---------------------------------------------------------------------------
 
-void TestServerConfig::testStartupPriorityDefault()
+TEST(ServerConfig, StartupPriorityDefault)
 {
     ServerConfig s;
-    QCOMPARE(s.startupPriority, 0);
+    EXPECT_EQ(s.startupPriority, 0);
 }
 
-void TestServerConfig::testStartupPriorityPersistence()
+TEST(ServerConfig, StartupPriorityPersistence)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
 
     ServerManager mgr(configPath);
     ServerConfig s;
-    s.name = QStringLiteral("PrioTest");
+    s.name = "PrioTest";
     s.appid = 1;
-    s.dir = QStringLiteral("/srv/prio");
+    s.dir = "/srv/prio";
     s.startupPriority = 5;
-    mgr.servers() << s;
-    QVERIFY(mgr.saveConfig());
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.saveConfig());
 
     ServerManager mgr2(configPath);
-    QVERIFY(mgr2.loadConfig());
-    QCOMPARE(mgr2.servers().at(0).startupPriority, 5);
+    ASSERT_TRUE(mgr2.loadConfig());
+    EXPECT_EQ(mgr2.servers().at(0).startupPriority, 5);
 }
 
-void TestServerConfig::testStartupPriorityValidation()
+TEST(ServerConfig, StartupPriorityValidation)
 {
     ServerConfig s;
-    s.name = QStringLiteral("V");
+    s.name = "V";
     s.appid = 1;
-    s.dir = QStringLiteral("/srv/v");
+    s.dir = "/srv/v";
     s.startupPriority = -1;
-    QStringList errors = s.validate();
+    std::vector<std::string> errors = s.validate();
     bool found = false;
-    for (const QString &e : errors)
-        if (e.contains(QStringLiteral("Startup priority"))) { found = true; break; }
-    QVERIFY(found);
+    for (const auto &e : errors)
+        if (strContains(e, "Startup priority")) { found = true; break; }
+    ASSERT_TRUE(found);
 }
 
-void TestServerConfig::testStartupPriorityExportImport()
+TEST(ServerConfig, StartupPriorityExportImport)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
-    QString exportPath = tmp.filePath(QStringLiteral("export.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
+    std::string exportPath = tmp.filePath("export.json");
 
     ServerManager mgr(configPath);
     ServerConfig s;
-    s.name = QStringLiteral("PrioExp");
+    s.name = "PrioExp";
     s.appid = 1;
-    s.dir = QStringLiteral("/srv/prioexp");
+    s.dir = "/srv/prioexp";
     s.startupPriority = 3;
-    mgr.servers() << s;
-    QVERIFY(mgr.exportServerConfig(QStringLiteral("PrioExp"), exportPath));
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.exportServerConfig("PrioExp", exportPath));
 
-    ServerManager mgr2(tmp.filePath(QStringLiteral("servers2.json")));
-    QVERIFY(mgr2.importServerConfig(exportPath).isEmpty());
-    QCOMPARE(mgr2.servers().at(0).startupPriority, 3);
+    ServerManager mgr2(tmp.filePath("servers2.json"));
+    ASSERT_TRUE(mgr2.importServerConfig(exportPath).empty());
+    EXPECT_EQ(mgr2.servers().at(0).startupPriority, 3);
 }
 
-void TestServerConfig::testAutoStartRespectsStartupPriority()
+TEST(ServerConfig, AutoStartRespectsStartupPriority)
 {
     // Verify that autoStartServers processes servers in priority order
     // by listening to the logMessage signal which is emitted when
     // startServer is called (even if the process fails to launch).
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
 
     ServerManager mgr(configPath);
 
     ServerConfig s1;
-    s1.name = QStringLiteral("LowPrio");
+    s1.name = "LowPrio";
     s1.appid = 1;
-    s1.dir = QStringLiteral("/srv/low");
+    s1.dir = "/srv/low";
     s1.autoStartOnLaunch = true;
     s1.startupPriority = 10;
 
     ServerConfig s2;
-    s2.name = QStringLiteral("HighPrio");
+    s2.name = "HighPrio";
     s2.appid = 2;
-    s2.dir = QStringLiteral("/srv/high");
+    s2.dir = "/srv/high";
     s2.autoStartOnLaunch = true;
     s2.startupPriority = 1;
 
     // Insert LowPrio first in the list; autoStartServers should still
     // process HighPrio (priority 1) before LowPrio (priority 10).
-    mgr.servers() << s1 << s2;
+    mgr.servers().push_back(s1);
+    mgr.servers().push_back(s2);
 
-    QStringList startOrder;
-    QObject::connect(&mgr, &ServerManager::logMessage,
-                     [&startOrder](const QString &server, const QString &) {
-        if (!startOrder.contains(server))
-            startOrder << server;
-    });
+    std::vector<std::string> startOrder;
+    mgr.onLogMessage = [&startOrder](const std::string &server, const std::string &) {
+        if (!vectorContains(startOrder, server))
+            startOrder.push_back(server);
+    };
 
     mgr.autoStartServers();
 
     // Both servers should have been attempted (executables won't exist, but
-    // the signal still fires in order).
-    QVERIFY(startOrder.size() >= 2);
-    QVERIFY(startOrder.indexOf(QStringLiteral("HighPrio"))
-            < startOrder.indexOf(QStringLiteral("LowPrio")));
+    // the callback still fires in order).
+    ASSERT_GE(startOrder.size(), static_cast<size_t>(2));
+    auto it1 = std::find(startOrder.begin(), startOrder.end(), "HighPrio");
+    auto it2 = std::find(startOrder.begin(), startOrder.end(), "LowPrio");
+    ASSERT_TRUE(it1 != startOrder.end());
+    ASSERT_TRUE(it2 != startOrder.end());
+    EXPECT_LT(std::distance(startOrder.begin(), it1), std::distance(startOrder.begin(), it2));
 }
 
 // ---------------------------------------------------------------------------
 // Backup before restart tests
 // ---------------------------------------------------------------------------
 
-void TestServerConfig::testBackupBeforeRestartDefault()
+TEST(ServerConfig, BackupBeforeRestartDefault)
 {
     ServerConfig s;
-    QCOMPARE(s.backupBeforeRestart, false);
+    EXPECT_EQ(s.backupBeforeRestart, false);
 }
 
-void TestServerConfig::testBackupBeforeRestartPersistence()
+TEST(ServerConfig, BackupBeforeRestartPersistence)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
 
     ServerManager mgr(configPath);
     ServerConfig s;
-    s.name = QStringLiteral("BbrTest");
+    s.name = "BbrTest";
     s.appid = 1;
-    s.dir = QStringLiteral("/srv/bbr");
+    s.dir = "/srv/bbr";
     s.backupBeforeRestart = true;
-    mgr.servers() << s;
-    QVERIFY(mgr.saveConfig());
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.saveConfig());
 
     ServerManager mgr2(configPath);
-    QVERIFY(mgr2.loadConfig());
-    QCOMPARE(mgr2.servers().at(0).backupBeforeRestart, true);
+    ASSERT_TRUE(mgr2.loadConfig());
+    EXPECT_EQ(mgr2.servers().at(0).backupBeforeRestart, true);
 }
 
-void TestServerConfig::testBackupBeforeRestartExportImport()
+TEST(ServerConfig, BackupBeforeRestartExportImport)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
-    QString exportPath = tmp.filePath(QStringLiteral("export.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
+    std::string exportPath = tmp.filePath("export.json");
 
     ServerManager mgr(configPath);
     ServerConfig s;
-    s.name = QStringLiteral("BbrExp");
+    s.name = "BbrExp";
     s.appid = 1;
-    s.dir = QStringLiteral("/srv/bbrexp");
+    s.dir = "/srv/bbrexp";
     s.backupBeforeRestart = true;
-    mgr.servers() << s;
-    QVERIFY(mgr.exportServerConfig(QStringLiteral("BbrExp"), exportPath));
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.exportServerConfig("BbrExp", exportPath));
 
-    ServerManager mgr2(tmp.filePath(QStringLiteral("servers2.json")));
-    QVERIFY(mgr2.importServerConfig(exportPath).isEmpty());
-    QCOMPARE(mgr2.servers().at(0).backupBeforeRestart, true);
+    ServerManager mgr2(tmp.filePath("servers2.json"));
+    ASSERT_TRUE(mgr2.importServerConfig(exportPath).empty());
+    EXPECT_EQ(mgr2.servers().at(0).backupBeforeRestart, true);
 }
 
 // ---------------------------------------------------------------------------
 // Graceful shutdown timeout tests
 // ---------------------------------------------------------------------------
 
-void TestServerConfig::testGracefulShutdownDefault()
+TEST(ServerConfig, GracefulShutdownDefault)
 {
     ServerConfig s;
-    QCOMPARE(s.gracefulShutdownSeconds, 10);
+    EXPECT_EQ(s.gracefulShutdownSeconds, 10);
 }
 
-void TestServerConfig::testGracefulShutdownPersistence()
+TEST(ServerConfig, GracefulShutdownPersistence)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
 
     ServerManager mgr(configPath);
     ServerConfig s;
-    s.name = QStringLiteral("GsTest");
+    s.name = "GsTest";
     s.appid = 1;
-    s.dir = QStringLiteral("/srv/gs");
+    s.dir = "/srv/gs";
     s.gracefulShutdownSeconds = 30;
-    mgr.servers() << s;
-    QVERIFY(mgr.saveConfig());
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.saveConfig());
 
     ServerManager mgr2(configPath);
-    QVERIFY(mgr2.loadConfig());
-    QCOMPARE(mgr2.servers().at(0).gracefulShutdownSeconds, 30);
+    ASSERT_TRUE(mgr2.loadConfig());
+    EXPECT_EQ(mgr2.servers().at(0).gracefulShutdownSeconds, 30);
 }
 
-void TestServerConfig::testGracefulShutdownValidation()
+TEST(ServerConfig, GracefulShutdownValidation)
 {
     ServerConfig s;
-    s.name = QStringLiteral("V");
+    s.name = "V";
     s.appid = 1;
-    s.dir = QStringLiteral("/srv/v");
+    s.dir = "/srv/v";
     s.gracefulShutdownSeconds = -5;
-    QStringList errors = s.validate();
+    std::vector<std::string> errors = s.validate();
     bool found = false;
-    for (const QString &e : errors)
-        if (e.contains(QStringLiteral("Graceful shutdown"))) { found = true; break; }
-    QVERIFY(found);
+    for (const auto &e : errors)
+        if (strContains(e, "Graceful shutdown")) { found = true; break; }
+    ASSERT_TRUE(found);
 }
 
-void TestServerConfig::testGracefulShutdownExportImport()
+TEST(ServerConfig, GracefulShutdownExportImport)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
-    QString exportPath = tmp.filePath(QStringLiteral("export.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
+    std::string exportPath = tmp.filePath("export.json");
 
     ServerManager mgr(configPath);
     ServerConfig s;
-    s.name = QStringLiteral("GsExp");
+    s.name = "GsExp";
     s.appid = 1;
-    s.dir = QStringLiteral("/srv/gsexp");
+    s.dir = "/srv/gsexp";
     s.gracefulShutdownSeconds = 20;
-    mgr.servers() << s;
-    QVERIFY(mgr.exportServerConfig(QStringLiteral("GsExp"), exportPath));
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.exportServerConfig("GsExp", exportPath));
 
-    ServerManager mgr2(tmp.filePath(QStringLiteral("servers2.json")));
-    QVERIFY(mgr2.importServerConfig(exportPath).isEmpty());
-    QCOMPARE(mgr2.servers().at(0).gracefulShutdownSeconds, 20);
+    ServerManager mgr2(tmp.filePath("servers2.json"));
+    ASSERT_TRUE(mgr2.importServerConfig(exportPath).empty());
+    EXPECT_EQ(mgr2.servers().at(0).gracefulShutdownSeconds, 20);
 }
 
 // ---------------------------------------------------------------------------
 // Environment variables tests
 // ---------------------------------------------------------------------------
 
-void TestServerConfig::testEnvironmentVariablesDefault()
+TEST(ServerConfig, EnvironmentVariablesDefault)
 {
     ServerConfig s;
-    QVERIFY(s.environmentVariables.isEmpty());
+    ASSERT_TRUE(s.environmentVariables.empty());
 }
 
-void TestServerConfig::testEnvironmentVariablesPersistence()
+TEST(ServerConfig, EnvironmentVariablesPersistence)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
 
     ServerManager mgr(configPath);
     ServerConfig s;
-    s.name = QStringLiteral("EnvTest");
+    s.name = "EnvTest";
     s.appid = 1;
-    s.dir = QStringLiteral("/srv/env");
-    s.environmentVariables[QStringLiteral("GAME_MODE")] = QStringLiteral("survival");
-    s.environmentVariables[QStringLiteral("MAX_RATE")] = QStringLiteral("128000");
-    mgr.servers() << s;
-    QVERIFY(mgr.saveConfig());
+    s.dir = "/srv/env";
+    s.environmentVariables["GAME_MODE"] = "survival";
+    s.environmentVariables["MAX_RATE"] = "128000";
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.saveConfig());
 
     ServerManager mgr2(configPath);
-    QVERIFY(mgr2.loadConfig());
-    QCOMPARE(mgr2.servers().at(0).environmentVariables.size(), 2);
-    QCOMPARE(mgr2.servers().at(0).environmentVariables.value(QStringLiteral("GAME_MODE")),
-             QStringLiteral("survival"));
-    QCOMPARE(mgr2.servers().at(0).environmentVariables.value(QStringLiteral("MAX_RATE")),
-             QStringLiteral("128000"));
+    ASSERT_TRUE(mgr2.loadConfig());
+    EXPECT_EQ(mgr2.servers().at(0).environmentVariables.size(), 2);
+    EXPECT_EQ(mgr2.servers().at(0).environmentVariables.at("GAME_MODE"),
+             "survival");
+    EXPECT_EQ(mgr2.servers().at(0).environmentVariables.at("MAX_RATE"),
+             "128000");
 }
 
-void TestServerConfig::testEnvironmentVariablesExportImport()
+TEST(ServerConfig, EnvironmentVariablesExportImport)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
-    QString exportPath = tmp.filePath(QStringLiteral("export.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
+    std::string exportPath = tmp.filePath("export.json");
 
     ServerManager mgr(configPath);
     ServerConfig s;
-    s.name = QStringLiteral("EnvExp");
+    s.name = "EnvExp";
     s.appid = 1;
-    s.dir = QStringLiteral("/srv/envexp");
-    s.environmentVariables[QStringLiteral("SRCDS_TOKEN")] = QStringLiteral("abc123");
-    mgr.servers() << s;
-    QVERIFY(mgr.exportServerConfig(QStringLiteral("EnvExp"), exportPath));
+    s.dir = "/srv/envexp";
+    s.environmentVariables["SRCDS_TOKEN"] = "abc123";
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.exportServerConfig("EnvExp", exportPath));
 
-    ServerManager mgr2(tmp.filePath(QStringLiteral("servers2.json")));
-    QVERIFY(mgr2.importServerConfig(exportPath).isEmpty());
-    QCOMPARE(mgr2.servers().at(0).environmentVariables.value(QStringLiteral("SRCDS_TOKEN")),
-             QStringLiteral("abc123"));
+    ServerManager mgr2(tmp.filePath("servers2.json"));
+    ASSERT_TRUE(mgr2.importServerConfig(exportPath).empty());
+    EXPECT_EQ(mgr2.servers().at(0).environmentVariables.at("SRCDS_TOKEN"),
+             "abc123");
 }
 
-void TestServerConfig::testEnvironmentVariablesMultiple()
+TEST(ServerConfig, EnvironmentVariablesMultiple)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
 
     ServerManager mgr(configPath);
     ServerConfig s1;
-    s1.name = QStringLiteral("E1");
+    s1.name = "E1";
     s1.appid = 1;
-    s1.dir = QStringLiteral("/srv/e1");
-    s1.environmentVariables[QStringLiteral("KEY1")] = QStringLiteral("val1");
+    s1.dir = "/srv/e1";
+    s1.environmentVariables["KEY1"] = "val1";
 
     ServerConfig s2;
-    s2.name = QStringLiteral("E2");
+    s2.name = "E2";
     s2.appid = 2;
-    s2.dir = QStringLiteral("/srv/e2");
-    s2.environmentVariables[QStringLiteral("KEY2")] = QStringLiteral("val2");
-    s2.environmentVariables[QStringLiteral("KEY3")] = QStringLiteral("val3");
+    s2.dir = "/srv/e2";
+    s2.environmentVariables["KEY2"] = "val2";
+    s2.environmentVariables["KEY3"] = "val3";
 
-    mgr.servers() << s1 << s2;
-    QVERIFY(mgr.saveConfig());
+    mgr.servers().push_back(s1);
+    mgr.servers().push_back(s2);
+    ASSERT_TRUE(mgr.saveConfig());
 
     ServerManager mgr2(configPath);
-    QVERIFY(mgr2.loadConfig());
-    QCOMPARE(mgr2.servers().size(), 2);
-    QCOMPARE(mgr2.servers().at(0).environmentVariables.size(), 1);
-    QCOMPARE(mgr2.servers().at(1).environmentVariables.size(), 2);
+    ASSERT_TRUE(mgr2.loadConfig());
+    EXPECT_EQ(mgr2.servers().size(), static_cast<size_t>(2));
+    EXPECT_EQ(mgr2.servers().at(0).environmentVariables.size(), 1);
+    EXPECT_EQ(mgr2.servers().at(1).environmentVariables.size(), 2);
 }
 
 // ---------------------------------------------------------------------------
 // Batch operations tests
 // ---------------------------------------------------------------------------
 
-void TestServerConfig::testStartAllServers()
+TEST(ServerConfig, StartAllServers)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
 
     ServerManager mgr(configPath);
     ServerConfig s1;
-    s1.name = QStringLiteral("Batch1");
+    s1.name = "Batch1";
     s1.appid = 1;
-    s1.dir = QStringLiteral("/srv/b1");
+    s1.dir = "/srv/b1";
     s1.startupPriority = 2;
 
     ServerConfig s2;
-    s2.name = QStringLiteral("Batch2");
+    s2.name = "Batch2";
     s2.appid = 2;
-    s2.dir = QStringLiteral("/srv/b2");
+    s2.dir = "/srv/b2";
     s2.startupPriority = 1;
 
-    mgr.servers() << s1 << s2;
+    mgr.servers().push_back(s1);
+    mgr.servers().push_back(s2);
 
     // startAllServers should not crash even with non-existent executables
     mgr.startAllServers();
+    // Give forked children time to exec and exit
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    mgr.tick();
     // Servers won't actually start (no executables), so running count = 0
-    QCOMPARE(mgr.runningServerCount(), 0);
+    EXPECT_EQ(mgr.runningServerCount(), 0);
 }
 
-void TestServerConfig::testStopAllServers()
+TEST(ServerConfig, StopAllServers)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
 
     ServerManager mgr(configPath);
     ServerConfig s1;
-    s1.name = QStringLiteral("StopAll1");
+    s1.name = "StopAll1";
     s1.appid = 1;
-    s1.dir = QStringLiteral("/srv/sa1");
-    mgr.servers() << s1;
+    s1.dir = "/srv/sa1";
+    mgr.servers().push_back(s1);
 
     // stopAllServers on non-running servers should not crash
     mgr.stopAllServers();
-    QCOMPARE(mgr.runningServerCount(), 0);
+    EXPECT_EQ(mgr.runningServerCount(), 0);
 }
 
-void TestServerConfig::testRestartAllServers()
+TEST(ServerConfig, RestartAllServers)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
 
     ServerManager mgr(configPath);
     ServerConfig s1;
-    s1.name = QStringLiteral("RestartAll1");
+    s1.name = "RestartAll1";
     s1.appid = 1;
-    s1.dir = QStringLiteral("/srv/ra1");
-    mgr.servers() << s1;
+    s1.dir = "/srv/ra1";
+    mgr.servers().push_back(s1);
 
     // restartAllServers on non-running servers should not crash
     mgr.restartAllServers();
-    QCOMPARE(mgr.runningServerCount(), 0);
+    EXPECT_EQ(mgr.runningServerCount(), 0);
 }
 
-void TestServerConfig::testStartGroup()
+TEST(ServerConfig, StartGroup)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
 
     ServerManager mgr(configPath);
     ServerConfig s1;
-    s1.name = QStringLiteral("G1");
+    s1.name = "G1";
     s1.appid = 1;
-    s1.dir = QStringLiteral("/srv/g1");
-    s1.group = QStringLiteral("Production");
+    s1.dir = "/srv/g1";
+    s1.group = "Production";
 
     ServerConfig s2;
-    s2.name = QStringLiteral("G2");
+    s2.name = "G2";
     s2.appid = 2;
-    s2.dir = QStringLiteral("/srv/g2");
-    s2.group = QStringLiteral("Testing");
+    s2.dir = "/srv/g2";
+    s2.group = "Testing";
 
-    mgr.servers() << s1 << s2;
+    mgr.servers().push_back(s1);
+    mgr.servers().push_back(s2);
 
     // startGroup should only attempt to start servers in the specified group
-    mgr.startGroup(QStringLiteral("Production"));
-    QCOMPARE(mgr.runningServerCount(), 0); // No executables, but shouldn't crash
+    mgr.startGroup("Production");
+    // Give forked children time to exec and exit
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    mgr.tick();
+    EXPECT_EQ(mgr.runningServerCount(), 0); // No executables, but shouldn't crash
 }
 
-void TestServerConfig::testStopGroup()
+TEST(ServerConfig, StopGroup)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
 
     ServerManager mgr(configPath);
     ServerConfig s1;
-    s1.name = QStringLiteral("SG1");
+    s1.name = "SG1";
     s1.appid = 1;
-    s1.dir = QStringLiteral("/srv/sg1");
-    s1.group = QStringLiteral("Production");
-    mgr.servers() << s1;
+    s1.dir = "/srv/sg1";
+    s1.group = "Production";
+    mgr.servers().push_back(s1);
 
-    mgr.stopGroup(QStringLiteral("Production"));
-    QCOMPARE(mgr.runningServerCount(), 0);
+    mgr.stopGroup("Production");
+    EXPECT_EQ(mgr.runningServerCount(), 0);
 }
 
-void TestServerConfig::testRestartGroup()
+TEST(ServerConfig, RestartGroup)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
 
     ServerManager mgr(configPath);
     ServerConfig s1;
-    s1.name = QStringLiteral("RG1");
+    s1.name = "RG1";
     s1.appid = 1;
-    s1.dir = QStringLiteral("/srv/rg1");
-    s1.group = QStringLiteral("Production");
-    mgr.servers() << s1;
+    s1.dir = "/srv/rg1";
+    s1.group = "Production";
+    mgr.servers().push_back(s1);
 
-    mgr.restartGroup(QStringLiteral("Production"));
-    QCOMPARE(mgr.runningServerCount(), 0);
+    mgr.restartGroup("Production");
+    EXPECT_EQ(mgr.runningServerCount(), 0);
 }
 
-void TestServerConfig::testServerGroupsList()
+TEST(ServerConfig, ServerGroupsList)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
 
     ServerManager mgr(configPath);
     ServerConfig s1;
-    s1.name = QStringLiteral("GL1");
+    s1.name = "GL1";
     s1.appid = 1;
-    s1.dir = QStringLiteral("/srv/gl1");
-    s1.group = QStringLiteral("Production");
+    s1.dir = "/srv/gl1";
+    s1.group = "Production";
 
     ServerConfig s2;
-    s2.name = QStringLiteral("GL2");
+    s2.name = "GL2";
     s2.appid = 2;
-    s2.dir = QStringLiteral("/srv/gl2");
-    s2.group = QStringLiteral("Testing");
+    s2.dir = "/srv/gl2";
+    s2.group = "Testing";
 
     ServerConfig s3;
-    s3.name = QStringLiteral("GL3");
+    s3.name = "GL3";
     s3.appid = 3;
-    s3.dir = QStringLiteral("/srv/gl3");
-    s3.group = QStringLiteral("Production");  // duplicate group
+    s3.dir = "/srv/gl3";
+    s3.group = "Production";  // duplicate group
 
     ServerConfig s4;
-    s4.name = QStringLiteral("GL4");
+    s4.name = "GL4";
     s4.appid = 4;
-    s4.dir = QStringLiteral("/srv/gl4");
+    s4.dir = "/srv/gl4";
     // no group set
 
-    mgr.servers() << s1 << s2 << s3 << s4;
+    mgr.servers().push_back(s1);
+    mgr.servers().push_back(s2);
+    mgr.servers().push_back(s3);
+    mgr.servers().push_back(s4);
 
-    QStringList groups = mgr.serverGroups();
-    QCOMPARE(groups.size(), 2);
-    QVERIFY(groups.contains(QStringLiteral("Production")));
-    QVERIFY(groups.contains(QStringLiteral("Testing")));
+    std::vector<std::string> groups = mgr.serverGroups();
+    EXPECT_EQ(groups.size(), static_cast<size_t>(2));
+    ASSERT_TRUE(vectorContains(groups, std::string("Production")));
+    ASSERT_TRUE(vectorContains(groups, std::string("Testing")));
 }
 
-void TestServerConfig::testServerGroupsEmpty()
+TEST(ServerConfig, ServerGroupsEmpty)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
 
     ServerManager mgr(configPath);
-    QVERIFY(mgr.serverGroups().isEmpty());
+    ASSERT_TRUE(mgr.serverGroups().empty());
 
     // Servers without groups
     ServerConfig s1;
-    s1.name = QStringLiteral("NoGroup");
+    s1.name = "NoGroup";
     s1.appid = 1;
-    s1.dir = QStringLiteral("/srv/ng");
-    mgr.servers() << s1;
-    QVERIFY(mgr.serverGroups().isEmpty());
+    s1.dir = "/srv/ng";
+    mgr.servers().push_back(s1);
+    ASSERT_TRUE(mgr.serverGroups().empty());
 }
 
-void TestServerConfig::testRunningServerCount()
+TEST(ServerConfig, RunningServerCount)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
 
     ServerManager mgr(configPath);
-    QCOMPARE(mgr.runningServerCount(), 0);
+    EXPECT_EQ(mgr.runningServerCount(), 0);
 
     ServerConfig s1;
-    s1.name = QStringLiteral("RC1");
+    s1.name = "RC1";
     s1.appid = 1;
-    s1.dir = QStringLiteral("/srv/rc1");
-    mgr.servers() << s1;
-    QCOMPARE(mgr.runningServerCount(), 0);
+    s1.dir = "/srv/rc1";
+    mgr.servers().push_back(s1);
+    EXPECT_EQ(mgr.runningServerCount(), 0);
 }
 
 // ---------------------------------------------------------------------------
 // Auto-update check interval tests
 // ---------------------------------------------------------------------------
 
-void TestServerConfig::testAutoUpdateCheckIntervalDefault()
+TEST(ServerConfig, AutoUpdateCheckIntervalDefault)
 {
     ServerConfig s;
-    QCOMPARE(s.autoUpdateCheckIntervalMinutes, 0);
+    EXPECT_EQ(s.autoUpdateCheckIntervalMinutes, 0);
 }
 
-void TestServerConfig::testAutoUpdateCheckIntervalPersistence()
+TEST(ServerConfig, AutoUpdateCheckIntervalPersistence)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
 
     ServerManager mgr(configPath);
     ServerConfig s;
-    s.name = QStringLiteral("UpdateCheck");
+    s.name = "UpdateCheck";
     s.appid = 1;
-    s.dir = QStringLiteral("/srv/uc");
+    s.dir = "/srv/uc";
     s.autoUpdateCheckIntervalMinutes = 60;
-    mgr.servers() << s;
-    QVERIFY(mgr.saveConfig());
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.saveConfig());
 
     ServerManager mgr2(configPath);
-    QVERIFY(mgr2.loadConfig());
-    QCOMPARE(mgr2.servers().at(0).autoUpdateCheckIntervalMinutes, 60);
+    ASSERT_TRUE(mgr2.loadConfig());
+    EXPECT_EQ(mgr2.servers().at(0).autoUpdateCheckIntervalMinutes, 60);
 }
 
-void TestServerConfig::testAutoUpdateCheckIntervalValidation()
+TEST(ServerConfig, AutoUpdateCheckIntervalValidation)
 {
     ServerConfig s;
-    s.name = QStringLiteral("UCValid");
+    s.name = "UCValid";
     s.appid = 1;
-    s.dir = QStringLiteral("/srv/ucv");
+    s.dir = "/srv/ucv";
 
     s.autoUpdateCheckIntervalMinutes = 0;
-    QVERIFY(s.validate().isEmpty());
+    ASSERT_TRUE(s.validate().empty());
 
     s.autoUpdateCheckIntervalMinutes = 120;
-    QVERIFY(s.validate().isEmpty());
+    ASSERT_TRUE(s.validate().empty());
 
     s.autoUpdateCheckIntervalMinutes = -1;
-    QStringList errors = s.validate();
-    QVERIFY(!errors.isEmpty());
+    std::vector<std::string> errors = s.validate();
+    EXPECT_FALSE(errors.empty());
     bool found = false;
-    for (const QString &e : errors) {
-        if (e.contains(QStringLiteral("Auto-update check interval")))
+    for (const auto &e : errors) {
+        if (strContains(e, "Auto-update check interval"))
             found = true;
     }
-    QVERIFY(found);
+    ASSERT_TRUE(found);
 }
 
-void TestServerConfig::testAutoUpdateCheckIntervalExportImport()
+TEST(ServerConfig, AutoUpdateCheckIntervalExportImport)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
-    QString exportPath = tmp.filePath(QStringLiteral("export.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
+    std::string exportPath = tmp.filePath("export.json");
 
     ServerManager mgr(configPath);
     ServerConfig s;
-    s.name = QStringLiteral("UCExp");
+    s.name = "UCExp";
     s.appid = 1;
-    s.dir = QStringLiteral("/srv/ucexp");
+    s.dir = "/srv/ucexp";
     s.autoUpdateCheckIntervalMinutes = 45;
-    mgr.servers() << s;
-    QVERIFY(mgr.exportServerConfig(QStringLiteral("UCExp"), exportPath));
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.exportServerConfig("UCExp", exportPath));
 
-    ServerManager mgr2(tmp.filePath(QStringLiteral("servers2.json")));
-    QVERIFY(mgr2.importServerConfig(exportPath).isEmpty());
-    QCOMPARE(mgr2.servers().at(0).autoUpdateCheckIntervalMinutes, 45);
+    ServerManager mgr2(tmp.filePath("servers2.json"));
+    ASSERT_TRUE(mgr2.importServerConfig(exportPath).empty());
+    EXPECT_EQ(mgr2.servers().at(0).autoUpdateCheckIntervalMinutes, 45);
 }
 
 // ---------------------------------------------------------------------------
 // Server statistics tests
 // ---------------------------------------------------------------------------
 
-void TestServerConfig::testTotalUptimeDefault()
+TEST(ServerConfig, TotalUptimeDefault)
 {
     ServerConfig s;
-    QCOMPARE(s.totalUptimeSeconds, 0);
+    EXPECT_EQ(s.totalUptimeSeconds, 0);
 }
 
-void TestServerConfig::testTotalUptimePersistence()
+TEST(ServerConfig, TotalUptimePersistence)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
 
     ServerManager mgr(configPath);
     ServerConfig s;
-    s.name = QStringLiteral("UptimeTest");
+    s.name = "UptimeTest";
     s.appid = 1;
-    s.dir = QStringLiteral("/srv/ut");
+    s.dir = "/srv/ut";
     s.totalUptimeSeconds = 86400;  // 1 day
-    mgr.servers() << s;
-    QVERIFY(mgr.saveConfig());
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.saveConfig());
 
     ServerManager mgr2(configPath);
-    QVERIFY(mgr2.loadConfig());
-    QCOMPARE(mgr2.servers().at(0).totalUptimeSeconds, 86400);
+    ASSERT_TRUE(mgr2.loadConfig());
+    EXPECT_EQ(mgr2.servers().at(0).totalUptimeSeconds, 86400);
 }
 
-void TestServerConfig::testTotalCrashesDefault()
+TEST(ServerConfig, TotalCrashesDefault)
 {
     ServerConfig s;
-    QCOMPARE(s.totalCrashes, 0);
+    EXPECT_EQ(s.totalCrashes, 0);
 }
 
-void TestServerConfig::testTotalCrashesPersistence()
+TEST(ServerConfig, TotalCrashesPersistence)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
 
     ServerManager mgr(configPath);
     ServerConfig s;
-    s.name = QStringLiteral("CrashTest");
+    s.name = "CrashTest";
     s.appid = 1;
-    s.dir = QStringLiteral("/srv/ct");
+    s.dir = "/srv/ct";
     s.totalCrashes = 5;
-    mgr.servers() << s;
-    QVERIFY(mgr.saveConfig());
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.saveConfig());
 
     ServerManager mgr2(configPath);
-    QVERIFY(mgr2.loadConfig());
-    QCOMPARE(mgr2.servers().at(0).totalCrashes, 5);
+    ASSERT_TRUE(mgr2.loadConfig());
+    EXPECT_EQ(mgr2.servers().at(0).totalCrashes, 5);
 }
 
-void TestServerConfig::testLastCrashTimeDefault()
+TEST(ServerConfig, LastCrashTimeDefault)
 {
     ServerConfig s;
-    QVERIFY(s.lastCrashTime.isEmpty());
+    ASSERT_TRUE(s.lastCrashTime.empty());
 }
 
-void TestServerConfig::testLastCrashTimePersistence()
+TEST(ServerConfig, LastCrashTimePersistence)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
 
     ServerManager mgr(configPath);
     ServerConfig s;
-    s.name = QStringLiteral("CrashTimeTest");
+    s.name = "CrashTimeTest";
     s.appid = 1;
-    s.dir = QStringLiteral("/srv/ctt");
-    s.lastCrashTime = QStringLiteral("2026-01-15T10:30:00");
-    mgr.servers() << s;
-    QVERIFY(mgr.saveConfig());
+    s.dir = "/srv/ctt";
+    s.lastCrashTime = "2026-01-15T10:30:00";
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.saveConfig());
 
     ServerManager mgr2(configPath);
-    QVERIFY(mgr2.loadConfig());
-    QCOMPARE(mgr2.servers().at(0).lastCrashTime, QStringLiteral("2026-01-15T10:30:00"));
+    ASSERT_TRUE(mgr2.loadConfig());
+    EXPECT_EQ(mgr2.servers().at(0).lastCrashTime, "2026-01-15T10:30:00");
 }
 
-void TestServerConfig::testStatsExportImport()
+TEST(ServerConfig, StatsExportImport)
 {
-    QTemporaryDir tmp;
-    QVERIFY(tmp.isValid());
-    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
-    QString exportPath = tmp.filePath(QStringLiteral("export.json"));
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
+    std::string exportPath = tmp.filePath("export.json");
 
     ServerManager mgr(configPath);
     ServerConfig s;
-    s.name = QStringLiteral("StatsExp");
+    s.name = "StatsExp";
     s.appid = 1;
-    s.dir = QStringLiteral("/srv/statsexp");
+    s.dir = "/srv/statsexp";
     s.totalUptimeSeconds = 172800;  // 2 days
     s.totalCrashes = 3;
-    s.lastCrashTime = QStringLiteral("2026-02-20T14:00:00");
-    mgr.servers() << s;
-    QVERIFY(mgr.exportServerConfig(QStringLiteral("StatsExp"), exportPath));
+    s.lastCrashTime = "2026-02-20T14:00:00";
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.exportServerConfig("StatsExp", exportPath));
 
-    ServerManager mgr2(tmp.filePath(QStringLiteral("servers2.json")));
-    QVERIFY(mgr2.importServerConfig(exportPath).isEmpty());
-    QCOMPARE(mgr2.servers().at(0).totalUptimeSeconds, 172800);
-    QCOMPARE(mgr2.servers().at(0).totalCrashes, 3);
-    QCOMPARE(mgr2.servers().at(0).lastCrashTime, QStringLiteral("2026-02-20T14:00:00"));
+    ServerManager mgr2(tmp.filePath("servers2.json"));
+    ASSERT_TRUE(mgr2.importServerConfig(exportPath).empty());
+    EXPECT_EQ(mgr2.servers().at(0).totalUptimeSeconds, 172800);
+    EXPECT_EQ(mgr2.servers().at(0).totalCrashes, 3);
+    EXPECT_EQ(mgr2.servers().at(0).lastCrashTime, "2026-02-20T14:00:00");
 }
 
-void TestServerConfig::testStatsValidation()
+TEST(ServerConfig, StatsValidation)
 {
     ServerConfig s;
-    s.name = QStringLiteral("StatsValid");
+    s.name = "StatsValid";
     s.appid = 1;
-    s.dir = QStringLiteral("/srv/sv");
+    s.dir = "/srv/sv";
 
     // Valid defaults
-    QVERIFY(s.validate().isEmpty());
+    ASSERT_TRUE(s.validate().empty());
 
     // Negative totalUptimeSeconds should fail
     s.totalUptimeSeconds = -1;
-    QStringList errors = s.validate();
-    QVERIFY(!errors.isEmpty());
+    std::vector<std::string> errors = s.validate();
+    EXPECT_FALSE(errors.empty());
     bool found = false;
-    for (const QString &e : errors) {
-        if (e.contains(QStringLiteral("Total uptime")))
+    for (const auto &e : errors) {
+        if (strContains(e, "Total uptime"))
             found = true;
     }
-    QVERIFY(found);
+    ASSERT_TRUE(found);
     s.totalUptimeSeconds = 0;
 
     // Negative totalCrashes should fail
     s.totalCrashes = -1;
     errors = s.validate();
-    QVERIFY(!errors.isEmpty());
+    EXPECT_FALSE(errors.empty());
     found = false;
-    for (const QString &e : errors) {
-        if (e.contains(QStringLiteral("Total crashes")))
+    for (const auto &e : errors) {
+        if (strContains(e, "Total crashes"))
             found = true;
     }
-    QVERIFY(found);
+    ASSERT_TRUE(found);
 }
 
-#include "test_serverconfig.moc"
+

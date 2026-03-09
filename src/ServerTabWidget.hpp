@@ -1,97 +1,98 @@
 #pragma once
 
 #include "ServerManager.hpp"
-#include <QWidget>
-#include <QTabWidget>
-#include <QTextEdit>
-#include <QTableWidget>
-#include <QListWidget>
-#include <QLabel>
-#include <QTimer>
+#include <string>
+#include <vector>
+#include <chrono>
 
 /**
- * @brief Per-server tabbed widget.
+ * @brief Per-server tabbed widget (Dear ImGui immediate mode).
  *
  * Sub-tabs:
  *   Overview  – status light, quick actions (start/stop/restart/deploy), uptime, notes
+ *   Settings  – form fields for every server property
  *   Config    – text editor for the primary config file with revert support
- *   Mods      – mod list with add/remove/update and drag & drop reordering
+ *   Mods      – mod list with add/remove/update
  *   Backups   – snapshot list with take/restore actions
  *   Console   – live RCON command console with command history
  *   Logs      – live server log file viewer
  */
-class ServerTabWidget : public QWidget {
-    Q_OBJECT
+class ServerTabWidget {
 public:
-    explicit ServerTabWidget(ServerManager *manager,
-                             ServerConfig  &server,
-                             QWidget       *parent = nullptr);
+    ServerTabWidget(ServerManager *manager, ServerConfig &server);
+    ~ServerTabWidget() = default;
 
-    const QString &serverName() const;
-
-    /** Update the status-light label in the Overview tab. */
-    void refreshStatus();
-
-protected:
-    bool eventFilter(QObject *obj, QEvent *event) override;
-
-private slots:
-    void onSendCommand();
-    void onAddMod();
-    void onRemoveMod();
-    void onUpdateMods();
-    void onTakeSnapshot();
-    void onRestoreSnapshot();
-    void onSaveConfig();
-    void onRevertConfig();
-    void onDeployServer();
+    /** Render the full widget.  Call once per frame inside ImGui context. */
+    void render();
 
 private:
-    void buildOverviewTab(QTabWidget *tabs);
-    void buildSettingsTab(QTabWidget *tabs);
-    void buildConfigTab(QTabWidget *tabs);
-    void buildModsTab(QTabWidget *tabs);
-    void buildBackupsTab(QTabWidget *tabs);
-    void buildConsoleTab(QTabWidget *tabs);
-    void buildLogsTab(QTabWidget *tabs);
-
-    void appendConsole(const QString &text);
-    void populateModTable();
-    void populateBackupList();
-    void persistModOrder();
-    void refreshLogViewer();
-    QString computeDiff(const QString &original, const QString &modified) const;
+    void renderOverviewTab();
+    void renderSettingsTab();
+    void renderConfigTab();
+    void renderModsTab();
+    void renderBackupsTab();
+    void renderConsoleTab();
+    void renderLogsTab();
 
     ServerManager *m_manager;
     ServerConfig  &m_server;
 
     // Overview
-    QLabel  *m_statusLight  = nullptr;
-    QLabel  *m_playersLabel = nullptr;
-    QLabel  *m_uptimeLabel  = nullptr;
+    char m_notesBuf[4096] = {};
 
-    // Config
-    QTextEdit *m_configEditor = nullptr;
-    QString    m_configPath;
-    QString    m_originalConfigContent;   // track original for revert
+    // Settings form buffers
+    char m_settName[256]     = {};
+    int  m_settAppid         = 0;
+    char m_settDir[512]      = {};
+    char m_settExe[256]      = {};
+    char m_settArgs[512]     = {};
+    char m_settRconHost[128] = {};
+    int  m_settRconPort      = 27015;
+    char m_settRconPass[128] = {};
+    char m_settBackupDir[512]= {};
+    int  m_settMaxPlayers    = 0;
+    bool m_settAutoUpdate    = true;
+    bool m_settAutoStart     = false;
+    bool m_settFavorite      = false;
+    int  m_settBackupInterval = 30;
+    int  m_settRestartInterval = 24;
+    int  m_settKeepBackups   = 10;
+    int  m_settRestartWarnMin = 15;
+    char m_settRestartWarnMsg[256] = {};
+    int  m_settGracefulShutdown = 10;
+    int  m_settStartupPriority = 0;
+    bool m_settBackupBeforeRestart = false;
+    double m_settCpuAlert    = 90.0;
+    double m_settMemAlert    = 0.0;
+    int  m_settCompression   = 6;
+    int  m_settMaintStart    = -1;
+    int  m_settMaintEnd      = -1;
+    bool m_settConsoleLogging = false;
+    char m_settWebhookUrl[512] = {};
+    char m_settWebhookTpl[512] = {};
+    char m_settGroup[256]    = {};
+    int  m_settRconCmdInterval = 0;
+    int  m_settAutoUpdateCheck = 0;
+
+    // Config editor
+    char m_configBuf[65536]  = {};
+    std::string m_configPath;
+    std::string m_originalConfig;
+    bool m_configLoaded      = false;
 
     // Mods
-    QTableWidget *m_modTable = nullptr;
-
-    // Backups
-    QListWidget *m_backupList = nullptr;
+    char m_newModId[32]      = {};
 
     // Console
-    QTextEdit *m_consoleOutput = nullptr;
-    QWidget   *m_consoleInput  = nullptr;   // QLineEdit stored via cast
+    char m_consoleCmdBuf[512] = {};
+    std::string m_consoleOutput;
+    std::vector<std::string> m_commandHistory;
+    int  m_historyIndex      = -1;
 
-    // RCON command history
-    QStringList m_commandHistory;
-    int         m_historyIndex = -1;
+    // Log viewer
+    std::string m_logContent;
+    std::chrono::steady_clock::time_point m_lastLogRefresh;
 
-    // Logs
-    QTextEdit *m_logViewer     = nullptr;
-    QString    m_logFilePath;
-
-    QTimer *m_statusTimer = nullptr;
+    // State flags
+    bool m_settingsInitialized = false;
 };
