@@ -1,56 +1,98 @@
 #include "WebhookModule.hpp"
+#include "ServerConfig.hpp"
 
-#include <QDateTime>
-#include <QJsonDocument>
-#include <QJsonObject>
-#include <QNetworkReply>
-#include <QNetworkRequest>
-#include <QDebug>
+#include <chrono>
+#include <ctime>
+#include <cstdlib>
+#include <iostream>
+#include <sstream>
+#include <thread>
 
-WebhookModule::WebhookModule(QObject *parent)
-    : QObject(parent), m_nam(new QNetworkAccessManager(this))
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <unistd.h>
+#include <sys/wait.h>
+#endif
+
+static std::string currentTimestampISO()
 {
+    auto now = std::chrono::system_clock::now();
+    std::time_t t = std::chrono::system_clock::to_time_t(now);
+    std::tm tm{};
+#ifdef _WIN32
+    localtime_s(&tm, &t);
+#else
+    localtime_r(&t, &tm);
+#endif
+    char buf[32];
+    std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", &tm);
+    return buf;
 }
 
-QString WebhookModule::formatMessage(const QString &tpl,
-                                     const QString &serverName,
-                                     const QString &event)
+std::string WebhookModule::formatMessage(const std::string &tpl,
+                                         const std::string &serverName,
+                                         const std::string &event)
 {
-    QString msg = tpl;
-    msg.replace(QStringLiteral("{server}"),    serverName);
-    msg.replace(QStringLiteral("{event}"),     event);
-    msg.replace(QStringLiteral("{timestamp}"), QDateTime::currentDateTime().toString(Qt::ISODate));
+    std::string msg = tpl;
+    msg = replaceAll(msg, "{server}",    serverName);
+    msg = replaceAll(msg, "{event}",     event);
+    msg = replaceAll(msg, "{timestamp}", currentTimestampISO());
     return msg;
 }
 
-void WebhookModule::sendNotification(const QString &webhookUrl,
-                                     const QString &serverName,
-                                     const QString &message,
-                                     const QString &messageTemplate)
+// Escape a string for embedding in a JSON string value.
+static std::string jsonEscape(const std::string &s)
 {
-    if (webhookUrl.trimmed().isEmpty())
+    std::string out;
+    out.reserve(s.size() + 16);
+    for (char c : s) {
+        switch (c) {
+        case '"':  out += "\\\""; break;
+        case '\\': out += "\\\\"; break;
+        case '\n': out += "\\n";  break;
+        case '\r': out += "\\r";  break;
+        case '\t': out += "\\t";  break;
+        default:   out += c;      break;
+        }
+    }
+    return out;
+}
+
+void WebhookModule::sendNotification(const std::string &webhookUrl,
+                                     const std::string &serverName,
+                                     const std::string &message,
+                                     const std::string &messageTemplate)
+{
+    if (trimString(webhookUrl).empty())
         return;
 
-    QString content;
-    if (!messageTemplate.trimmed().isEmpty())
+    std::string content;
+    if (!trimString(messageTemplate).empty())
         content = formatMessage(messageTemplate, serverName, message);
     else
-        content = QStringLiteral("**[%1]** %2").arg(serverName, message);
+        content = "**[" + serverName + "]** " + message;
 
-    QJsonObject payload;
-    payload[QStringLiteral("content")] = content;
+    // Build JSON payload
+    std::string payload = "{\"content\":\"" + jsonEscape(content) + "\"}";
 
-    QNetworkRequest request{QUrl(webhookUrl)};
-    request.setHeader(QNetworkRequest::ContentTypeHeader,
-                      QStringLiteral("application/json"));
-
-    QNetworkReply *reply =
-        m_nam->post(request, QJsonDocument(payload).toJson(QJsonDocument::Compact));
-
-    // Log errors for debugging, then clean up (fire-and-forget)
-    connect(reply, &QNetworkReply::finished, reply, [reply]() {
-        if (reply->error() != QNetworkReply::NoError)
-            qWarning() << "WebhookModule: delivery failed:" << reply->errorString();
-        reply->deleteLater();
-    });
+    // Fire-and-forget: launch curl in a detached thread
+    std::string url = webhookUrl;
+    std::thread([url, payload]() {
+        // Build the curl command
+        std::string cmd = "curl -s -o /dev/null -X POST"
+                          " -H \"Content-Type: application/json\""
+                          " -d '" + payload + "'"
+                          " \"" + url + "\" 2>/dev/null";
+#ifdef _WIN32
+        // On Windows, redirect to NUL
+        cmd = "curl -s -o NUL -X POST"
+              " -H \"Content-Type: application/json\""
+              " -d \"" + payload + "\""
+              " \"" + url + "\" 2>NUL";
+#endif
+        int ret = std::system(cmd.c_str());
+        if (ret != 0)
+            std::cerr << "WebhookModule: delivery failed (curl exit " << ret << ")\n";
+    }).detach();
 }

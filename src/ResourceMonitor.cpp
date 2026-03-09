@@ -1,48 +1,38 @@
 #include "ResourceMonitor.hpp"
 
-#include <QDateTime>
-#include <QElapsedTimer>
+#include <chrono>
+#include <fstream>
+#include <sstream>
+#include <string>
 
-#ifdef Q_OS_LINUX
-#include <QFile>
-#include <QStringList>
+#ifdef __linux__
 #include <unistd.h>
 #endif
 
-#ifdef Q_OS_WIN
+#ifdef _WIN32
 #include <windows.h>
 #include <psapi.h>
 #endif
 
-#ifdef Q_OS_MACOS
+#ifdef __APPLE__
 #include <mach/mach.h>
 #endif
-
-// ---------------------------------------------------------------------------
-// Constructor
-// ---------------------------------------------------------------------------
-
-ResourceMonitor::ResourceMonitor(QObject *parent)
-    : QObject(parent)
-{
-    connect(&m_timer, &QTimer::timeout, this, &ResourceMonitor::poll);
-}
 
 // ---------------------------------------------------------------------------
 // Track / untrack
 // ---------------------------------------------------------------------------
 
-void ResourceMonitor::trackProcess(const QString &serverName, qint64 pid)
+void ResourceMonitor::trackProcess(const std::string &serverName, int64_t pid)
 {
     TrackedProcess tp;
     tp.pid = pid;
     m_tracked[serverName] = tp;
 }
 
-void ResourceMonitor::untrackProcess(const QString &serverName)
+void ResourceMonitor::untrackProcess(const std::string &serverName)
 {
-    m_tracked.remove(serverName);
-    m_latest.remove(serverName);
+    m_tracked.erase(serverName);
+    m_latest.erase(serverName);
 }
 
 // ---------------------------------------------------------------------------
@@ -52,35 +42,47 @@ void ResourceMonitor::untrackProcess(const QString &serverName)
 void ResourceMonitor::setPollIntervalMs(int ms)
 {
     m_pollIntervalMs = (ms > 0) ? ms : 1000;
-    if (m_timer.isActive()) {
-        m_timer.stop();
-        m_timer.start(m_pollIntervalMs);
-    }
 }
 
 int ResourceMonitor::pollIntervalMs() const { return m_pollIntervalMs; }
 
 void ResourceMonitor::start()
 {
-    if (!m_timer.isActive())
-        m_timer.start(m_pollIntervalMs);
+    m_active = true;
+    m_lastPoll = std::chrono::steady_clock::now();
 }
 
 void ResourceMonitor::stop()
 {
-    m_timer.stop();
+    m_active = false;
+}
+
+void ResourceMonitor::tick()
+{
+    if (!m_active)
+        return;
+
+    auto now = std::chrono::steady_clock::now();
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - m_lastPoll).count();
+    if (elapsed >= m_pollIntervalMs) {
+        poll();
+        m_lastPoll = now;
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Accessors
 // ---------------------------------------------------------------------------
 
-ResourceUsage ResourceMonitor::usage(const QString &serverName) const
+ResourceUsage ResourceMonitor::usage(const std::string &serverName) const
 {
-    return m_latest.value(serverName, ResourceUsage{});
+    auto it = m_latest.find(serverName);
+    if (it != m_latest.end())
+        return it->second;
+    return ResourceUsage{};
 }
 
-QMap<QString, ResourceUsage> ResourceMonitor::allUsage() const
+std::map<std::string, ResourceUsage> ResourceMonitor::allUsage() const
 {
     return m_latest;
 }
@@ -89,44 +91,37 @@ QMap<QString, ResourceUsage> ResourceMonitor::allUsage() const
 // Platform-specific: read resource usage for a PID
 // ---------------------------------------------------------------------------
 
-ResourceUsage ResourceMonitor::readUsage(qint64 pid)
+ResourceUsage ResourceMonitor::readUsage(int64_t pid)
 {
     ResourceUsage ru;
     if (pid <= 0)
         return ru;
 
-#ifdef Q_OS_LINUX
+#ifdef __linux__
     // Memory from /proc/<pid>/statm (field 1 = resident pages)
     {
-        QFile f(QStringLiteral("/proc/%1/statm").arg(pid));
-        if (f.open(QIODevice::ReadOnly)) {
-            QByteArray data = f.readAll();
-            QStringList parts = QString::fromLatin1(data.trimmed()).split(QLatin1Char(' '));
-            if (parts.size() >= 2) {
-                long pageSize = sysconf(_SC_PAGESIZE);
-                ru.memoryBytes = parts.at(1).toLongLong() * pageSize;
-            }
+        std::ifstream f("/proc/" + std::to_string(pid) + "/statm");
+        if (f.is_open()) {
+            int64_t totalPages = 0, residentPages = 0;
+            f >> totalPages >> residentPages;
+            long pageSize = sysconf(_SC_PAGESIZE);
+            ru.memoryBytes = residentPages * pageSize;
         }
     }
-
-    // CPU snapshot: /proc/<pid>/stat — fields 14 (utime) + 15 (stime) in clock ticks.
-    // We cannot compute a percentage in a single read; the caller (poll()) does
-    // the delta calculation between two consecutive reads.
-    // Here we just return the memory; CPU is handled in poll().
 #endif
 
-#ifdef Q_OS_WIN
+#ifdef _WIN32
     HANDLE hProcess = OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ,
                                   FALSE, static_cast<DWORD>(pid));
     if (hProcess) {
         PROCESS_MEMORY_COUNTERS pmc;
         if (GetProcessMemoryInfo(hProcess, &pmc, sizeof(pmc)))
-            ru.memoryBytes = static_cast<qint64>(pmc.WorkingSetSize);
+            ru.memoryBytes = static_cast<int64_t>(pmc.WorkingSetSize);
         CloseHandle(hProcess);
     }
 #endif
 
-#ifdef Q_OS_MACOS
+#ifdef __APPLE__
     mach_port_t task;
     if (task_for_pid(mach_task_self(), static_cast<int>(pid), &task) == KERN_SUCCESS) {
         mach_msg_type_number_t infoCount = MACH_TASK_BASIC_INFO_COUNT;
@@ -134,7 +129,7 @@ ResourceUsage ResourceMonitor::readUsage(qint64 pid)
         if (task_info(task, MACH_TASK_BASIC_INFO,
                       reinterpret_cast<task_info_t>(&info), &infoCount) == KERN_SUCCESS
             && infoCount == MACH_TASK_BASIC_INFO_COUNT) {
-            ru.memoryBytes = static_cast<qint64>(info.resident_size);
+            ru.memoryBytes = static_cast<int64_t>(info.resident_size);
         }
         mach_port_deallocate(mach_task_self(), task);
     }
@@ -149,35 +144,41 @@ ResourceUsage ResourceMonitor::readUsage(qint64 pid)
 
 void ResourceMonitor::poll()
 {
-    for (auto it = m_tracked.begin(); it != m_tracked.end(); ++it) {
-        TrackedProcess &tp = it.value();
+    for (auto &[name, tp] : m_tracked) {
         ResourceUsage ru = readUsage(tp.pid);
 
-#ifdef Q_OS_LINUX
+#ifdef __linux__
         // Read utime + stime from /proc/<pid>/stat
-        qint64 cpuTime = 0;
+        int64_t cpuTime = 0;
         {
-            QFile f(QStringLiteral("/proc/%1/stat").arg(tp.pid));
-            if (f.open(QIODevice::ReadOnly)) {
-                QString line = QString::fromLatin1(f.readAll().trimmed());
+            std::ifstream f("/proc/" + std::to_string(tp.pid) + "/stat");
+            if (f.is_open()) {
+                std::string line;
+                std::getline(f, line);
                 // Fields are space-separated; the comm field (2) may contain spaces
                 // inside parentheses. Find the last ')' then split the rest.
-                int closeParenIdx = line.lastIndexOf(QLatin1Char(')'));
-                if (closeParenIdx > 0) {
-                    QStringList fields = line.mid(closeParenIdx + 2).split(QLatin1Char(' '));
+                auto closeParenIdx = line.rfind(')');
+                if (closeParenIdx != std::string::npos && closeParenIdx + 2 < line.size()) {
+                    std::istringstream iss(line.substr(closeParenIdx + 2));
+                    std::string field;
+                    std::vector<std::string> fields;
+                    while (iss >> field)
+                        fields.push_back(field);
                     // fields index 0 = state (field 3), utime = index 11 (field 14), stime = index 12 (field 15)
-                    if (fields.size() > 12)
-                        cpuTime = fields.at(11).toLongLong() + fields.at(12).toLongLong();
+                    if (fields.size() > 12) {
+                        cpuTime = std::stoll(fields[11]) + std::stoll(fields[12]);
+                    }
                 }
             }
         }
 
         long ticksPerSec = sysconf(_SC_CLK_TCK);
-        qint64 wallNow = QDateTime::currentMSecsSinceEpoch();
+        auto wallNow = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
 
         if (tp.prevCpuTime >= 0 && tp.prevWallTime > 0) {
-            qint64 deltaCpu  = cpuTime - tp.prevCpuTime; // in ticks
-            qint64 deltaWall = wallNow - tp.prevWallTime; // in ms
+            int64_t deltaCpu  = cpuTime - tp.prevCpuTime;  // in ticks
+            int64_t deltaWall = wallNow - tp.prevWallTime;  // in ms
             if (deltaWall > 0 && ticksPerSec > 0) {
                 double cpuSec  = static_cast<double>(deltaCpu) / ticksPerSec;
                 double wallSec = static_cast<double>(deltaWall) / 1000.0;
@@ -187,13 +188,12 @@ void ResourceMonitor::poll()
         tp.prevCpuTime  = cpuTime;
         tp.prevWallTime = wallNow;
 #else
-        // On non-Linux platforms, CPU% is not computed from procfs.
-        // We store 0 and let readUsage populate memory only.
-        Q_UNUSED(tp);
+        (void)tp;
 #endif
 
-        m_latest[it.key()] = ru;
+        m_latest[name] = ru;
     }
 
-    emit usageUpdated(m_latest);
+    if (onUsageUpdated)
+        onUsageUpdated(m_latest);
 }

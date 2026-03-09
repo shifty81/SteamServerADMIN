@@ -4,288 +4,589 @@
 #include "RconClient.hpp"
 #include "ConsoleLogWriter.hpp"
 
-#include <QFile>
-#include <QDir>
-#include <QJsonDocument>
-#include <QJsonArray>
-#include <QJsonObject>
-#include <QSet>
-#include <QDebug>
-#include <QTimer>
+#include <nlohmann/json.hpp>
+
+#include <fstream>
+#include <filesystem>
+#include <iostream>
+#include <sstream>
+#include <regex>
+#include <algorithm>
+#include <cstring>
+#include <chrono>
+#include <thread>
+
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <unistd.h>
+#include <sys/wait.h>
+#include <signal.h>
+extern char **environ;
+#endif
+
+namespace fs = std::filesystem;
+using json = nlohmann::json;
 
 // ---------------------------------------------------------------------------
 // Simple XOR-based obfuscation for RCON passwords at rest.
-// NOT cryptographically secure – intended only to prevent casual reading
-// of plaintext passwords in servers.json.
 // ---------------------------------------------------------------------------
-static const QByteArray kObfuscationKey = QByteArrayLiteral("SSA_RCON_KEY_2026");
+static const std::string kObfuscationKey = "SSA_RCON_KEY_2026";
 
-static QString obfuscatePassword(const QString &plain)
+// ---------------------------------------------------------------------------
+// Inline base64 encode/decode
+// ---------------------------------------------------------------------------
+static const char kBase64Chars[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+static std::string base64Encode(const std::string &input)
 {
-    QByteArray data = plain.toUtf8();
-    for (int i = 0; i < data.size(); ++i)
-        data[i] = data[i] ^ kObfuscationKey[i % kObfuscationKey.size()];
-    return QStringLiteral("obf:") + QString::fromLatin1(data.toBase64());
+    std::string out;
+    int val = 0, valb = -6;
+    for (unsigned char c : input) {
+        val = (val << 8) + c;
+        valb += 8;
+        while (valb >= 0) {
+            out.push_back(kBase64Chars[(val >> valb) & 0x3F]);
+            valb -= 6;
+        }
+    }
+    if (valb > -6)
+        out.push_back(kBase64Chars[((val << 8) >> (valb + 8)) & 0x3F]);
+    while (out.size() % 4)
+        out.push_back('=');
+    return out;
 }
 
-static QString deobfuscatePassword(const QString &stored)
+static std::string base64Decode(const std::string &input)
 {
-    if (!stored.startsWith(QStringLiteral("obf:")))
-        return stored;  // legacy plaintext value
-    QByteArray data = QByteArray::fromBase64(stored.mid(4).toLatin1());
-    for (int i = 0; i < data.size(); ++i)
+    std::vector<int> T(256, -1);
+    for (int i = 0; i < 64; i++)
+        T[static_cast<unsigned char>(kBase64Chars[i])] = i;
+
+    std::string out;
+    int val = 0, valb = -8;
+    for (unsigned char c : input) {
+        if (T[c] == -1) break;
+        val = (val << 6) + T[c];
+        valb += 6;
+        if (valb >= 0) {
+            out.push_back(static_cast<char>((val >> valb) & 0xFF));
+            valb -= 8;
+        }
+    }
+    return out;
+}
+
+static std::string obfuscatePassword(const std::string &plain)
+{
+    std::string data = plain;
+    for (size_t i = 0; i < data.size(); ++i)
         data[i] = data[i] ^ kObfuscationKey[i % kObfuscationKey.size()];
-    return QString::fromUtf8(data);
+    return "obf:" + base64Encode(data);
+}
+
+static std::string deobfuscatePassword(const std::string &stored)
+{
+    if (stored.size() < 4 || stored.substr(0, 4) != "obf:")
+        return stored;
+    std::string data = base64Decode(stored.substr(4));
+    for (size_t i = 0; i < data.size(); ++i)
+        data[i] = data[i] ^ kObfuscationKey[i % kObfuscationKey.size()];
+    return data;
 }
 
 // ---------------------------------------------------------------------------
-// Constructor / config I/O
+// Portable process helpers
 // ---------------------------------------------------------------------------
 
-ServerManager::ServerManager(const QString &configFile, QObject *parent)
-    : QObject(parent), m_configFile(configFile),
-      m_webhook(new WebhookModule(this)),
-      m_resourceMonitor(new ResourceMonitor(this)),
-      m_eventHookManager(new EventHookManager(this))
+bool launchProcess(const std::string &exe, const std::vector<std::string> &args,
+                   const std::map<std::string, std::string> &env, ProcessInfo &out)
 {
-#ifdef Q_OS_WIN
-    m_steamCmdPath = QStringLiteral("steamcmd.exe");
+#ifdef _WIN32
+    std::string cmdLine = "\"" + exe + "\"";
+    for (const auto &a : args)
+        cmdLine += " " + a;
+
+    std::string envBlock;
+    if (!env.empty()) {
+        char *curEnv = GetEnvironmentStrings();
+        if (curEnv) {
+            const char *p = curEnv;
+            while (*p) {
+                std::string entry(p);
+                envBlock += entry + '\0';
+                p += entry.size() + 1;
+            }
+            FreeEnvironmentStrings(curEnv);
+        }
+        for (const auto &[k, v] : env)
+            envBlock += k + "=" + v + '\0';
+        envBlock += '\0';
+    }
+
+    STARTUPINFOA si{};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi{};
+
+    BOOL ok = CreateProcessA(
+        nullptr, const_cast<char*>(cmdLine.c_str()),
+        nullptr, nullptr, FALSE, 0,
+        env.empty() ? nullptr : const_cast<char*>(envBlock.c_str()),
+        nullptr, &si, &pi);
+
+    if (!ok) return false;
+
+    CloseHandle(pi.hThread);
+    out.processHandle = pi.hProcess;
+    out.pid = pi.dwProcessId;
+    out.running = true;
+    return true;
 #else
-    m_steamCmdPath = QStringLiteral("steamcmd");
+    pid_t pid = fork();
+    if (pid < 0) return false;
+
+    if (pid == 0) {
+        for (const auto &[k, v] : env)
+            setenv(k.c_str(), v.c_str(), 1);
+
+        std::vector<char*> argv;
+        std::string exeCopy = exe;
+        argv.push_back(const_cast<char*>(exeCopy.c_str()));
+        std::vector<std::string> argCopies(args.begin(), args.end());
+        for (auto &a : argCopies)
+            argv.push_back(const_cast<char*>(a.c_str()));
+        argv.push_back(nullptr);
+
+        execv(exe.c_str(), argv.data());
+        _exit(127);
+    }
+
+    out.pid = pid;
+    out.running = true;
+    return true;
+#endif
+}
+
+bool isProcessRunning(const ProcessInfo &info)
+{
+    if (!info.running) return false;
+#ifdef _WIN32
+    if (!info.processHandle) return false;
+    DWORD exitCode;
+    if (GetExitCodeProcess(info.processHandle, &exitCode))
+        return exitCode == STILL_ACTIVE;
+    return false;
+#else
+    if (info.pid <= 0) return false;
+    int status;
+    pid_t result = waitpid(info.pid, &status, WNOHANG);
+    return result == 0;
+#endif
+}
+
+void terminateProcess(ProcessInfo &info)
+{
+#ifdef _WIN32
+    if (info.processHandle) {
+        TerminateProcess(info.processHandle, 1);
+        WaitForSingleObject(info.processHandle, 3000);
+        CloseHandle(info.processHandle);
+        info.processHandle = nullptr;
+    }
+#else
+    if (info.pid > 0) {
+        ::kill(info.pid, SIGTERM);
+    }
+#endif
+    info.running = false;
+}
+
+void killProcess(ProcessInfo &info)
+{
+#ifdef _WIN32
+    if (info.processHandle) {
+        TerminateProcess(info.processHandle, 9);
+        WaitForSingleObject(info.processHandle, 3000);
+        CloseHandle(info.processHandle);
+        info.processHandle = nullptr;
+    }
+#else
+    if (info.pid > 0) {
+        ::kill(info.pid, SIGKILL);
+        int status;
+        waitpid(info.pid, &status, 0);
+    }
+#endif
+    info.running = false;
+}
+
+static bool waitForProcess(ProcessInfo &info, int timeoutMs)
+{
+#ifdef _WIN32
+    if (!info.processHandle) return true;
+    DWORD result = WaitForSingleObject(info.processHandle, timeoutMs);
+    return result == WAIT_OBJECT_0;
+#else
+    if (info.pid <= 0) return true;
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+    while (std::chrono::steady_clock::now() < deadline) {
+        int status;
+        pid_t result = waitpid(info.pid, &status, WNOHANG);
+        if (result != 0) return true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    return false;
+#endif
+}
+
+static int getExitCode(const ProcessInfo &info)
+{
+#ifdef _WIN32
+    if (!info.processHandle) return -1;
+    DWORD exitCode;
+    if (GetExitCodeProcess(info.processHandle, &exitCode))
+        return static_cast<int>(exitCode);
+    return -1;
+#else
+    if (info.pid <= 0) return -1;
+    int status;
+    pid_t result = waitpid(info.pid, &status, WNOHANG);
+    if (result > 0 && WIFEXITED(status))
+        return WEXITSTATUS(status);
+    return -1;
+#endif
+}
+
+static void cleanupProcess(ProcessInfo &info)
+{
+#ifdef _WIN32
+    if (info.processHandle) {
+        CloseHandle(info.processHandle);
+        info.processHandle = nullptr;
+    }
+#endif
+    info.pid = 0;
+    info.running = false;
+}
+
+static int64_t processId(const ProcessInfo &info)
+{
+    return static_cast<int64_t>(info.pid);
+}
+
+static std::vector<std::string> splitString(const std::string &s, char delim)
+{
+    std::vector<std::string> result;
+    std::istringstream iss(s);
+    std::string token;
+    while (std::getline(iss, token, delim)) {
+        if (!token.empty())
+            result.push_back(token);
+    }
+    return result;
+}
+
+// ---------------------------------------------------------------------------
+// ServerManager helpers
+// ---------------------------------------------------------------------------
+void ServerManager::emitLog(const std::string &serverName, const std::string &msg)
+{
+    if (onLogMessage) onLogMessage(serverName, msg);
+}
+
+std::string ServerManager::lookupEventHook(const std::string &serverName,
+                                           const std::string &event) const
+{
+    for (const auto &s : m_servers) {
+        if (s.name == serverName) {
+            auto it = s.eventHooks.find(event);
+            if (it != s.eventHooks.end())
+                return it->second;
+            return "";
+        }
+    }
+    return "";
+}
+
+// ---------------------------------------------------------------------------
+// Constructor
+// ---------------------------------------------------------------------------
+
+ServerManager::ServerManager(const std::string &configFile)
+    : m_configFile(configFile)
+{
+#ifdef _WIN32
+    m_steamCmdPath = "steamcmd.exe";
+#else
+    m_steamCmdPath = "steamcmd";
 #endif
 
-    // Check resource thresholds when usage is updated
-    connect(m_resourceMonitor, &ResourceMonitor::usageUpdated,
-            this, [this](const QMap<QString, ResourceUsage> &usage) {
+    m_resourceMonitor.onUsageUpdated =
+        [this](const std::map<std::string, ResourceUsage> &usage) {
         constexpr double kBytesPerMB = 1024.0 * 1024.0;
-        for (auto it = usage.constBegin(); it != usage.constEnd(); ++it) {
-            const QString &name = it.key();
-            const ResourceUsage &ru = it.value();
-            // Find the server config for threshold comparison
-            for (const ServerConfig &s : std::as_const(m_servers)) {
-                if (s.name != name)
-                    continue;
+        for (const auto &[name, ru] : usage) {
+            for (const ServerConfig &s : m_servers) {
+                if (s.name != name) continue;
                 if (s.cpuAlertThreshold > 0 && ru.cpuPercent > s.cpuAlertThreshold) {
-                    emit resourceAlert(name,
-                        QStringLiteral("CPU usage %.1f%% exceeds threshold %.1f%%")
-                            .arg(ru.cpuPercent).arg(s.cpuAlertThreshold));
+                    if (onResourceAlert) {
+                        char buf[128];
+                        snprintf(buf, sizeof(buf),
+                                 "CPU usage %.1f%% exceeds threshold %.1f%%",
+                                 ru.cpuPercent, s.cpuAlertThreshold);
+                        onResourceAlert(name, buf);
+                    }
                 }
                 if (s.memAlertThresholdMB > 0) {
                     double memMB = static_cast<double>(ru.memoryBytes) / kBytesPerMB;
                     if (memMB > s.memAlertThresholdMB) {
-                        emit resourceAlert(name,
-                            QStringLiteral("Memory usage %.1f MB exceeds threshold %.1f MB")
-                                .arg(memMB).arg(s.memAlertThresholdMB));
+                        if (onResourceAlert) {
+                            char buf[128];
+                            snprintf(buf, sizeof(buf),
+                                     "Memory usage %.1f MB exceeds threshold %.1f MB",
+                                     memMB, s.memAlertThresholdMB);
+                            onResourceAlert(name, buf);
+                        }
                     }
                 }
                 break;
             }
         }
-    });
+    };
+}
+
+// ---------------------------------------------------------------------------
+// JSON helpers
+// ---------------------------------------------------------------------------
+static std::string jsonStr(const json &obj, const std::string &key, const std::string &def = "")
+{
+    if (obj.contains(key) && obj[key].is_string())
+        return obj[key].get<std::string>();
+    return def;
+}
+
+static int jsonInt(const json &obj, const std::string &key, int def = 0)
+{
+    if (obj.contains(key) && obj[key].is_number_integer())
+        return obj[key].get<int>();
+    return def;
+}
+
+static bool jsonBool(const json &obj, const std::string &key, bool def = false)
+{
+    if (obj.contains(key) && obj[key].is_boolean())
+        return obj[key].get<bool>();
+    return def;
+}
+
+static double jsonDouble(const json &obj, const std::string &key, double def = 0.0)
+{
+    if (obj.contains(key) && obj[key].is_number())
+        return obj[key].get<double>();
+    return def;
 }
 
 bool ServerManager::loadConfig()
 {
-    QFile file(m_configFile);
-    if (!file.open(QIODevice::ReadOnly)) {
-        qWarning() << "ServerManager::loadConfig: cannot open" << m_configFile;
+    std::ifstream file(m_configFile);
+    if (!file.is_open()) {
+        std::cerr << "ServerManager::loadConfig: cannot open " << m_configFile << "\n";
         return false;
     }
 
-    QJsonParseError err;
-    QJsonDocument doc = QJsonDocument::fromJson(file.readAll(), &err);
-    if (err.error != QJsonParseError::NoError) {
-        qWarning() << "ServerManager::loadConfig: parse error:" << err.errorString();
+    json doc;
+    try {
+        doc = json::parse(file);
+    } catch (const json::parse_error &e) {
+        std::cerr << "ServerManager::loadConfig: parse error: " << e.what() << "\n";
         return false;
     }
-    if (!doc.isArray()) return false;
+
+    if (!doc.is_array()) return false;
 
     m_servers.clear();
-    for (const QJsonValue &val : doc.array()) {
-        QJsonObject obj = val.toObject();
+    for (const auto &obj : doc) {
         ServerConfig s;
-        s.name           = obj[QStringLiteral("name")].toString();
-        s.appid          = obj[QStringLiteral("appid")].toInt();
-        s.dir            = obj[QStringLiteral("dir")].toString();
-        s.executable     = obj[QStringLiteral("executable")].toString();
-        s.launchArgs     = obj[QStringLiteral("launchArgs")].toString();
-        s.backupFolder   = obj[QStringLiteral("backupFolder")].toString();
-        s.notes          = obj[QStringLiteral("notes")].toString();
-        s.discordWebhookUrl = obj[QStringLiteral("discordWebhookUrl")].toString();
-        s.webhookTemplate= obj[QStringLiteral("webhookTemplate")].toString();
-        s.autoUpdate     = obj[QStringLiteral("autoUpdate")].toBool(true);
-        s.autoStartOnLaunch = obj[QStringLiteral("autoStartOnLaunch")].toBool(false);
-        s.favorite       = obj[QStringLiteral("favorite")].toBool(false);
-        s.keepBackups    = obj[QStringLiteral("keepBackups")].toInt(10);
-        s.backupIntervalMinutes  = obj[QStringLiteral("backupIntervalMinutes")].toInt(30);
-        s.restartIntervalHours   = obj[QStringLiteral("restartIntervalHours")].toInt(24);
-        s.rconCommandIntervalMinutes = obj[QStringLiteral("rconCommandIntervalMinutes")].toInt(0);
-        s.backupCompressionLevel = obj[QStringLiteral("backupCompressionLevel")].toInt(6);
-        s.maintenanceStartHour   = obj[QStringLiteral("maintenanceStartHour")].toInt(-1);
-        s.maintenanceEndHour     = obj[QStringLiteral("maintenanceEndHour")].toInt(-1);
-        s.consoleLogging = obj[QStringLiteral("consoleLogging")].toBool(false);
-        s.maxPlayers     = obj[QStringLiteral("maxPlayers")].toInt(0);
-        s.restartWarningMinutes = obj[QStringLiteral("restartWarningMinutes")].toInt(15);
-        s.restartWarningMessage = obj[QStringLiteral("restartWarningMessage")].toString();
+        s.name           = jsonStr(obj, "name");
+        s.appid          = jsonInt(obj, "appid");
+        s.dir            = jsonStr(obj, "dir");
+        s.executable     = jsonStr(obj, "executable");
+        s.launchArgs     = jsonStr(obj, "launchArgs");
+        s.backupFolder   = jsonStr(obj, "backupFolder");
+        s.notes          = jsonStr(obj, "notes");
+        s.discordWebhookUrl = jsonStr(obj, "discordWebhookUrl");
+        s.webhookTemplate= jsonStr(obj, "webhookTemplate");
+        s.autoUpdate     = jsonBool(obj, "autoUpdate", true);
+        s.autoStartOnLaunch = jsonBool(obj, "autoStartOnLaunch", false);
+        s.favorite       = jsonBool(obj, "favorite", false);
+        s.keepBackups    = jsonInt(obj, "keepBackups", 10);
+        s.backupIntervalMinutes  = jsonInt(obj, "backupIntervalMinutes", 30);
+        s.restartIntervalHours   = jsonInt(obj, "restartIntervalHours", 24);
+        s.rconCommandIntervalMinutes = jsonInt(obj, "rconCommandIntervalMinutes", 0);
+        s.backupCompressionLevel = jsonInt(obj, "backupCompressionLevel", 6);
+        s.maintenanceStartHour   = jsonInt(obj, "maintenanceStartHour", -1);
+        s.maintenanceEndHour     = jsonInt(obj, "maintenanceEndHour", -1);
+        s.consoleLogging = jsonBool(obj, "consoleLogging", false);
+        s.maxPlayers     = jsonInt(obj, "maxPlayers", 0);
+        s.restartWarningMinutes = jsonInt(obj, "restartWarningMinutes", 15);
+        s.restartWarningMessage = jsonStr(obj, "restartWarningMessage");
+        s.cpuAlertThreshold    = jsonDouble(obj, "cpuAlertThreshold", 90.0);
+        s.memAlertThresholdMB  = jsonDouble(obj, "memAlertThresholdMB", 0.0);
 
-        s.cpuAlertThreshold    = obj[QStringLiteral("cpuAlertThreshold")].toDouble(90.0);
-        s.memAlertThresholdMB  = obj[QStringLiteral("memAlertThresholdMB")].toDouble(0.0);
+        if (obj.contains("eventHooks") && obj["eventHooks"].is_object()) {
+            for (auto &[k, v] : obj["eventHooks"].items())
+                if (v.is_string()) s.eventHooks[k] = v.get<std::string>();
+        }
+        if (obj.contains("tags") && obj["tags"].is_array()) {
+            for (const auto &v : obj["tags"])
+                if (v.is_string()) s.tags.push_back(v.get<std::string>());
+        }
 
-        // Event hooks
-        QJsonObject hooks = obj[QStringLiteral("eventHooks")].toObject();
-        for (auto hIt = hooks.begin(); hIt != hooks.end(); ++hIt)
-            s.eventHooks[hIt.key()] = hIt.value().toString();
+        s.group = jsonStr(obj, "group");
+        s.startupPriority = jsonInt(obj, "startupPriority", 0);
+        s.backupBeforeRestart = jsonBool(obj, "backupBeforeRestart", false);
+        s.gracefulShutdownSeconds = jsonInt(obj, "gracefulShutdownSeconds", 10);
 
-        // Tags
-        for (const QJsonValue &v : obj[QStringLiteral("tags")].toArray())
-            s.tags << v.toString();
+        if (obj.contains("environmentVariables") && obj["environmentVariables"].is_object()) {
+            for (auto &[k, v] : obj["environmentVariables"].items())
+                if (v.is_string()) s.environmentVariables[k] = v.get<std::string>();
+        }
+        if (obj.contains("scheduledRconCommands") && obj["scheduledRconCommands"].is_array()) {
+            for (const auto &v : obj["scheduledRconCommands"])
+                if (v.is_string()) s.scheduledRconCommands.push_back(v.get<std::string>());
+        }
+        if (obj.contains("rcon") && obj["rcon"].is_object()) {
+            const auto &rcon = obj["rcon"];
+            s.rcon.host     = jsonStr(rcon, "host", "127.0.0.1");
+            s.rcon.port     = jsonInt(rcon, "port", 27015);
+            s.rcon.password = deobfuscatePassword(jsonStr(rcon, "password"));
+        }
+        if (obj.contains("mods") && obj["mods"].is_array()) {
+            for (const auto &m : obj["mods"])
+                if (m.is_number_integer()) s.mods.push_back(m.get<int>());
+        }
+        if (obj.contains("disabledMods") && obj["disabledMods"].is_array()) {
+            for (const auto &m : obj["disabledMods"])
+                if (m.is_number_integer()) s.disabledMods.push_back(m.get<int>());
+        }
 
-        // Group, startup priority, backup-before-restart, graceful shutdown, env vars
-        s.group = obj[QStringLiteral("group")].toString();
-        s.startupPriority = obj[QStringLiteral("startupPriority")].toInt(0);
-        s.backupBeforeRestart = obj[QStringLiteral("backupBeforeRestart")].toBool(false);
-        s.gracefulShutdownSeconds = obj[QStringLiteral("gracefulShutdownSeconds")].toInt(10);
-
-        QJsonObject envVars = obj[QStringLiteral("environmentVariables")].toObject();
-        for (auto eIt = envVars.begin(); eIt != envVars.end(); ++eIt)
-            s.environmentVariables[eIt.key()] = eIt.value().toString();
-
-        for (const QJsonValue &v : obj[QStringLiteral("scheduledRconCommands")].toArray())
-            s.scheduledRconCommands << v.toString();
-
-        QJsonObject rcon = obj[QStringLiteral("rcon")].toObject();
-        s.rcon.host     = rcon[QStringLiteral("host")].toString(QStringLiteral("127.0.0.1"));
-        s.rcon.port     = rcon[QStringLiteral("port")].toInt(27015);
-        s.rcon.password = deobfuscatePassword(rcon[QStringLiteral("password")].toString());
-
-        for (const QJsonValue &m : obj[QStringLiteral("mods")].toArray())
-            s.mods << m.toInt();
-
-        for (const QJsonValue &m : obj[QStringLiteral("disabledMods")].toArray())
-            s.disabledMods << m.toInt();
-
-        m_servers << s;
+        m_servers.push_back(s);
     }
     return true;
 }
 
-QStringList ServerManager::validateAll() const
+std::vector<std::string> ServerManager::validateAll() const
 {
-    QStringList errors;
-    QSet<QString> seenNames;
+    std::vector<std::string> errors;
+    std::set<std::string> seenNames;
 
-    for (int i = 0; i < m_servers.size(); ++i) {
-        const ServerConfig &s = m_servers.at(i);
-        QStringList serverErrors = s.validate();
-        for (const QString &e : std::as_const(serverErrors))
-            errors << QStringLiteral("Server #%1 (%2): %3")
-                          .arg(i + 1)
-                          .arg(s.name.isEmpty() ? QStringLiteral("<unnamed>") : s.name, e);
-
-        if (!s.name.trimmed().isEmpty()) {
-            if (seenNames.contains(s.name))
-                errors << QStringLiteral("Duplicate server name: '%1'.").arg(s.name);
+    for (int i = 0; i < static_cast<int>(m_servers.size()); ++i) {
+        const ServerConfig &s = m_servers[i];
+        std::vector<std::string> serverErrors = s.validate();
+        for (const auto &e : serverErrors) {
+            std::string nameStr = trimString(s.name).empty() ? "<unnamed>" : s.name;
+            errors.push_back("Server #" + std::to_string(i + 1) + " (" + nameStr + "): " + e);
+        }
+        if (!trimString(s.name).empty()) {
+            if (seenNames.count(s.name))
+                errors.push_back("Duplicate server name: '" + s.name + "'.");
             else
                 seenNames.insert(s.name);
         }
     }
-
     return errors;
+}
+
+static json serverToJson(const ServerConfig &s)
+{
+    json obj;
+    obj["name"]          = s.name;
+    obj["appid"]         = s.appid;
+    obj["dir"]           = s.dir;
+    obj["executable"]    = s.executable;
+    obj["launchArgs"]    = s.launchArgs;
+    obj["backupFolder"]  = s.backupFolder;
+    obj["notes"]         = s.notes;
+    obj["discordWebhookUrl"] = s.discordWebhookUrl;
+    obj["webhookTemplate"] = s.webhookTemplate;
+    obj["autoUpdate"]    = s.autoUpdate;
+    obj["autoStartOnLaunch"] = s.autoStartOnLaunch;
+    obj["favorite"]      = s.favorite;
+    obj["keepBackups"]   = s.keepBackups;
+    obj["backupIntervalMinutes"] = s.backupIntervalMinutes;
+    obj["restartIntervalHours"]  = s.restartIntervalHours;
+    obj["rconCommandIntervalMinutes"] = s.rconCommandIntervalMinutes;
+    obj["backupCompressionLevel"] = s.backupCompressionLevel;
+    obj["maintenanceStartHour"]   = s.maintenanceStartHour;
+    obj["maintenanceEndHour"]     = s.maintenanceEndHour;
+    obj["consoleLogging"] = s.consoleLogging;
+    obj["maxPlayers"]     = s.maxPlayers;
+    obj["restartWarningMinutes"] = s.restartWarningMinutes;
+    obj["restartWarningMessage"]  = s.restartWarningMessage;
+    obj["cpuAlertThreshold"]   = s.cpuAlertThreshold;
+    obj["memAlertThresholdMB"] = s.memAlertThresholdMB;
+
+    json hooks = json::object();
+    for (const auto &[k, v] : s.eventHooks) hooks[k] = v;
+    obj["eventHooks"] = hooks;
+
+    json tagsArr = json::array();
+    for (const auto &tag : s.tags) tagsArr.push_back(tag);
+    obj["tags"] = tagsArr;
+
+    obj["group"] = s.group;
+    obj["startupPriority"] = s.startupPriority;
+    obj["backupBeforeRestart"] = s.backupBeforeRestart;
+    obj["gracefulShutdownSeconds"] = s.gracefulShutdownSeconds;
+
+    json envVarsObj = json::object();
+    for (const auto &[k, v] : s.environmentVariables) envVarsObj[k] = v;
+    obj["environmentVariables"] = envVarsObj;
+
+    json rcon;
+    rcon["host"]     = s.rcon.host;
+    rcon["port"]     = s.rcon.port;
+    rcon["password"] = obfuscatePassword(s.rcon.password);
+    obj["rcon"] = rcon;
+
+    json mods = json::array();
+    for (int m : s.mods) mods.push_back(m);
+    obj["mods"] = mods;
+
+    json disabledMods = json::array();
+    for (int m : s.disabledMods) disabledMods.push_back(m);
+    obj["disabledMods"] = disabledMods;
+
+    json scheduledRcon = json::array();
+    for (const auto &cmd : s.scheduledRconCommands) scheduledRcon.push_back(cmd);
+    obj["scheduledRconCommands"] = scheduledRcon;
+
+    return obj;
 }
 
 bool ServerManager::saveConfig() const
 {
-    // Validate before saving
-    QStringList errors = validateAll();
-    if (!errors.isEmpty()) {
-        qWarning() << "ServerManager::saveConfig: validation failed:" << errors;
+    std::vector<std::string> errors = validateAll();
+    if (!errors.empty()) {
+        std::cerr << "ServerManager::saveConfig: validation failed\n";
+        for (const auto &e : errors) std::cerr << "  " << e << "\n";
         return false;
     }
 
-    QJsonArray arr;
-    for (const ServerConfig &s : m_servers) {
-        QJsonObject obj;
-        obj[QStringLiteral("name")]          = s.name;
-        obj[QStringLiteral("appid")]         = s.appid;
-        obj[QStringLiteral("dir")]           = s.dir;
-        obj[QStringLiteral("executable")]    = s.executable;
-        obj[QStringLiteral("launchArgs")]    = s.launchArgs;
-        obj[QStringLiteral("backupFolder")]  = s.backupFolder;
-        obj[QStringLiteral("notes")]         = s.notes;
-        obj[QStringLiteral("discordWebhookUrl")] = s.discordWebhookUrl;
-        obj[QStringLiteral("webhookTemplate")] = s.webhookTemplate;
-        obj[QStringLiteral("autoUpdate")]    = s.autoUpdate;
-        obj[QStringLiteral("autoStartOnLaunch")] = s.autoStartOnLaunch;
-        obj[QStringLiteral("favorite")]      = s.favorite;
-        obj[QStringLiteral("keepBackups")]   = s.keepBackups;
-        obj[QStringLiteral("backupIntervalMinutes")] = s.backupIntervalMinutes;
-        obj[QStringLiteral("restartIntervalHours")]  = s.restartIntervalHours;
-        obj[QStringLiteral("rconCommandIntervalMinutes")] = s.rconCommandIntervalMinutes;
-        obj[QStringLiteral("backupCompressionLevel")] = s.backupCompressionLevel;
-        obj[QStringLiteral("maintenanceStartHour")]   = s.maintenanceStartHour;
-        obj[QStringLiteral("maintenanceEndHour")]     = s.maintenanceEndHour;
-        obj[QStringLiteral("consoleLogging")] = s.consoleLogging;
-        obj[QStringLiteral("maxPlayers")]     = s.maxPlayers;
-        obj[QStringLiteral("restartWarningMinutes")] = s.restartWarningMinutes;
-        obj[QStringLiteral("restartWarningMessage")]  = s.restartWarningMessage;
+    json arr = json::array();
+    for (const ServerConfig &s : m_servers) arr.push_back(serverToJson(s));
 
-        obj[QStringLiteral("cpuAlertThreshold")]   = s.cpuAlertThreshold;
-        obj[QStringLiteral("memAlertThresholdMB")] = s.memAlertThresholdMB;
-
-        // Event hooks
-        QJsonObject hooks;
-        for (auto hIt = s.eventHooks.constBegin(); hIt != s.eventHooks.constEnd(); ++hIt)
-            hooks[hIt.key()] = hIt.value();
-        obj[QStringLiteral("eventHooks")] = hooks;
-
-        // Tags
-        QJsonArray tagsArr;
-        for (const QString &tag : s.tags) tagsArr << tag;
-        obj[QStringLiteral("tags")] = tagsArr;
-
-        // Group, startup priority, backup-before-restart, graceful shutdown, env vars
-        obj[QStringLiteral("group")] = s.group;
-        obj[QStringLiteral("startupPriority")] = s.startupPriority;
-        obj[QStringLiteral("backupBeforeRestart")] = s.backupBeforeRestart;
-        obj[QStringLiteral("gracefulShutdownSeconds")] = s.gracefulShutdownSeconds;
-
-        QJsonObject envVarsObj;
-        for (auto eIt = s.environmentVariables.constBegin(); eIt != s.environmentVariables.constEnd(); ++eIt)
-            envVarsObj[eIt.key()] = eIt.value();
-        obj[QStringLiteral("environmentVariables")] = envVarsObj;
-
-        QJsonObject rcon;
-        rcon[QStringLiteral("host")]     = s.rcon.host;
-        rcon[QStringLiteral("port")]     = s.rcon.port;
-        rcon[QStringLiteral("password")] = obfuscatePassword(s.rcon.password);
-        obj[QStringLiteral("rcon")] = rcon;
-
-        QJsonArray mods;
-        for (int m : s.mods) mods << m;
-        obj[QStringLiteral("mods")] = mods;
-
-        QJsonArray disabledMods;
-        for (int m : s.disabledMods) disabledMods << m;
-        obj[QStringLiteral("disabledMods")] = disabledMods;
-
-        QJsonArray scheduledRcon;
-        for (const QString &cmd : s.scheduledRconCommands) scheduledRcon << cmd;
-        obj[QStringLiteral("scheduledRconCommands")] = scheduledRcon;
-
-        arr << obj;
-    }
-
-    QFile file(m_configFile);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-        qWarning() << "ServerManager::saveConfig: cannot write" << m_configFile;
+    std::ofstream file(m_configFile, std::ios::trunc);
+    if (!file.is_open()) {
+        std::cerr << "ServerManager::saveConfig: cannot write " << m_configFile << "\n";
         return false;
     }
-    file.write(QJsonDocument(arr).toJson());
+    file << arr.dump(2);
     return true;
 }
 
-QList<ServerConfig> &ServerManager::servers()       { return m_servers; }
-const QList<ServerConfig> &ServerManager::servers() const { return m_servers; }
+std::vector<ServerConfig> &ServerManager::servers()       { return m_servers; }
+const std::vector<ServerConfig> &ServerManager::servers() const { return m_servers; }
 
 // ---------------------------------------------------------------------------
 // Auto-start
@@ -293,17 +594,14 @@ const QList<ServerConfig> &ServerManager::servers() const { return m_servers; }
 
 void ServerManager::autoStartServers()
 {
-    // Build a list of indices sorted by startup priority (lower = earlier)
-    QList<int> indices;
-    for (int i = 0; i < m_servers.size(); ++i) {
-        if (m_servers[i].autoStartOnLaunch)
-            indices << i;
+    std::vector<int> indices;
+    for (int i = 0; i < static_cast<int>(m_servers.size()); ++i) {
+        if (m_servers[i].autoStartOnLaunch) indices.push_back(i);
     }
     std::sort(indices.begin(), indices.end(), [this](int a, int b) {
         return m_servers[a].startupPriority < m_servers[b].startupPriority;
     });
-    for (int idx : std::as_const(indices))
-        startServer(m_servers[idx]);
+    for (int idx : indices) startServer(m_servers[idx]);
 }
 
 // ---------------------------------------------------------------------------
@@ -313,114 +611,75 @@ void ServerManager::autoStartServers()
 void ServerManager::startServer(ServerConfig &server)
 {
     if (isServerRunning(server)) {
-        emit logMessage(server.name, QStringLiteral("Server is already running."));
+        emitLog(server.name, "Server is already running.");
         return;
     }
 
-    // Auto-update mods before starting if enabled
-    if (server.autoUpdate && !server.mods.isEmpty()) {
-        emit logMessage(server.name, QStringLiteral("Auto-update: updating mods before start…"));
+    if (server.autoUpdate && !server.mods.empty()) {
+        emitLog(server.name, "Auto-update: updating mods before start...");
         updateMods(server);
     }
 
-    // Reset crash counter on a fresh manual start
-    m_crashCounts.remove(server.name);
+    m_crashCounts.erase(server.name);
 
-    QString exe = server.dir + QDir::separator() + server.executable;
-    auto *proc  = new QProcess(this);
-    connect(proc, &QProcess::readyReadStandardOutput, this, [this, &server, proc]() {
-        while (proc->canReadLine())
-            emit logMessage(server.name, QString::fromLocal8Bit(proc->readLine()).trimmed());
-    });
-    connect(proc, &QProcess::readyReadStandardError, this, [this, &server, proc]() {
-        while (proc->canReadLine())
-            emit logMessage(server.name, QString::fromLocal8Bit(proc->readLine()).trimmed());
-    });
+    std::string exe = (fs::path(server.dir) / server.executable).string();
+    std::vector<std::string> args;
+    if (!server.launchArgs.empty())
+        args = splitString(server.launchArgs, ' ');
 
-    // Detect unexpected exits (crashes)
-    QString sname = server.name;
-    QMetaObject::Connection conn = connect(
-        proc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
-        this, [this, sname](int exitCode, QProcess::ExitStatus exitStatus) {
-            onProcessFinished(sname, exitCode, exitStatus);
-        });
+    ProcessInfo proc;
+    bool ok = launchProcess(exe, args, server.environmentVariables, proc);
 
-    QStringList args;
-    if (!server.launchArgs.isEmpty())
-        args = server.launchArgs.split(QLatin1Char(' '), Qt::SkipEmptyParts);
-
-    // Apply custom environment variables if any are defined
-    if (!server.environmentVariables.isEmpty()) {
-        QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
-        for (auto it = server.environmentVariables.constBegin();
-             it != server.environmentVariables.constEnd(); ++it)
-            env.insert(it.key(), it.value());
-        proc->setProcessEnvironment(env);
-    }
-
-    proc->start(exe, args);
-    if (proc->waitForStarted(5000)) {
+    if (ok) {
         m_processes[server.name] = proc;
-        m_crashConns[server.name] = conn;
-        m_startTimes[server.name] = QDateTime::currentDateTime();
-        emit logMessage(server.name, QStringLiteral("Server started (PID %1).").arg(proc->processId()));
+        m_startTimes[server.name] = std::chrono::system_clock::now();
+        emitLog(server.name, "Server started (PID " + std::to_string(processId(proc)) + ").");
+        m_resourceMonitor.trackProcess(server.name, processId(proc));
 
-        // Track resource usage for this server process
-        m_resourceMonitor->trackProcess(server.name, proc->processId());
+        auto hookIt = server.eventHooks.find("onStart");
+        if (hookIt != server.eventHooks.end())
+            m_eventHookManager.fireHook(server.name, server.dir, "onStart", hookIt->second);
 
-        // Fire onStart event hook
-        m_eventHookManager->fireHook(server.name, server.dir,
-                                     QStringLiteral("onStart"),
-                                     server.eventHooks.value(QStringLiteral("onStart")));
-
-        m_webhook->sendNotification(server.discordWebhookUrl, server.name,
-                                    QStringLiteral("Server started."),
-                                    server.webhookTemplate);
+        m_webhook.sendNotification(server.discordWebhookUrl, server.name,
+                                   "Server started.", server.webhookTemplate);
     } else {
-        emit logMessage(server.name, QStringLiteral("Failed to start server: ") + proc->errorString());
-        QObject::disconnect(conn);
-        proc->deleteLater();
+        emitLog(server.name, "Failed to start server.");
     }
 }
 
 void ServerManager::stopServer(ServerConfig &server)
 {
-    QProcess *proc = processFor(server);
-    if (!proc) {
-        emit logMessage(server.name, QStringLiteral("Server is not running."));
+    auto it = m_processes.find(server.name);
+    if (it == m_processes.end() || !it->second.running) {
+        emitLog(server.name, "Server is not running.");
         return;
     }
-    // Disconnect the crash-detection handler so the intentional stop is not
-    // treated as a crash.
-    auto connIt = m_crashConns.find(server.name);
-    if (connIt != m_crashConns.end()) {
-        QObject::disconnect(*connIt);
-        m_crashConns.erase(connIt);
-    }
+
+    ProcessInfo &proc = it->second;
     int timeoutMs = server.gracefulShutdownSeconds * 1000;
+
     if (timeoutMs <= 0) {
-        // Immediate kill – no graceful shutdown requested
-        proc->kill();
+        killProcess(proc);
     } else {
-        proc->terminate();
-        if (!proc->waitForFinished(timeoutMs))
-            proc->kill();
+        terminateProcess(proc);
+        if (!waitForProcess(proc, timeoutMs))
+            killProcess(proc);
     }
-    m_processes.remove(server.name);
-    m_startTimes.remove(server.name);
-    m_crashCounts.remove(server.name);
-    m_resourceMonitor->untrackProcess(server.name);
-    proc->deleteLater();
-    emit logMessage(server.name, QStringLiteral("Server stopped."));
 
-    // Fire onStop event hook
-    m_eventHookManager->fireHook(server.name, server.dir,
-                                 QStringLiteral("onStop"),
-                                 server.eventHooks.value(QStringLiteral("onStop")));
+    cleanupProcess(proc);
+    m_processes.erase(server.name);
+    m_startTimes.erase(server.name);
+    m_crashCounts.erase(server.name);
+    m_pendingRestarts.erase(server.name);
+    m_resourceMonitor.untrackProcess(server.name);
+    emitLog(server.name, "Server stopped.");
 
-    m_webhook->sendNotification(server.discordWebhookUrl, server.name,
-                                QStringLiteral("Server stopped."),
-                                server.webhookTemplate);
+    auto hookIt = server.eventHooks.find("onStop");
+    if (hookIt != server.eventHooks.end())
+        m_eventHookManager.fireHook(server.name, server.dir, "onStop", hookIt->second);
+
+    m_webhook.sendNotification(server.discordWebhookUrl, server.name,
+                               "Server stopped.", server.webhookTemplate);
 }
 
 void ServerManager::restartServer(ServerConfig &server)
@@ -431,83 +690,96 @@ void ServerManager::restartServer(ServerConfig &server)
 
 bool ServerManager::isServerRunning(const ServerConfig &server) const
 {
-    QProcess *proc = processFor(server);
-    return proc && proc->state() == QProcess::Running;
+    auto it = m_processes.find(server.name);
+    if (it == m_processes.end()) return false;
+    ProcessInfo copy = it->second;
+    return isProcessRunning(copy);
 }
 
-QProcess *ServerManager::processFor(const ServerConfig &server) const
+// ---------------------------------------------------------------------------
+// tick()
+// ---------------------------------------------------------------------------
+
+void ServerManager::tick()
 {
-    return m_processes.value(server.name, nullptr);
+    checkProcesses();
+    processPendingRestarts();
+    m_resourceMonitor.tick();
 }
 
-void ServerManager::onProcessFinished(const QString &serverName, int exitCode,
-                                      QProcess::ExitStatus exitStatus)
+void ServerManager::checkProcesses()
 {
-    // Clean up the process entry and stored connection
-    QProcess *proc = m_processes.value(serverName, nullptr);
-    if (proc) {
-        m_processes.remove(serverName);
-        proc->deleteLater();
+    std::vector<std::string> crashed;
+    for (auto &[name, proc] : m_processes) {
+        if (proc.running && !isProcessRunning(proc)) {
+            int exitCode = getExitCode(proc);
+            proc.running = false;
+            cleanupProcess(proc);
+            crashed.push_back(name);
+            handleCrash(name, exitCode);
+        }
     }
-    m_crashConns.remove(serverName);
-    m_startTimes.remove(serverName);
-    m_resourceMonitor->untrackProcess(serverName);
+    for (const auto &name : crashed) {
+        m_processes.erase(name);
+        m_startTimes.erase(name);
+        m_resourceMonitor.untrackProcess(name);
+    }
+}
 
-    if (exitStatus == QProcess::CrashExit) {
-        int crashes = m_crashCounts.value(serverName, 0) + 1;
-        m_crashCounts[serverName] = crashes;
+void ServerManager::handleCrash(const std::string &serverName, int exitCode)
+{
+    int crashes = 0;
+    auto cIt = m_crashCounts.find(serverName);
+    if (cIt != m_crashCounts.end())
+        crashes = cIt->second + 1;
+    else
+        crashes = 1;
+    m_crashCounts[serverName] = crashes;
 
-        emit serverCrashed(serverName);
+    if (onServerCrashed) onServerCrashed(serverName);
 
-        // Fire onCrash event hook
-        for (const ServerConfig &s : std::as_const(m_servers)) {
-            if (s.name == serverName) {
-                m_eventHookManager->fireHook(s.name, s.dir,
-                                             QStringLiteral("onCrash"),
-                                             s.eventHooks.value(QStringLiteral("onCrash")));
-                break;
-            }
+    for (const ServerConfig &s : m_servers) {
+        if (s.name == serverName) {
+            auto hookIt = s.eventHooks.find("onCrash");
+            if (hookIt != s.eventHooks.end())
+                m_eventHookManager.fireHook(s.name, s.dir, "onCrash", hookIt->second);
+            m_webhook.sendNotification(s.discordWebhookUrl, serverName,
+                "Server crashed (exit code " + std::to_string(exitCode) + ").",
+                s.webhookTemplate);
+            break;
         }
+    }
 
-        // Send Discord webhook notification for crash
-        for (const ServerConfig &s : std::as_const(m_servers)) {
-            if (s.name == serverName) {
-                m_webhook->sendNotification(s.discordWebhookUrl, serverName,
-                                            QStringLiteral("Server crashed (exit code %1).").arg(exitCode),
-                                            s.webhookTemplate);
-                break;
-            }
+    if (crashes > kMaxCrashRestarts) {
+        emitLog(serverName,
+            "Server crashed " + std::to_string(crashes) + " times consecutively. "
+            "Auto-restart disabled until manual start.");
+        return;
+    }
+
+    int delayMs = kCrashBackoffBaseMs * (1 << (crashes - 1));
+    emitLog(serverName,
+        "Server crashed (exit code " + std::to_string(exitCode)
+        + ", attempt " + std::to_string(crashes) + "/" + std::to_string(kMaxCrashRestarts)
+        + "). Auto-restarting in " + std::to_string(delayMs / 1000) + " s...");
+
+    PendingRestart pr;
+    pr.when = std::chrono::steady_clock::now() + std::chrono::milliseconds(delayMs);
+    m_pendingRestarts[serverName] = pr;
+}
+
+void ServerManager::processPendingRestarts()
+{
+    auto now = std::chrono::steady_clock::now();
+    std::vector<std::string> ready;
+    for (auto &[name, pr] : m_pendingRestarts) {
+        if (now >= pr.when) ready.push_back(name);
+    }
+    for (const auto &name : ready) {
+        m_pendingRestarts.erase(name);
+        for (ServerConfig &s : m_servers) {
+            if (s.name == name) { startServer(s); break; }
         }
-
-        if (crashes > kMaxCrashRestarts) {
-            emit logMessage(serverName,
-                            QStringLiteral("Server crashed %1 times consecutively. "
-                                           "Auto-restart disabled until manual start.")
-                                .arg(crashes));
-            return;
-        }
-
-        int delayMs = kCrashBackoffBaseMs * (1 << (crashes - 1));  // exponential backoff
-        emit logMessage(serverName,
-                        QStringLiteral("Server crashed (exit code %1, attempt %2/%3). "
-                                       "Auto-restarting in %4 s…")
-                            .arg(exitCode)
-                            .arg(crashes)
-                            .arg(kMaxCrashRestarts)
-                            .arg(delayMs / 1000));
-
-        // Find the server config and restart after delay
-        QTimer::singleShot(delayMs, this, [this, serverName]() {
-            for (ServerConfig &s : m_servers) {
-                if (s.name == serverName) {
-                    startServer(s);
-                    break;
-                }
-            }
-        });
-    } else {
-        m_crashCounts.remove(serverName);
-        emit logMessage(serverName, QStringLiteral("Server exited normally."));
     }
 }
 
@@ -517,51 +789,48 @@ void ServerManager::onProcessFinished(const QString &serverName, int exitCode,
 
 void ServerManager::deployServer(ServerConfig &server)
 {
-    emit logMessage(server.name, QStringLiteral("Starting SteamCMD deployment…"));
+    emitLog(server.name, "Starting SteamCMD deployment...");
     SteamCmdModule steamCmd;
     steamCmd.setSteamCmdPath(m_steamCmdPath);
-    connect(&steamCmd, &SteamCmdModule::outputLine, this, [this, &server](const QString &line) {
-        emit logMessage(server.name, line);
-    });
+    steamCmd.onOutputLine = [this, &server](const std::string &line) {
+        emitLog(server.name, line);
+    };
     steamCmd.deployServer(server);
 }
 
 bool ServerManager::updateMods(ServerConfig &server)
 {
-    // Take a snapshot before updating mods so we can roll back if needed
-    emit logMessage(server.name, QStringLiteral("Taking pre-update snapshot…"));
-    QString snapshotTs = takeSnapshot(server);
+    emitLog(server.name, "Taking pre-update snapshot...");
+    std::string snapshotTs = takeSnapshot(server);
 
-    emit logMessage(server.name, QStringLiteral("Updating mods…"));
+    emitLog(server.name, "Updating mods...");
     SteamCmdModule steamCmd;
     steamCmd.setSteamCmdPath(m_steamCmdPath);
-    connect(&steamCmd, &SteamCmdModule::outputLine, this, [this, &server](const QString &line) {
-        emit logMessage(server.name, line);
-    });
+    steamCmd.onOutputLine = [this, &server](const std::string &line) {
+        emitLog(server.name, line);
+    };
     bool ok = steamCmd.updateMods(server);
 
     if (ok) {
-        // Fire onUpdate event hook on success
-        m_eventHookManager->fireHook(server.name, server.dir,
-                                     QStringLiteral("onUpdate"),
-                                     server.eventHooks.value(QStringLiteral("onUpdate")));
+        auto hookIt = server.eventHooks.find("onUpdate");
+        if (hookIt != server.eventHooks.end())
+            m_eventHookManager.fireHook(server.name, server.dir, "onUpdate", hookIt->second);
     }
 
-    if (!ok && !snapshotTs.isEmpty()) {
-        emit logMessage(server.name, QStringLiteral("Mod update failed – rolling back to pre-update snapshot…"));
-        // Find the mods snapshot from the pre-update timestamp and restore it
-        QStringList snapshots = listSnapshots(server);
-        for (const QString &snap : std::as_const(snapshots)) {
-            if (snap.contains(snapshotTs) && snap.endsWith(QStringLiteral("_mods.zip"))) {
+    if (!ok && !snapshotTs.empty()) {
+        emitLog(server.name, "Mod update failed - rolling back to pre-update snapshot...");
+        std::vector<std::string> snapshots = listSnapshots(server);
+        for (const auto &snap : snapshots) {
+            if (snap.find(snapshotTs) != std::string::npos &&
+                snap.size() >= 9 && snap.substr(snap.size() - 9) == "_mods.zip") {
                 restoreSnapshot(snap, server);
                 break;
             }
         }
-        emit logMessage(server.name, QStringLiteral("Rollback complete."));
+        emitLog(server.name, "Rollback complete.");
     } else if (!ok) {
-        emit logMessage(server.name, QStringLiteral("Mod update failed and no snapshot available for rollback."));
+        emitLog(server.name, "Mod update failed and no snapshot available for rollback.");
     }
-
     return ok;
 }
 
@@ -569,37 +838,32 @@ bool ServerManager::updateMods(ServerConfig &server)
 // Backup / restore
 // ---------------------------------------------------------------------------
 
-QString ServerManager::takeSnapshot(const ServerConfig &server)
+std::string ServerManager::takeSnapshot(const ServerConfig &server)
 {
-    emit logMessage(server.name, QStringLiteral("Taking snapshot…"));
-    QString ts = BackupModule::takeSnapshot(server);
-    if (ts.isEmpty())
-        emit logMessage(server.name, QStringLiteral("Snapshot failed."));
+    emitLog(server.name, "Taking snapshot...");
+    std::string ts = BackupModule::takeSnapshot(server);
+    if (ts.empty())
+        emitLog(server.name, "Snapshot failed.");
     else {
-        emit logMessage(server.name, QStringLiteral("Snapshot created: ") + ts);
-
-        // Fire onBackup event hook
-        m_eventHookManager->fireHook(server.name, server.dir,
-                                     QStringLiteral("onBackup"),
-                                     server.eventHooks.value(QStringLiteral("onBackup")));
-
-        m_webhook->sendNotification(server.discordWebhookUrl, server.name,
-                                    QStringLiteral("Backup completed."),
-                                    server.webhookTemplate);
+        emitLog(server.name, "Snapshot created: " + ts);
+        auto hookIt = server.eventHooks.find("onBackup");
+        if (hookIt != server.eventHooks.end())
+            m_eventHookManager.fireHook(server.name, server.dir, "onBackup", hookIt->second);
+        m_webhook.sendNotification(server.discordWebhookUrl, server.name,
+                                   "Backup completed.", server.webhookTemplate);
     }
     return ts;
 }
 
-bool ServerManager::restoreSnapshot(const QString &zipFile, const ServerConfig &server)
+bool ServerManager::restoreSnapshot(const std::string &zipFile, const ServerConfig &server)
 {
-    emit logMessage(server.name, QStringLiteral("Restoring from: ") + zipFile);
+    emitLog(server.name, "Restoring from: " + zipFile);
     bool ok = BackupModule::restoreSnapshot(zipFile, server);
-    emit logMessage(server.name, ok ? QStringLiteral("Restore complete.")
-                                    : QStringLiteral("Restore failed."));
+    emitLog(server.name, ok ? "Restore complete." : "Restore failed.");
     return ok;
 }
 
-QStringList ServerManager::listSnapshots(const ServerConfig &server) const
+std::vector<std::string> ServerManager::listSnapshots(const ServerConfig &server) const
 {
     return BackupModule::listSnapshots(server);
 }
@@ -611,35 +875,31 @@ QStringList ServerManager::listSnapshots(const ServerConfig &server) const
 int ServerManager::getPlayerCount(const ServerConfig &server)
 {
     RconClient rcon;
-    if (!rcon.connect(server.rcon.host, server.rcon.port, server.rcon.password, 3000))
+    if (!rcon.connectToServer(server.rcon.host, server.rcon.port, server.rcon.password, 3000))
         return -1;
-    QString resp = rcon.sendCommand(QStringLiteral("status"), 3000);
-    // Parse "players : N humans" line from status output
-    const QStringList lines = resp.split(QLatin1Char('\n'));
-    for (const QString &line : lines) {
-        if (line.contains(QStringLiteral("players"))) {
-            QRegularExpression re(QStringLiteral("(\\d+) humans"));
-            QRegularExpressionMatch m = re.match(line);
-            if (m.hasMatch())
-                return m.captured(1).toInt();
+    std::string resp = rcon.sendCommand("status", 3000);
+    auto lines = splitString(resp, '\n');
+    for (const auto &line : lines) {
+        if (line.find("players") != std::string::npos) {
+            std::regex re("(\\d+) humans");
+            std::smatch m;
+            if (std::regex_search(line, m, re))
+                return std::stoi(m[1].str());
         }
     }
     return 0;
 }
 
-QString ServerManager::sendRconCommand(const ServerConfig &server, const QString &cmd)
+std::string ServerManager::sendRconCommand(const ServerConfig &server, const std::string &cmd)
 {
     if (server.consoleLogging)
-        ConsoleLogWriter::append(server.dir, server.name, QStringLiteral("> ") + cmd);
-
+        ConsoleLogWriter::append(server.dir, server.name, "> " + cmd);
     RconClient rcon;
-    if (!rcon.connect(server.rcon.host, server.rcon.port, server.rcon.password, 3000))
-        return QStringLiteral("[RCON] Connection failed.");
-    QString resp = rcon.sendCommand(cmd);
-
-    if (server.consoleLogging && !resp.isEmpty())
+    if (!rcon.connectToServer(server.rcon.host, server.rcon.port, server.rcon.password, 3000))
+        return "[RCON] Connection failed.";
+    std::string resp = rcon.sendCommand(cmd);
+    if (server.consoleLogging && !resp.empty())
         ConsoleLogWriter::append(server.dir, server.name, resp);
-
     return resp;
 }
 
@@ -649,48 +909,42 @@ QString ServerManager::sendRconCommand(const ServerConfig &server, const QString
 
 void ServerManager::syncModsCluster()
 {
-    for (ServerConfig &s : m_servers)
-        updateMods(s);
+    for (ServerConfig &s : m_servers) updateMods(s);
 }
 
-QStringList ServerManager::broadcastRconCommand(const QString &cmd)
+std::vector<std::string> ServerManager::broadcastRconCommand(const std::string &cmd)
 {
-    QStringList results;
-    for (const ServerConfig &s : std::as_const(m_servers)) {
-        QString resp = sendRconCommand(s, cmd);
-        results << QStringLiteral("[%1] %2").arg(s.name, resp);
-        emit logMessage(s.name, QStringLiteral("Broadcast RCON: %1 → %2").arg(cmd, resp));
+    std::vector<std::string> results;
+    for (const ServerConfig &s : m_servers) {
+        std::string resp = sendRconCommand(s, cmd);
+        results.push_back("[" + s.name + "] " + resp);
+        emitLog(s.name, "Broadcast RCON: " + cmd + " -> " + resp);
     }
     return results;
 }
 
-void ServerManager::syncConfigsCluster(const QString &masterConfigZip)
+void ServerManager::syncConfigsCluster(const std::string &masterConfigZip)
 {
-    for (const ServerConfig &s : std::as_const(m_servers)) {
-        bool ok = BackupModule::extractZip(masterConfigZip, s.dir + QStringLiteral("/Configs"));
-        emit logMessage(s.name,
-                        ok ? QStringLiteral("Config synced from master zip.")
-                           : QStringLiteral("Config sync failed."));
+    for (const ServerConfig &s : m_servers) {
+        bool ok = BackupModule::extractZip(masterConfigZip, (fs::path(s.dir) / "Configs").string());
+        emitLog(s.name, ok ? "Config synced from master zip." : "Config sync failed.");
     }
 }
 
-void ServerManager::setSteamCmdPath(const QString &path) { m_steamCmdPath = path; }
-QString ServerManager::steamCmdPath() const               { return m_steamCmdPath; }
+void ServerManager::setSteamCmdPath(const std::string &path) { m_steamCmdPath = path; }
+std::string ServerManager::steamCmdPath() const               { return m_steamCmdPath; }
 
 // ---------------------------------------------------------------------------
 // Server removal
 // ---------------------------------------------------------------------------
 
-bool ServerManager::removeServer(const QString &serverName)
+bool ServerManager::removeServer(const std::string &serverName)
 {
-    for (int i = 0; i < m_servers.size(); ++i) {
-        if (m_servers.at(i).name == serverName) {
-            // Stop if running
-            if (isServerRunning(m_servers[i]))
-                stopServer(m_servers[i]);
-
-            m_servers.removeAt(i);
-            emit logMessage(serverName, QStringLiteral("Server removed from configuration."));
+    for (int i = 0; i < static_cast<int>(m_servers.size()); ++i) {
+        if (m_servers[i].name == serverName) {
+            if (isServerRunning(m_servers[i])) stopServer(m_servers[i]);
+            m_servers.erase(m_servers.begin() + i);
+            emitLog(serverName, "Server removed from configuration.");
             return true;
         }
     }
@@ -701,235 +955,173 @@ bool ServerManager::removeServer(const QString &serverName)
 // Export / Import
 // ---------------------------------------------------------------------------
 
-bool ServerManager::exportServerConfig(const QString &serverName,
-                                       const QString &filePath) const
+bool ServerManager::exportServerConfig(const std::string &serverName,
+                                       const std::string &filePath) const
 {
     const ServerConfig *found = nullptr;
-    for (const ServerConfig &s : m_servers) {
+    for (const auto &s : m_servers) {
         if (s.name == serverName) { found = &s; break; }
     }
     if (!found) return false;
 
-    const ServerConfig &s = *found;
-    QJsonObject obj;
-    obj[QStringLiteral("name")]          = s.name;
-    obj[QStringLiteral("appid")]         = s.appid;
-    obj[QStringLiteral("dir")]           = s.dir;
-    obj[QStringLiteral("executable")]    = s.executable;
-    obj[QStringLiteral("launchArgs")]    = s.launchArgs;
-    obj[QStringLiteral("backupFolder")]  = s.backupFolder;
-    obj[QStringLiteral("notes")]         = s.notes;
-    obj[QStringLiteral("discordWebhookUrl")] = s.discordWebhookUrl;
-    obj[QStringLiteral("webhookTemplate")] = s.webhookTemplate;
-    obj[QStringLiteral("autoUpdate")]    = s.autoUpdate;
-    obj[QStringLiteral("autoStartOnLaunch")] = s.autoStartOnLaunch;
-    obj[QStringLiteral("favorite")]      = s.favorite;
-    obj[QStringLiteral("keepBackups")]   = s.keepBackups;
-    obj[QStringLiteral("backupIntervalMinutes")] = s.backupIntervalMinutes;
-    obj[QStringLiteral("restartIntervalHours")]  = s.restartIntervalHours;
-    obj[QStringLiteral("rconCommandIntervalMinutes")] = s.rconCommandIntervalMinutes;
-    obj[QStringLiteral("backupCompressionLevel")] = s.backupCompressionLevel;
-    obj[QStringLiteral("maintenanceStartHour")]   = s.maintenanceStartHour;
-    obj[QStringLiteral("maintenanceEndHour")]     = s.maintenanceEndHour;
-    obj[QStringLiteral("consoleLogging")] = s.consoleLogging;
-    obj[QStringLiteral("maxPlayers")]     = s.maxPlayers;
-    obj[QStringLiteral("restartWarningMinutes")] = s.restartWarningMinutes;
-    obj[QStringLiteral("restartWarningMessage")]  = s.restartWarningMessage;
-
-    obj[QStringLiteral("cpuAlertThreshold")]   = s.cpuAlertThreshold;
-    obj[QStringLiteral("memAlertThresholdMB")] = s.memAlertThresholdMB;
-
-    // Event hooks
-    QJsonObject hooks;
-    for (auto hIt = s.eventHooks.constBegin(); hIt != s.eventHooks.constEnd(); ++hIt)
-        hooks[hIt.key()] = hIt.value();
-    obj[QStringLiteral("eventHooks")] = hooks;
-
-    // Tags
-    QJsonArray tagsArr;
-    for (const QString &tag : s.tags) tagsArr << tag;
-    obj[QStringLiteral("tags")] = tagsArr;
-
-    // Group, startup priority, backup-before-restart, graceful shutdown, env vars
-    obj[QStringLiteral("group")] = s.group;
-    obj[QStringLiteral("startupPriority")] = s.startupPriority;
-    obj[QStringLiteral("backupBeforeRestart")] = s.backupBeforeRestart;
-    obj[QStringLiteral("gracefulShutdownSeconds")] = s.gracefulShutdownSeconds;
-
-    QJsonObject envVarsObj;
-    for (auto eIt = s.environmentVariables.constBegin(); eIt != s.environmentVariables.constEnd(); ++eIt)
-        envVarsObj[eIt.key()] = eIt.value();
-    obj[QStringLiteral("environmentVariables")] = envVarsObj;
-
-    QJsonObject rcon;
-    rcon[QStringLiteral("host")]     = s.rcon.host;
-    rcon[QStringLiteral("port")]     = s.rcon.port;
-    rcon[QStringLiteral("password")] = obfuscatePassword(s.rcon.password);
-    obj[QStringLiteral("rcon")] = rcon;
-
-    QJsonArray mods;
-    for (int m : s.mods) mods << m;
-    obj[QStringLiteral("mods")] = mods;
-
-    QJsonArray disabledMods;
-    for (int m : s.disabledMods) disabledMods << m;
-    obj[QStringLiteral("disabledMods")] = disabledMods;
-
-    QJsonArray scheduledRcon;
-    for (const QString &cmd : s.scheduledRconCommands) scheduledRcon << cmd;
-    obj[QStringLiteral("scheduledRconCommands")] = scheduledRcon;
-
-    QFile file(filePath);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
-        return false;
-    file.write(QJsonDocument(obj).toJson());
+    json obj = serverToJson(*found);
+    std::ofstream file(filePath, std::ios::trunc);
+    if (!file.is_open()) return false;
+    file << obj.dump(2);
     return true;
 }
 
-QString ServerManager::importServerConfig(const QString &filePath)
+std::string ServerManager::importServerConfig(const std::string &filePath)
 {
-    QFile file(filePath);
-    if (!file.open(QIODevice::ReadOnly))
-        return QStringLiteral("Cannot open file.");
+    std::ifstream file(filePath);
+    if (!file.is_open()) return "Cannot open file.";
 
-    QJsonParseError err;
-    QJsonDocument doc = QJsonDocument::fromJson(file.readAll(), &err);
-    if (err.error != QJsonParseError::NoError)
-        return QStringLiteral("Invalid JSON: ") + err.errorString();
-    if (!doc.isObject())
-        return QStringLiteral("Expected a JSON object.");
+    json obj;
+    try { obj = json::parse(file); }
+    catch (const json::parse_error &e) {
+        return std::string("Invalid JSON: ") + e.what();
+    }
+    if (!obj.is_object()) return "Expected a JSON object.";
 
-    QJsonObject obj = doc.object();
     ServerConfig s;
-    s.name           = obj[QStringLiteral("name")].toString();
-    s.appid          = obj[QStringLiteral("appid")].toInt();
-    s.dir            = obj[QStringLiteral("dir")].toString();
-    s.executable     = obj[QStringLiteral("executable")].toString();
-    s.launchArgs     = obj[QStringLiteral("launchArgs")].toString();
-    s.backupFolder   = obj[QStringLiteral("backupFolder")].toString();
-    s.notes          = obj[QStringLiteral("notes")].toString();
-    s.discordWebhookUrl = obj[QStringLiteral("discordWebhookUrl")].toString();
-    s.webhookTemplate= obj[QStringLiteral("webhookTemplate")].toString();
-    s.autoUpdate     = obj[QStringLiteral("autoUpdate")].toBool(true);
-    s.autoStartOnLaunch = obj[QStringLiteral("autoStartOnLaunch")].toBool(false);
-    s.favorite       = obj[QStringLiteral("favorite")].toBool(false);
-    s.keepBackups    = obj[QStringLiteral("keepBackups")].toInt(10);
-    s.backupIntervalMinutes = obj[QStringLiteral("backupIntervalMinutes")].toInt(30);
-    s.restartIntervalHours  = obj[QStringLiteral("restartIntervalHours")].toInt(24);
-    s.rconCommandIntervalMinutes = obj[QStringLiteral("rconCommandIntervalMinutes")].toInt(0);
-    s.backupCompressionLevel = obj[QStringLiteral("backupCompressionLevel")].toInt(6);
-    s.maintenanceStartHour   = obj[QStringLiteral("maintenanceStartHour")].toInt(-1);
-    s.maintenanceEndHour     = obj[QStringLiteral("maintenanceEndHour")].toInt(-1);
-    s.consoleLogging = obj[QStringLiteral("consoleLogging")].toBool(false);
-    s.maxPlayers     = obj[QStringLiteral("maxPlayers")].toInt(0);
-    s.restartWarningMinutes = obj[QStringLiteral("restartWarningMinutes")].toInt(15);
-    s.restartWarningMessage = obj[QStringLiteral("restartWarningMessage")].toString();
+    s.name           = jsonStr(obj, "name");
+    s.appid          = jsonInt(obj, "appid");
+    s.dir            = jsonStr(obj, "dir");
+    s.executable     = jsonStr(obj, "executable");
+    s.launchArgs     = jsonStr(obj, "launchArgs");
+    s.backupFolder   = jsonStr(obj, "backupFolder");
+    s.notes          = jsonStr(obj, "notes");
+    s.discordWebhookUrl = jsonStr(obj, "discordWebhookUrl");
+    s.webhookTemplate= jsonStr(obj, "webhookTemplate");
+    s.autoUpdate     = jsonBool(obj, "autoUpdate", true);
+    s.autoStartOnLaunch = jsonBool(obj, "autoStartOnLaunch", false);
+    s.favorite       = jsonBool(obj, "favorite", false);
+    s.keepBackups    = jsonInt(obj, "keepBackups", 10);
+    s.backupIntervalMinutes = jsonInt(obj, "backupIntervalMinutes", 30);
+    s.restartIntervalHours  = jsonInt(obj, "restartIntervalHours", 24);
+    s.rconCommandIntervalMinutes = jsonInt(obj, "rconCommandIntervalMinutes", 0);
+    s.backupCompressionLevel = jsonInt(obj, "backupCompressionLevel", 6);
+    s.maintenanceStartHour   = jsonInt(obj, "maintenanceStartHour", -1);
+    s.maintenanceEndHour     = jsonInt(obj, "maintenanceEndHour", -1);
+    s.consoleLogging = jsonBool(obj, "consoleLogging", false);
+    s.maxPlayers     = jsonInt(obj, "maxPlayers", 0);
+    s.restartWarningMinutes = jsonInt(obj, "restartWarningMinutes", 15);
+    s.restartWarningMessage = jsonStr(obj, "restartWarningMessage");
+    s.cpuAlertThreshold    = jsonDouble(obj, "cpuAlertThreshold", 90.0);
+    s.memAlertThresholdMB  = jsonDouble(obj, "memAlertThresholdMB", 0.0);
 
-    s.cpuAlertThreshold    = obj[QStringLiteral("cpuAlertThreshold")].toDouble(90.0);
-    s.memAlertThresholdMB  = obj[QStringLiteral("memAlertThresholdMB")].toDouble(0.0);
-
-    // Event hooks
-    QJsonObject hooks = obj[QStringLiteral("eventHooks")].toObject();
-    for (auto hIt = hooks.begin(); hIt != hooks.end(); ++hIt)
-        s.eventHooks[hIt.key()] = hIt.value().toString();
-
-    // Tags
-    for (const QJsonValue &v : obj[QStringLiteral("tags")].toArray())
-        s.tags << v.toString();
-
-    // Group, startup priority, backup-before-restart, graceful shutdown, env vars
-    s.group = obj[QStringLiteral("group")].toString();
-    s.startupPriority = obj[QStringLiteral("startupPriority")].toInt(0);
-    s.backupBeforeRestart = obj[QStringLiteral("backupBeforeRestart")].toBool(false);
-    s.gracefulShutdownSeconds = obj[QStringLiteral("gracefulShutdownSeconds")].toInt(10);
-
-    QJsonObject envVars = obj[QStringLiteral("environmentVariables")].toObject();
-    for (auto eIt = envVars.begin(); eIt != envVars.end(); ++eIt)
-        s.environmentVariables[eIt.key()] = eIt.value().toString();
-
-    QJsonObject rcon = obj[QStringLiteral("rcon")].toObject();
-    s.rcon.host     = rcon[QStringLiteral("host")].toString(QStringLiteral("127.0.0.1"));
-    s.rcon.port     = rcon[QStringLiteral("port")].toInt(27015);
-    s.rcon.password = deobfuscatePassword(rcon[QStringLiteral("password")].toString());
-
-    for (const QJsonValue &m : obj[QStringLiteral("mods")].toArray())
-        s.mods << m.toInt();
-    for (const QJsonValue &m : obj[QStringLiteral("disabledMods")].toArray())
-        s.disabledMods << m.toInt();
-    for (const QJsonValue &v : obj[QStringLiteral("scheduledRconCommands")].toArray())
-        s.scheduledRconCommands << v.toString();
-
-    // Validate before adding
-    m_servers << s;
-    QStringList errors = validateAll();
-    if (!errors.isEmpty()) {
-        m_servers.removeLast();
-        return errors.join(QStringLiteral("\n"));
+    if (obj.contains("eventHooks") && obj["eventHooks"].is_object()) {
+        for (auto &[k, v] : obj["eventHooks"].items())
+            if (v.is_string()) s.eventHooks[k] = v.get<std::string>();
+    }
+    if (obj.contains("tags") && obj["tags"].is_array()) {
+        for (const auto &v : obj["tags"])
+            if (v.is_string()) s.tags.push_back(v.get<std::string>());
     }
 
-    emit logMessage(s.name, QStringLiteral("Server imported from file."));
-    return QString();
+    s.group = jsonStr(obj, "group");
+    s.startupPriority = jsonInt(obj, "startupPriority", 0);
+    s.backupBeforeRestart = jsonBool(obj, "backupBeforeRestart", false);
+    s.gracefulShutdownSeconds = jsonInt(obj, "gracefulShutdownSeconds", 10);
+
+    if (obj.contains("environmentVariables") && obj["environmentVariables"].is_object()) {
+        for (auto &[k, v] : obj["environmentVariables"].items())
+            if (v.is_string()) s.environmentVariables[k] = v.get<std::string>();
+    }
+    if (obj.contains("rcon") && obj["rcon"].is_object()) {
+        const auto &rcon = obj["rcon"];
+        s.rcon.host     = jsonStr(rcon, "host", "127.0.0.1");
+        s.rcon.port     = jsonInt(rcon, "port", 27015);
+        s.rcon.password = deobfuscatePassword(jsonStr(rcon, "password"));
+    }
+    if (obj.contains("mods") && obj["mods"].is_array()) {
+        for (const auto &m : obj["mods"])
+            if (m.is_number_integer()) s.mods.push_back(m.get<int>());
+    }
+    if (obj.contains("disabledMods") && obj["disabledMods"].is_array()) {
+        for (const auto &m : obj["disabledMods"])
+            if (m.is_number_integer()) s.disabledMods.push_back(m.get<int>());
+    }
+    if (obj.contains("scheduledRconCommands") && obj["scheduledRconCommands"].is_array()) {
+        for (const auto &v : obj["scheduledRconCommands"])
+            if (v.is_string()) s.scheduledRconCommands.push_back(v.get<std::string>());
+    }
+
+    m_servers.push_back(s);
+    std::vector<std::string> errors = validateAll();
+    if (!errors.empty()) {
+        m_servers.pop_back();
+        std::string combined;
+        for (size_t i = 0; i < errors.size(); ++i) {
+            if (i > 0) combined += "\n";
+            combined += errors[i];
+        }
+        return combined;
+    }
+    emitLog(s.name, "Server imported from file.");
+    return "";
 }
 
 // ---------------------------------------------------------------------------
 // Uptime tracking
 // ---------------------------------------------------------------------------
 
-QDateTime ServerManager::serverStartTime(const QString &serverName) const
+std::chrono::system_clock::time_point ServerManager::serverStartTime(const std::string &serverName) const
 {
-    return m_startTimes.value(serverName, QDateTime());
+    auto it = m_startTimes.find(serverName);
+    if (it != m_startTimes.end()) return it->second;
+    return {};
 }
 
-qint64 ServerManager::serverUptimeSeconds(const QString &serverName) const
+int64_t ServerManager::serverUptimeSeconds(const std::string &serverName) const
 {
-    auto it = m_startTimes.constFind(serverName);
-    if (it == m_startTimes.constEnd() || !it->isValid())
-        return -1;
-    return it->secsTo(QDateTime::currentDateTime());
+    auto it = m_startTimes.find(serverName);
+    if (it == m_startTimes.end()) return -1;
+    auto now = std::chrono::system_clock::now();
+    return std::chrono::duration_cast<std::chrono::seconds>(now - it->second).count();
 }
 
 // ---------------------------------------------------------------------------
 // Crash backoff helpers
 // ---------------------------------------------------------------------------
 
-int ServerManager::crashCount(const QString &serverName) const
+int ServerManager::crashCount(const std::string &serverName) const
 {
-    return m_crashCounts.value(serverName, 0);
+    auto it = m_crashCounts.find(serverName);
+    return (it != m_crashCounts.end()) ? it->second : 0;
 }
 
-void ServerManager::resetCrashCount(const QString &serverName)
+void ServerManager::resetCrashCount(const std::string &serverName)
 {
-    m_crashCounts.remove(serverName);
+    m_crashCounts.erase(serverName);
 }
 
 // ---------------------------------------------------------------------------
 // Pending update tracking
 // ---------------------------------------------------------------------------
 
-void ServerManager::setPendingUpdate(const QString &serverName, bool pending)
+void ServerManager::setPendingUpdate(const std::string &serverName, bool pending)
 {
-    if (pending)
-        m_pendingUpdates[serverName] = true;
-    else
-        m_pendingUpdates.remove(serverName);
+    if (pending) m_pendingUpdates[serverName] = true;
+    else m_pendingUpdates.erase(serverName);
 }
 
-bool ServerManager::hasPendingUpdate(const QString &serverName) const
+bool ServerManager::hasPendingUpdate(const std::string &serverName) const
 {
-    return m_pendingUpdates.value(serverName, false);
+    auto it = m_pendingUpdates.find(serverName);
+    return (it != m_pendingUpdates.end()) ? it->second : false;
 }
 
-void ServerManager::setPendingModUpdate(const QString &serverName, bool pending)
+void ServerManager::setPendingModUpdate(const std::string &serverName, bool pending)
 {
-    if (pending)
-        m_pendingModUpdates[serverName] = true;
-    else
-        m_pendingModUpdates.remove(serverName);
+    if (pending) m_pendingModUpdates[serverName] = true;
+    else m_pendingModUpdates.erase(serverName);
 }
 
-bool ServerManager::hasPendingModUpdate(const QString &serverName) const
+bool ServerManager::hasPendingModUpdate(const std::string &serverName) const
 {
-    return m_pendingModUpdates.value(serverName, false);
+    auto it = m_pendingModUpdates.find(serverName);
+    return (it != m_pendingModUpdates.end()) ? it->second : false;
 }
 
 // ---------------------------------------------------------------------------
@@ -938,21 +1130,16 @@ bool ServerManager::hasPendingModUpdate(const QString &serverName) const
 
 void ServerManager::sendRestartWarning(ServerConfig &server, int minutesRemaining)
 {
-    if (!isServerRunning(server))
-        return;
-
-    QString msg = server.formatRestartWarning(minutesRemaining);
-    emit logMessage(server.name,
-                    QStringLiteral("Restart warning (%1 min): %2")
-                        .arg(minutesRemaining).arg(msg));
-
-    // Send via RCON broadcast; common commands: "say", "broadcast", "ServerChat"
-    sendRconCommand(server, QStringLiteral("broadcast %1").arg(msg));
+    if (!isServerRunning(server)) return;
+    std::string msg = server.formatRestartWarning(minutesRemaining);
+    emitLog(server.name,
+        "Restart warning (" + std::to_string(minutesRemaining) + " min): " + msg);
+    sendRconCommand(server, "broadcast " + msg);
 }
 
 // ---------------------------------------------------------------------------
 // Resource monitor / Event hooks accessors
 // ---------------------------------------------------------------------------
 
-ResourceMonitor *ServerManager::resourceMonitor() { return m_resourceMonitor; }
-EventHookManager *ServerManager::eventHookManager() { return m_eventHookManager; }
+ResourceMonitor *ServerManager::resourceMonitor() { return &m_resourceMonitor; }
+EventHookManager *ServerManager::eventHookManager() { return &m_eventHookManager; }

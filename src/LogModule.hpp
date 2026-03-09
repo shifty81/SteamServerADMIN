@@ -1,11 +1,13 @@
 #pragma once
 
-#include <QObject>
-#include <QString>
-#include <QStringList>
-#include <QFile>
-#include <QMutex>
-#include <QDateTime>
+#include <string>
+#include <vector>
+#include <fstream>
+#include <mutex>
+#include <functional>
+#include <filesystem>
+#include <chrono>
+#include <ctime>
 
 /**
  * @brief Centralized logging module that records all server operations.
@@ -13,33 +15,31 @@
  * Writes timestamped log entries to a file and keeps a bounded in-memory
  * buffer so the GUI log-viewer tab can show recent history.
  */
-class LogModule : public QObject {
-    Q_OBJECT
+class LogModule {
 public:
-    explicit LogModule(const QString &logFilePath, QObject *parent = nullptr);
-    ~LogModule() override;
+    explicit LogModule(const std::string &logFilePath);
+    ~LogModule();
 
     /** Append a timestamped entry to the log. Thread-safe. */
-    void log(const QString &serverName, const QString &message);
+    void log(const std::string &serverName, const std::string &message);
 
     /** Return the in-memory log buffer (most-recent entries). */
-    QStringList entries() const;
+    std::vector<std::string> entries() const;
 
     /** Maximum number of in-memory entries (default 500). */
     int maxEntries() const;
     void setMaxEntries(int max);
 
     /** Path of the log file on disk. */
-    QString logFilePath() const;
+    std::string logFilePath() const;
 
-signals:
-    /** Emitted every time a new log line is appended. */
-    void entryAdded(const QString &formattedLine);
+    /** Callback invoked every time a new log line is appended. */
+    std::function<void(const std::string &formattedLine)> onEntryAdded;
 
 private:
-    QString     m_logFilePath;
-    QFile       m_file;
-    QStringList m_entries;
-    int         m_maxEntries = 500;
-    mutable QMutex m_mutex;
+    std::string                m_logFilePath;
+    std::ofstream              m_file;
+    std::vector<std::string>   m_entries;
+    int                        m_maxEntries = 500;
+    mutable std::mutex         m_mutex;
 };
