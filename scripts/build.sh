@@ -129,7 +129,7 @@ install_qt6_msys() {
                 if [ -n "$_py" ]; then
                     local _user_scripts=""
                     _user_scripts="$("$_py" -c \
-                        "import sysconfig,os;print(sysconfig.get_path('scripts',f'{os.name}_user'))" \
+                        "import sysconfig,os;print(sysconfig.get_path('scripts',os.name+'_user'))" \
                         2>/dev/null)" || true
                     if [ -n "$_user_scripts" ]; then
                         for _a in "$_user_scripts/aqt" "$_user_scripts/aqt.exe"; do

@@ -102,7 +102,7 @@ function Install-Qt6 {
             $pyCmd2 = Get-Command python3 -ErrorAction SilentlyContinue
             if (-not $pyCmd2) { $pyCmd2 = Get-Command python -ErrorAction SilentlyContinue }
             if ($pyCmd2) {
-                $userScripts = & $pyCmd2.Source -c "import sysconfig,os;print(sysconfig.get_path('scripts',f'{os.name}_user'))" 2>$null
+                $userScripts = & $pyCmd2.Source -c "import sysconfig,os;print(sysconfig.get_path('scripts',os.name+'_user'))" 2>$null
                 if ($userScripts) {
                     $aqtPath = Join-Path $userScripts "aqt.exe"
                     if (Test-Path $aqtPath) {
@@ -110,11 +110,14 @@ function Install-Qt6 {
                         Info "Found aqt at: $aqtExe"
                     }
                 }
-                # Last resort: python -m aqt
+                # Last resort: python -m aqt (verify it works first)
                 if (-not $aqtExe) {
-                    $aqtExe = $pyCmd2.Source
-                    $usePythonModule = $true
-                    Info "Using 'python -m aqt' (aqt not found on PATH)"
+                    & $pyCmd2.Source -m aqt version 2>$null | Out-Null
+                    if ($LASTEXITCODE -eq 0) {
+                        $aqtExe = $pyCmd2.Source
+                        $usePythonModule = $true
+                        Info "Using 'python -m aqt' (aqt not found on PATH)"
+                    }
                 }
             }
         }
