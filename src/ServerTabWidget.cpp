@@ -302,6 +302,36 @@ void ServerTabWidget::buildSettingsTab(QTabWidget *tabs)
     gracefulShutdownSpin->setValue(m_server.gracefulShutdownSeconds);
     form->addRow(tr("Graceful Shutdown Timeout:"), gracefulShutdownSpin);
 
+    // ---- Auto-update check interval ----
+    auto *updateCheckSpin = new QSpinBox(scrollContent);
+    updateCheckSpin->setRange(0, 1440);
+    updateCheckSpin->setSuffix(tr(" min"));
+    updateCheckSpin->setSpecialValueText(tr("Disabled"));
+    updateCheckSpin->setValue(m_server.autoUpdateCheckIntervalMinutes);
+    form->addRow(tr("Auto-Update Check Interval:"), updateCheckSpin);
+
+    // ---- Server statistics (read-only) ----
+    auto *statsLabel = new QLabel(scrollContent);
+    auto formatUptime = [](qint64 secs) -> QString {
+        if (secs <= 0) return QStringLiteral("0s");
+        int d = static_cast<int>(secs / 86400);
+        int h = static_cast<int>((secs % 86400) / 3600);
+        int m = static_cast<int>((secs % 3600) / 60);
+        QString result;
+        if (d > 0) result += QStringLiteral("%1d ").arg(d);
+        if (h > 0) result += QStringLiteral("%1h ").arg(h);
+        result += QStringLiteral("%1m").arg(m);
+        return result;
+    };
+    QString statsText = tr("Total Uptime: %1  |  Total Crashes: %2")
+        .arg(formatUptime(m_server.totalUptimeSeconds))
+        .arg(m_server.totalCrashes);
+    if (!m_server.lastCrashTime.isEmpty())
+        statsText += tr("  |  Last Crash: %1").arg(m_server.lastCrashTime);
+    statsLabel->setText(statsText);
+    statsLabel->setStyleSheet(QStringLiteral("color: gray; font-style: italic;"));
+    form->addRow(tr("Statistics:"), statsLabel);
+
     scroll->setWidget(scrollContent);
     outerLayout->addWidget(scroll);
 
@@ -320,7 +350,7 @@ void ServerTabWidget::buildSettingsTab(QTabWidget *tabs)
             restartWarnSpin, restartWarnMsgEdit,
             webhookUrlEdit, webhookTplEdit, consoleLogCheck,
             rconIntervalSpin, groupEdit, startupPrioritySpin,
-            backupBeforeRestartCheck, gracefulShutdownSpin]() {
+            backupBeforeRestartCheck, gracefulShutdownSpin, updateCheckSpin]() {
         m_server.name           = nameEdit->text();
         m_server.appid          = appidSpin->value();
         m_server.dir            = dirEdit->text();
@@ -350,6 +380,7 @@ void ServerTabWidget::buildSettingsTab(QTabWidget *tabs)
         m_server.startupPriority = startupPrioritySpin->value();
         m_server.backupBeforeRestart = backupBeforeRestartCheck->isChecked();
         m_server.gracefulShutdownSeconds = gracefulShutdownSpin->value();
+        m_server.autoUpdateCheckIntervalMinutes = updateCheckSpin->value();
 
         QStringList errors = m_server.validate();
         if (!errors.isEmpty()) {

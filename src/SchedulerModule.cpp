@@ -56,11 +56,13 @@ void SchedulerModule::startScheduler(const QString &serverName)
     int backupMinutes = 0;
     int restartHours  = 0;
     int rconMinutes   = 0;
+    int updateCheckMinutes = 0;
     for (const ServerConfig &s : m_manager->servers()) {
         if (s.name == serverName) {
             backupMinutes = s.backupIntervalMinutes;
             restartHours  = s.restartIntervalHours;
             rconMinutes   = s.rconCommandIntervalMinutes;
+            updateCheckMinutes = s.autoUpdateCheckIntervalMinutes;
             break;
         }
     }
@@ -197,6 +199,28 @@ void SchedulerModule::startScheduler(const QString &serverName)
         t.rconTimer->start(rconMinutes * 60 * 1000);
     }
 
+    // --- Automatic update check timer ---
+    if (updateCheckMinutes > 0) {
+        t.updateCheckTimer = new QTimer(this);
+        t.updateCheckTimer->setTimerType(Qt::VeryCoarseTimer);
+
+        QString name = serverName;
+        connect(t.updateCheckTimer, &QTimer::timeout, this, [this, name]() {
+            for (const ServerConfig &s : m_manager->servers()) {
+                if (s.name == name) {
+                    if (inMaintenanceWindow(s))
+                        return;  // skip during maintenance
+                    bool pending = m_manager->checkForUpdate(s);
+                    m_manager->setPendingUpdate(name, pending);
+                    emit scheduledUpdateCheck(name);
+                    break;
+                }
+            }
+        });
+
+        t.updateCheckTimer->start(updateCheckMinutes * 60 * 1000);
+    }
+
     m_timers[serverName] = t;
 }
 
@@ -221,6 +245,10 @@ void SchedulerModule::stopScheduler(const QString &serverName)
     if (it->restartWarningTimer) {
         it->restartWarningTimer->stop();
         it->restartWarningTimer->deleteLater();
+    }
+    if (it->updateCheckTimer) {
+        it->updateCheckTimer->stop();
+        it->updateCheckTimer->deleteLater();
     }
 
     m_timers.erase(it);

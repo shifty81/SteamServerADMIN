@@ -41,6 +41,7 @@ signals:
     void scheduledBackup(const QString &serverName);
     void scheduledRestart(const QString &serverName);
     void scheduledRconCommand(const QString &serverName);
+    void scheduledUpdateCheck(const QString &serverName);
 
 private:
     struct Timers {
@@ -48,6 +49,7 @@ private:
         QTimer *restartTimer = nullptr;
         QTimer *rconTimer    = nullptr;
         QTimer *restartWarningTimer = nullptr;
+        QTimer *updateCheckTimer = nullptr;  // periodic update check timer
         int     restartWarningCountdown = 0;  // minutes remaining until restart
     };
 

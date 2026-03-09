@@ -138,6 +138,12 @@ void HomeDashboard::refresh()
         badgeRow->addStretch();
         cardLayout->addLayout(badgeRow);
 
+        // Row 3b: server statistics
+        auto *statsLabel = new QLabel(card);
+        statsLabel->setStyleSheet(QStringLiteral(
+            "font-size:10px; color:#aaa;"));
+        cardLayout->addWidget(statsLabel);
+
         // Row 4: quick-action buttons
         auto *btnRow = new QHBoxLayout();
         auto *startBtn   = new QPushButton(tr("▶ Start"),   card);
@@ -227,6 +233,7 @@ void HomeDashboard::refresh()
         b.uptimeLabel    = uptimeLabel;
         b.updateBadge    = updateBadge;
         b.modUpdateBadge = modUpdateBadge;
+        b.statsLabel     = statsLabel;
         b.card           = card;
         m_badges << b;
     }
@@ -317,6 +324,23 @@ void HomeDashboard::updateStatus()
             m_badges[i].modUpdateBadge->show();
         } else {
             m_badges[i].modUpdateBadge->hide();
+        }
+
+        // --- Statistics ---
+        if (m_badges[i].statsLabel) {
+            auto formatTotal = [](qint64 totalSecs) -> QString {
+                if (totalSecs <= 0) return QStringLiteral("0m");
+                int d = static_cast<int>(totalSecs / 86400);
+                int h = static_cast<int>((totalSecs % 86400) / 3600);
+                int m = static_cast<int>((totalSecs % 3600) / 60);
+                if (d > 0) return QStringLiteral("%1d %2h").arg(d).arg(h);
+                if (h > 0) return QStringLiteral("%1h %2m").arg(h).arg(m);
+                return QStringLiteral("%1m").arg(m);
+            };
+            m_badges[i].statsLabel->setText(
+                tr("Total: %1  |  Crashes: %2")
+                    .arg(formatTotal(s.totalUptimeSeconds))
+                    .arg(s.totalCrashes));
         }
     }
 
