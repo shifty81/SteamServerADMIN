@@ -1127,13 +1127,21 @@ void ServerManager::flushUptimeStats()
 bool ServerManager::checkForUpdate(const ServerConfig &server)
 {
     // Run SteamCMD in a quick info-only mode to check for available updates.
-    // This uses +app_info_print which shows build-id information.
-    // A mismatch between local and remote build IDs indicates an update.
+    // +app_info_update 1  → "1" forces a refresh of the cached app metadata
+    //                       from the Steam CDN so that subsequent queries
+    //                       reflect the latest published build IDs.
+    // +app_info_print     → dumps the app's metadata; we scan the output for
+    //                       keywords that indicate a newer version is available.
+    //
+    // Limitations: SteamCMD does not provide a machine-readable "update available"
+    // flag.  The heuristic below looks for known telltale strings that appear when
+    // the installed build differs from the latest.  This may produce false
+    // positives/negatives if Valve changes the SteamCMD output format.
     QProcess proc;
     proc.setProgram(m_steamCmdPath);
     proc.setArguments({
         QStringLiteral("+login"),    QStringLiteral("anonymous"),
-        QStringLiteral("+app_info_update"), QStringLiteral("1"),
+        QStringLiteral("+app_info_update"), QStringLiteral("1"),  // 1 = force cache refresh
         QStringLiteral("+app_info_print"),  QString::number(server.appid),
         QStringLiteral("+quit")
     });
@@ -1145,9 +1153,6 @@ bool ServerManager::checkForUpdate(const ServerConfig &server)
     }
 
     QString output = QString::fromLocal8Bit(proc.readAll());
-    // Best-effort heuristic: if "update required" or similar appears in output
-    // it means an update is available.  SteamCMD doesn't have a clean
-    // machine-readable flag, so we look for telltale strings.
     return output.contains(QStringLiteral("update required"), Qt::CaseInsensitive)
         || output.contains(QStringLiteral("needs update"), Qt::CaseInsensitive);
 }
