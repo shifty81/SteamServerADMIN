@@ -2757,10 +2757,9 @@ void TestServerConfig::testStartupPriorityExportImport()
 
 void TestServerConfig::testAutoStartRespectsStartupPriority()
 {
-    // Verify that auto-start servers are sorted by startupPriority.
-    // We can't test actual server launch, but we verify the ordering logic
-    // by checking that a ServerManager with two auto-start servers of different
-    // priorities would process them in the correct order.
+    // Verify that autoStartServers processes servers in priority order
+    // by listening to the logMessage signal which is emitted when
+    // startServer is called (even if the process fails to launch).
     QTemporaryDir tmp;
     QVERIFY(tmp.isValid());
     QString configPath = tmp.filePath(QStringLiteral("servers.json"));
@@ -2781,16 +2780,24 @@ void TestServerConfig::testAutoStartRespectsStartupPriority()
     s2.autoStartOnLaunch = true;
     s2.startupPriority = 1;
 
+    // Insert LowPrio first in the list; autoStartServers should still
+    // process HighPrio (priority 1) before LowPrio (priority 10).
     mgr.servers() << s1 << s2;
-    QVERIFY(mgr.saveConfig());
 
-    ServerManager mgr2(configPath);
-    QVERIFY(mgr2.loadConfig());
-    // Both should be auto-start; HighPrio (priority=1) comes before LowPrio (priority=10)
-    QCOMPARE(mgr2.servers().at(0).startupPriority, 10);
-    QCOMPARE(mgr2.servers().at(1).startupPriority, 1);
-    // The autoStartServers() method sorts internally, so the ordering in the list
-    // doesn't change, but the function processes them in priority order.
+    QStringList startOrder;
+    QObject::connect(&mgr, &ServerManager::logMessage,
+                     [&startOrder](const QString &server, const QString &) {
+        if (!startOrder.contains(server))
+            startOrder << server;
+    });
+
+    mgr.autoStartServers();
+
+    // Both servers should have been attempted (executables won't exist, but
+    // the signal still fires in order).
+    QVERIFY(startOrder.size() >= 2);
+    QVERIFY(startOrder.indexOf(QStringLiteral("HighPrio"))
+            < startOrder.indexOf(QStringLiteral("LowPrio")));
 }
 
 // ---------------------------------------------------------------------------

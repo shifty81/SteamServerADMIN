@@ -397,10 +397,15 @@ void ServerManager::stopServer(ServerConfig &server)
         QObject::disconnect(*connIt);
         m_crashConns.erase(connIt);
     }
-    proc->terminate();
     int timeoutMs = server.gracefulShutdownSeconds * 1000;
-    if (timeoutMs <= 0 || !proc->waitForFinished(timeoutMs))
+    if (timeoutMs <= 0) {
+        // Immediate kill – no graceful shutdown requested
         proc->kill();
+    } else {
+        proc->terminate();
+        if (!proc->waitForFinished(timeoutMs))
+            proc->kill();
+    }
     m_processes.remove(server.name);
     m_startTimes.remove(server.name);
     m_crashCounts.remove(server.name);
