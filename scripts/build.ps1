@@ -20,10 +20,21 @@ function Fatal { param([string]$msg, [string]$LogFile)
     }
 }
 
+try {
+
 # ── 0. Set up logging ────────────────────────────────────────
-$ProjectRoot = Split-Path -Parent $PSScriptRoot
+# Resolve project root with fallback for different execution contexts
+# $PSScriptRoot is the script's directory; $MyInvocation.MyCommand.Path includes the filename
+$ProjectRoot = $null
+if ($PSScriptRoot) {
+    $ProjectRoot = Split-Path -Parent $PSScriptRoot
+} elseif ($MyInvocation.MyCommand.Path) {
+    $ProjectRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
+}
+if (-not $ProjectRoot -or $ProjectRoot -eq "") { $ProjectRoot = (Get-Location).Path }
+
 $LogDir      = Join-Path $ProjectRoot "logs"
-if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir | Out-Null }
+if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir -Force | Out-Null }
 
 $ConfigureLog = Join-Path $LogDir "configure.log"
 $BuildLog     = Join-Path $LogDir "build.log"
@@ -38,9 +49,12 @@ foreach ($lf in @($ConfigureLog, $BuildLog, $TestLog, $FullLog)) {
 
 # Start a transcript to capture ALL console output to full.log
 try { Stop-Transcript -ErrorAction SilentlyContinue } catch {}
-Start-Transcript -Path $FullLog -Append
-
 try {
+    Start-Transcript -Path $FullLog -Append
+} catch {
+    Warn "Start-Transcript failed: $($_.Exception.Message)"
+    Warn "Console output will not be captured in full.log (per-phase logs still work)."
+}
 
 Info "Logs will be written to: $LogDir"
 
