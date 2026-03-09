@@ -6,654 +6,925 @@
 #include "TrayManager.hpp"
 #include "GameTemplates.hpp"
 
-#include <QHBoxLayout>
-#include <QVBoxLayout>
-#include <QWidget>
-#include <QLabel>
-#include <QPushButton>
-#include <QListWidget>
-#include <QLineEdit>
-#include <QInputDialog>
-#include <QFileDialog>
-#include <QMessageBox>
-#include <QSettings>
-#include <QDir>
-#include <QApplication>
-#include <QTextEdit>
-#include <QFontDatabase>
-#include <QTimer>
-#include <QMenuBar>
-#include <QPalette>
-#include <QStyle>
+#include "imgui.h"
+#include <GLFW/glfw3.h>
 
-static const QString kConfigFile = QStringLiteral("servers.json");
+#include <algorithm>
+#include <cctype>
+#include <cstring>
 
-MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent)
+static constexpr int    kSidebarButtonCount       = 11;
+static constexpr float  kNotificationTimeoutSec   = 5.0f;
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+static bool containsIgnoreCase(const std::string &haystack, const std::string &needle)
 {
-    setWindowTitle(tr("SSA – Steam Server ADMIN"));
-    resize(1600, 900);
-
-    // ---- Menu bar ----
-    auto *viewMenu = menuBar()->addMenu(tr("&View"));
-    auto *darkModeAction = viewMenu->addAction(tr("Toggle Dark Mode"));
-    connect(darkModeAction, &QAction::triggered, this, &MainWindow::toggleDarkMode);
-
-    // Apply saved theme preference
-    QSettings settings;
-    if (settings.value(QStringLiteral("darkMode"), false).toBool())
-        toggleDarkMode();
-
-    // ---- Backend ----
-    m_manager = new ServerManager(kConfigFile, this);
-    m_manager->loadConfig();
-
-    // ---- Logging ----
-    m_logModule = new LogModule(QStringLiteral("ssa.log"), this);
-    connect(m_manager, &ServerManager::logMessage, m_logModule, &LogModule::log);
-
-    // ---- System tray ----
-    m_trayManager = new TrayManager(this, this);
-    connect(m_trayManager, &TrayManager::quitRequested, qApp, &QApplication::quit);
-    connect(m_manager, &ServerManager::serverCrashed, this, [this](const QString &name) {
-        m_trayManager->notify(tr("Server Crashed"),
-                              tr("'%1' crashed and is being restarted.").arg(name),
-                              QSystemTrayIcon::Warning);
-    });
-
-    // ---- Central widget ----
-    auto *central = new QWidget(this);
-    setCentralWidget(central);
-    auto *mainLayout = new QHBoxLayout(central);
-    mainLayout->setContentsMargins(4, 4, 4, 4);
-    mainLayout->setSpacing(4);
-
-    // ---- Sidebar ----
-    auto *sidebar    = new QWidget(central);
-    sidebar->setFixedWidth(220);
-    auto *sideLayout = new QVBoxLayout(sidebar);
-    sideLayout->setContentsMargins(0, 0, 0, 0);
-
-    auto *sideTitle = new QLabel(tr("Servers"), sidebar);
-    sideTitle->setStyleSheet(QStringLiteral("font-weight:bold; font-size:14px; padding:4px;"));
-    sideLayout->addWidget(sideTitle);
-
-    m_searchBox = new QLineEdit(sidebar);
-    m_searchBox->setPlaceholderText(tr("Search servers…"));
-    sideLayout->addWidget(m_searchBox);
-
-    m_serverList = new QListWidget(sidebar);
-    sideLayout->addWidget(m_serverList);
-
-    auto *addBtn      = new QPushButton(tr("＋  Add Server"), sidebar);
-    auto *cloneBtn    = new QPushButton(tr("📋  Clone Server"), sidebar);
-    auto *removeBtn   = new QPushButton(tr("✕  Remove Server"), sidebar);
-    auto *exportBtn   = new QPushButton(tr("📤  Export Server"), sidebar);
-    auto *importBtn   = new QPushButton(tr("📥  Import Server"), sidebar);
-    auto *syncModsBtn = new QPushButton(tr("⟳  Sync Mods (All)"), sidebar);
-    auto *syncCfgBtn  = new QPushButton(tr("⟳  Sync Configs (All)"), sidebar);
-    auto *broadcastBtn= new QPushButton(tr("📢  Broadcast Command"), sidebar);
-    auto *startAllBtn = new QPushButton(tr("▶  Start All"), sidebar);
-    auto *stopAllBtn  = new QPushButton(tr("⏹  Stop All"), sidebar);
-    auto *restartAllBtn=new QPushButton(tr("🔄  Restart All"), sidebar);
-    sideLayout->addWidget(addBtn);
-    sideLayout->addWidget(cloneBtn);
-    sideLayout->addWidget(removeBtn);
-    sideLayout->addWidget(exportBtn);
-    sideLayout->addWidget(importBtn);
-    sideLayout->addWidget(syncModsBtn);
-    sideLayout->addWidget(syncCfgBtn);
-    sideLayout->addWidget(broadcastBtn);
-    sideLayout->addWidget(startAllBtn);
-    sideLayout->addWidget(stopAllBtn);
-    sideLayout->addWidget(restartAllBtn);
-
-    mainLayout->addWidget(sidebar);
-
-    // ---- Tab area ----
-    m_tabs = new QTabWidget(central);
-    mainLayout->addWidget(m_tabs, 1);
-
-    // Home dashboard is always the first tab
-    m_dashboard = new HomeDashboard(m_manager, m_tabs);
-    m_tabs->addTab(m_dashboard, tr("🏠 Home"));
-
-    // Create one tab per server from config
-    for (ServerConfig &s : m_manager->servers())
-        addServerTab(s);
-
-    rebuildSidebarList();
-
-    // Log Viewer tab (always last)
-    buildLogViewerTab();
-
-    // Start scheduled tasks (automatic backups and restarts)
-    m_scheduler = new SchedulerModule(m_manager, this);
-    m_scheduler->startAll();
-
-    // Auto-start servers that have autoStartOnLaunch enabled
-    m_manager->autoStartServers();
-
-    // ---- Connections ----
-    connect(addBtn,       &QPushButton::clicked, this, &MainWindow::onAddServer);
-    connect(cloneBtn,     &QPushButton::clicked, this, &MainWindow::onCloneServer);
-    connect(removeBtn,    &QPushButton::clicked, this, &MainWindow::onRemoveServer);
-    connect(exportBtn,    &QPushButton::clicked, this, &MainWindow::onExportServer);
-    connect(importBtn,    &QPushButton::clicked, this, &MainWindow::onImportServer);
-    connect(syncModsBtn,  &QPushButton::clicked, this, &MainWindow::onSyncMods);
-    connect(syncCfgBtn,   &QPushButton::clicked, this, &MainWindow::onSyncConfigs);
-    connect(broadcastBtn, &QPushButton::clicked, this, &MainWindow::onBroadcastCommand);
-    connect(startAllBtn,  &QPushButton::clicked, this, [this]() {
-        m_manager->startAllServers();
-    });
-    connect(stopAllBtn,   &QPushButton::clicked, this, [this]() {
-        if (m_manager->runningServerCount() == 0) return;
-        auto ans = QMessageBox::question(this, tr("Stop All Servers"),
-                       tr("Stop all %1 running server(s)?")
-                           .arg(m_manager->runningServerCount()));
-        if (ans == QMessageBox::Yes)
-            m_manager->stopAllServers();
-    });
-    connect(restartAllBtn,&QPushButton::clicked, this, [this]() {
-        if (m_manager->runningServerCount() == 0) return;
-        auto ans = QMessageBox::question(this, tr("Restart All Servers"),
-                       tr("Restart all %1 running server(s)?")
-                           .arg(m_manager->runningServerCount()));
-        if (ans == QMessageBox::Yes)
-            m_manager->restartAllServers();
-    });
-    connect(m_searchBox, &QLineEdit::textChanged, this, &MainWindow::onSearchChanged);
-    connect(m_serverList, &QListWidget::itemClicked,
-            this, &MainWindow::onServerListItemClicked);
-    connect(m_serverList, &QListWidget::itemDoubleClicked,
-            this, [this](QListWidgetItem *item) {
-                if (!item) return;
-                QString name = item->data(Qt::UserRole).toString();
-                for (ServerConfig &s : m_manager->servers()) {
-                    if (s.name == name) {
-                        s.favorite = !s.favorite;
-                        m_manager->saveConfig();
-                        rebuildSidebarList();
-                        break;
-                    }
-                }
-            });
-
-    // Periodic tab-status update (every 5 seconds)
-    auto *tabStatusTimer = new QTimer(this);
-    connect(tabStatusTimer, &QTimer::timeout, this, &MainWindow::updateTabStatusIndicators);
-    tabStatusTimer->start(5000);
+    if (needle.empty()) return true;
+    auto it = std::search(
+        haystack.begin(), haystack.end(),
+        needle.begin(), needle.end(),
+        [](unsigned char a, unsigned char b) {
+            return std::tolower(a) == std::tolower(b);
+        });
+    return it != haystack.end();
 }
 
+static int caseInsensitiveCompare(const std::string &a, const std::string &b)
+{
+    size_t len = std::min(a.size(), b.size());
+    for (size_t i = 0; i < len; ++i) {
+        int ca = std::tolower(static_cast<unsigned char>(a[i]));
+        int cb = std::tolower(static_cast<unsigned char>(b[i]));
+        if (ca != cb) return ca - cb;
+    }
+    return static_cast<int>(a.size()) - static_cast<int>(b.size());
+}
+
+// ---------------------------------------------------------------------------
+// Constructor / Destructor
+// ---------------------------------------------------------------------------
+
+MainWindow::MainWindow(GLFWwindow *window)
+    : m_window(window)
+    , m_lastTick(std::chrono::steady_clock::now())
+{
+    m_manager = new ServerManager("servers.json");
+    m_manager->loadConfig();
+
+    m_logModule = new LogModule("ssa.log");
+    m_manager->onLogMessage = [this](const std::string &server, const std::string &msg) {
+        m_logModule->log(server, msg);
+    };
+
+    m_trayManager = new TrayManager();
+    m_trayManager->onQuitRequested = [this]() { m_wantQuit = true; };
+
+    m_manager->onServerCrashed = [this](const std::string &name) {
+        m_trayManager->notify("Server Crashed",
+                              "'" + name + "' crashed and is being restarted.");
+    };
+
+    m_dashboard = new HomeDashboard(m_manager);
+
+    m_scheduler = new SchedulerModule(m_manager);
+    m_scheduler->startAll();
+
+    m_manager->autoStartServers();
+
+    rebuildServerTabs();
+}
+
+MainWindow::~MainWindow()
+{
+    for (auto *tab : m_serverTabs)
+        delete tab;
+    delete m_dashboard;
+    delete m_trayManager;
+    delete m_logModule;
+    delete m_scheduler;
+    delete m_manager;
+}
+
+// ---------------------------------------------------------------------------
+// Main render
+// ---------------------------------------------------------------------------
+
+void MainWindow::render()
+{
+    m_manager->tick();
+    m_scheduler->tick();
+
+    const ImGuiViewport *viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(viewport->WorkPos);
+    ImGui::SetNextWindowSize(viewport->WorkSize);
+    ImGui::Begin("##MainWindow", nullptr,
+                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
+                 ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_MenuBar);
+
+    renderMenuBar();
+
+    renderSidebar();
+    ImGui::SameLine();
+    renderTabArea();
+
+    // ---------- Open modal popups (must be in same window scope) ----------
+    if (m_showAddServer) {
+        m_addTemplateIdx = 0;
+        std::memset(m_addName, 0, sizeof(m_addName));
+        m_addAppId = 0;
+        std::memset(m_addDir, 0, sizeof(m_addDir));
+        std::memset(m_addExe, 0, sizeof(m_addExe));
+        std::memset(m_addArgs, 0, sizeof(m_addArgs));
+        std::strncpy(m_addRconHost, "127.0.0.1", sizeof(m_addRconHost) - 1);
+        m_addRconPort = 27015;
+        std::memset(m_addRconPass, 0, sizeof(m_addRconPass));
+        ImGui::OpenPopup("Add Server");
+        m_showAddServer = false;
+    }
+    if (m_showCloneServer) {
+        m_cloneSourceIdx = 0;
+        std::memset(m_cloneName, 0, sizeof(m_cloneName));
+        if (!m_manager->servers().empty()) {
+            std::snprintf(m_cloneName, sizeof(m_cloneName), "%s (Copy)",
+                          m_manager->servers()[0].name.c_str());
+        }
+        ImGui::OpenPopup("Clone Server");
+        m_showCloneServer = false;
+    }
+    if (m_showRemoveServer) {
+        ImGui::OpenPopup("Remove Server");
+        m_showRemoveServer = false;
+    }
+    if (m_showExportServer) {
+        m_exportSourceIdx = 0;
+        std::memset(m_exportPath, 0, sizeof(m_exportPath));
+        if (!m_manager->servers().empty()) {
+            std::snprintf(m_exportPath, sizeof(m_exportPath), "%s.json",
+                          m_manager->servers()[0].name.c_str());
+        }
+        ImGui::OpenPopup("Export Server");
+        m_showExportServer = false;
+    }
+    if (m_showImportServer) {
+        ImGui::OpenPopup("Import Server");
+        m_showImportServer = false;
+    }
+    if (m_showBroadcast) {
+        std::memset(m_broadcastCmd, 0, sizeof(m_broadcastCmd));
+        ImGui::OpenPopup("Broadcast Command");
+        m_showBroadcast = false;
+    }
+
+    // ---------- Render modal popups ----------
+    renderAddServerDialog();
+    renderCloneServerDialog();
+    renderRemoveServerDialog();
+    renderExportServerDialog();
+    renderImportServerDialog();
+    renderBroadcastDialog();
+
+    ImGui::End();
+
+    renderNotifications();
+}
+
+bool MainWindow::wantQuit() const
+{
+    return m_wantQuit;
+}
+
+// ---------------------------------------------------------------------------
+// Menu bar
+// ---------------------------------------------------------------------------
+
+void MainWindow::renderMenuBar()
+{
+    static bool openSyncConfigsPopup = false;
+
+    if (ImGui::BeginMenuBar()) {
+        if (ImGui::BeginMenu("File")) {
+            if (ImGui::MenuItem("Add Server..."))    m_showAddServer = true;
+            if (ImGui::MenuItem("Clone Server..."))  m_showCloneServer = true;
+            if (ImGui::MenuItem("Remove Server...")) m_showRemoveServer = true;
+            ImGui::Separator();
+            if (ImGui::MenuItem("Export Server...")) m_showExportServer = true;
+            if (ImGui::MenuItem("Import Server...")) m_showImportServer = true;
+            ImGui::Separator();
+            if (ImGui::MenuItem("Quit"))             m_wantQuit = true;
+            ImGui::EndMenu();
+        }
+
+        if (ImGui::BeginMenu("Tools")) {
+            if (ImGui::MenuItem("Sync Mods (All)"))
+                m_manager->syncModsCluster();
+            if (ImGui::MenuItem("Sync Configs (All)..."))
+                openSyncConfigsPopup = true;
+            if (ImGui::MenuItem("Broadcast Command..."))
+                m_showBroadcast = true;
+            ImGui::EndMenu();
+        }
+
+        if (ImGui::BeginMenu("Batch")) {
+            if (ImGui::MenuItem("Start All"))   m_manager->startAllServers();
+            if (ImGui::MenuItem("Stop All"))    m_manager->stopAllServers();
+            if (ImGui::MenuItem("Restart All")) m_manager->restartAllServers();
+            ImGui::EndMenu();
+        }
+
+        ImGui::EndMenuBar();
+    }
+
+    // Sync configs popup (opened from menu, needs path input)
+    if (openSyncConfigsPopup) {
+        ImGui::OpenPopup("##SyncConfigsMenu");
+        openSyncConfigsPopup = false;
+    }
+    if (ImGui::BeginPopup("##SyncConfigsMenu")) {
+        static char syncPath[512] = {};
+        ImGui::Text("Master Config Zip Path:");
+        ImGui::InputText("##syncPath", syncPath, sizeof(syncPath));
+        if (ImGui::Button("Sync") && syncPath[0] != '\0') {
+            m_manager->syncConfigsCluster(syncPath);
+            syncPath[0] = '\0';
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel"))
+            ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Sidebar
+// ---------------------------------------------------------------------------
+
+void MainWindow::renderSidebar()
+{
+    ImGui::BeginChild("Sidebar", ImVec2(220, 0), true);
+
+    ImGui::TextUnformatted("Servers");
+    ImGui::Separator();
+
+    // Search box
+    char searchBuf[256];
+    std::strncpy(searchBuf, m_searchText.c_str(), sizeof(searchBuf) - 1);
+    searchBuf[sizeof(searchBuf) - 1] = '\0';
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::InputTextWithHint("##search", "Search servers...", searchBuf, sizeof(searchBuf)))
+        m_searchText = searchBuf;
+
+    // Sort: favorites first, then alphabetical
+    struct SortEntry {
+        int index;
+        const ServerConfig *config;
+    };
+    std::vector<SortEntry> sorted;
+    const auto &servers = m_manager->servers();
+    sorted.reserve(servers.size());
+    for (int i = 0; i < static_cast<int>(servers.size()); ++i)
+        sorted.push_back({i, &servers[i]});
+
+    std::stable_sort(sorted.begin(), sorted.end(),
+                     [](const SortEntry &a, const SortEntry &b) {
+                         if (a.config->favorite != b.config->favorite)
+                             return a.config->favorite > b.config->favorite;
+                         return caseInsensitiveCompare(a.config->name, b.config->name) < 0;
+                     });
+
+    // Scrollable server list — fill space above buttons
+    const float buttonHeight = ImGui::GetFrameHeightWithSpacing();
+    ImGui::BeginChild("##ServerList",
+                      ImVec2(0, -(buttonHeight * kSidebarButtonCount + ImGui::GetStyle().ItemSpacing.y)));
+
+    for (const auto &entry : sorted) {
+        const ServerConfig *s = entry.config;
+
+        if (!m_searchText.empty() && !containsIgnoreCase(s->name, m_searchText))
+            continue;
+
+        bool running = m_manager->isServerRunning(*s);
+
+        // Build label: [*] [ON/OFF] name
+        std::string label;
+        if (s->favorite) label += "* ";
+        label += running ? "[ON] " : "[OFF] ";
+        label += s->name;
+
+        bool selected = (m_selectedSidebarServer == entry.index);
+        ImGui::PushID(entry.index);
+        if (ImGui::Selectable(label.c_str(), selected)) {
+            m_selectedSidebarServer = entry.index;
+            m_selectedTab = entry.index + 1; // 0=Home, 1..N=servers
+        }
+
+        // Double-click to toggle favorite
+        if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) {
+            m_manager->servers()[entry.index].favorite =
+                !m_manager->servers()[entry.index].favorite;
+            m_manager->saveConfig();
+        }
+        ImGui::PopID();
+    }
+
+    ImGui::EndChild(); // ##ServerList
+
+    // Action buttons
+    const float w = ImGui::GetContentRegionAvail().x;
+    if (ImGui::Button("+ Add Server",      ImVec2(w, 0))) m_showAddServer = true;
+    if (ImGui::Button("Clone Server",       ImVec2(w, 0))) m_showCloneServer = true;
+    if (ImGui::Button("- Remove Server",    ImVec2(w, 0))) m_showRemoveServer = true;
+    if (ImGui::Button("Export Server",      ImVec2(w, 0))) m_showExportServer = true;
+    if (ImGui::Button("Import Server",      ImVec2(w, 0))) m_showImportServer = true;
+    if (ImGui::Button("Sync Mods",          ImVec2(w, 0)))
+        m_manager->syncModsCluster();
+
+    if (ImGui::Button("Sync Configs",       ImVec2(w, 0)))
+        ImGui::OpenPopup("##SyncConfigsSidebar");
+    if (ImGui::BeginPopup("##SyncConfigsSidebar")) {
+        static char cfgPath[512] = {};
+        ImGui::Text("Master Config Zip Path:");
+        ImGui::InputText("##cfgPath", cfgPath, sizeof(cfgPath));
+        if (ImGui::Button("Sync") && cfgPath[0] != '\0') {
+            m_manager->syncConfigsCluster(cfgPath);
+            cfgPath[0] = '\0';
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel"))
+            ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+
+    if (ImGui::Button("Broadcast Cmd",      ImVec2(w, 0))) m_showBroadcast = true;
+    if (ImGui::Button("Start All",          ImVec2(w, 0))) m_manager->startAllServers();
+    if (ImGui::Button("Stop All",           ImVec2(w, 0))) m_manager->stopAllServers();
+    if (ImGui::Button("Restart All",        ImVec2(w, 0))) m_manager->restartAllServers();
+
+    ImGui::EndChild(); // Sidebar
+}
+
+// ---------------------------------------------------------------------------
+// Tab area
+// ---------------------------------------------------------------------------
+
+void MainWindow::renderTabArea()
+{
+    ImGui::BeginChild("##TabArea");
+
+    if (ImGui::BeginTabBar("##MainTabs")) {
+        // Home tab (index 0)
+        {
+            ImGuiTabItemFlags f = 0;
+            if (m_selectedTab == 0) f |= ImGuiTabItemFlags_SetSelected;
+            if (ImGui::BeginTabItem("Home", nullptr, f)) {
+                m_dashboard->render();
+                ImGui::EndTabItem();
+            }
+        }
+
+        // Per-server tabs (index 1..N)
+        const auto &servers = m_manager->servers();
+        for (int i = 0; i < static_cast<int>(m_serverTabs.size()); ++i) {
+            int tabIdx = i + 1;
+            ImGuiTabItemFlags f = 0;
+            if (m_selectedTab == tabIdx) f |= ImGuiTabItemFlags_SetSelected;
+
+            // Status indicator in tab title
+            std::string label;
+            if (i < static_cast<int>(servers.size())) {
+                bool running = m_manager->isServerRunning(servers[i]);
+                label = running ? "[ON] " : "[OFF] ";
+                label += servers[i].name;
+            } else {
+                label = "Server " + std::to_string(i);
+            }
+
+            ImGui::PushID(i);
+            if (ImGui::BeginTabItem(label.c_str(), nullptr, f)) {
+                m_serverTabs[i]->render();
+                ImGui::EndTabItem();
+            }
+            ImGui::PopID();
+        }
+
+        // Log tab (last)
+        {
+            int logIdx = static_cast<int>(m_serverTabs.size()) + 1;
+            ImGuiTabItemFlags f = 0;
+            if (m_selectedTab == logIdx) f |= ImGuiTabItemFlags_SetSelected;
+            if (ImGui::BeginTabItem("Log", nullptr, f)) {
+                renderLogViewerTab();
+                ImGui::EndTabItem();
+            }
+        }
+
+        ImGui::EndTabBar();
+    }
+
+    // Consume programmatic tab selection after one frame
+    m_selectedTab = -1;
+
+    ImGui::EndChild(); // ##TabArea
+}
+
+// ---------------------------------------------------------------------------
+// Log viewer tab
+// ---------------------------------------------------------------------------
+
+void MainWindow::renderLogViewerTab()
+{
+    ImGui::Text("Operation Log");
+    ImGui::Separator();
+
+    // Filter input
+    char filterBuf[256];
+    std::strncpy(filterBuf, m_logFilterText.c_str(), sizeof(filterBuf) - 1);
+    filterBuf[sizeof(filterBuf) - 1] = '\0';
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::InputTextWithHint("##logFilter", "Filter log entries...",
+                                 filterBuf, sizeof(filterBuf)))
+        m_logFilterText = filterBuf;
+
+    // Scrollable log area
+    ImGui::BeginChild("##LogEntries", ImVec2(0, 0), true);
+
+    const auto entries = m_logModule->entries();
+    for (const auto &entry : entries) {
+        if (!m_logFilterText.empty() && !containsIgnoreCase(entry, m_logFilterText))
+            continue;
+        ImGui::TextUnformatted(entry.c_str());
+    }
+
+    // Auto-scroll when already at the bottom
+    if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
+        ImGui::SetScrollHereY(1.0f);
+
+    ImGui::EndChild();
+}
+
+// ---------------------------------------------------------------------------
+// Notifications (toast overlay in top-right corner)
+// ---------------------------------------------------------------------------
+
+void MainWindow::renderNotifications()
+{
+    // Persistent display list (function-local for single MainWindow instance)
+    static std::vector<TrayManager::Notification> active;
+
+    // Consume new notifications from TrayManager
+    auto fresh = m_trayManager->consumeNotifications();
+    for (auto &n : fresh)
+        active.push_back(std::move(n));
+
+    // Remove expired notifications (older than 5 seconds)
+    auto now = std::chrono::steady_clock::now();
+    active.erase(
+        std::remove_if(active.begin(), active.end(),
+            [&now](const TrayManager::Notification &n) {
+                auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+                    now - n.timestamp);
+                return elapsed.count() >= static_cast<long long>(kNotificationTimeoutSec);
+            }),
+        active.end());
+
+    if (active.empty()) return;
+
+    const ImGuiViewport *vp = ImGui::GetMainViewport();
+    float y = vp->WorkPos.y + 40.0f;
+
+    for (size_t i = 0; i < active.size(); ++i) {
+        const auto &n = active[i];
+        float age = std::chrono::duration<float>(now - n.timestamp).count();
+        float alpha = (age > kNotificationTimeoutSec - 1.0f)
+            ? (kNotificationTimeoutSec - age) : 1.0f;
+        if (alpha <= 0.0f) continue;
+
+        ImGui::SetNextWindowPos(
+            ImVec2(vp->WorkPos.x + vp->WorkSize.x - 320.0f, y));
+        ImGui::SetNextWindowSize(ImVec2(300.0f, 0.0f));
+        ImGui::SetNextWindowBgAlpha(0.85f * alpha);
+
+        char winId[64];
+        std::snprintf(winId, sizeof(winId), "##Notif%zu", i);
+
+        ImGui::Begin(winId, nullptr,
+            ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+            ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+            ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav |
+            ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoInputs);
+
+        ImGui::PushStyleVar(ImGuiStyleVar_Alpha, alpha);
+        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.2f, 1.0f), "%s", n.title.c_str());
+        ImGui::TextWrapped("%s", n.message.c_str());
+        ImGui::PopStyleVar();
+
+        y += ImGui::GetWindowHeight() + 8.0f;
+        ImGui::End();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Add Server dialog
+// ---------------------------------------------------------------------------
+
+void MainWindow::renderAddServerDialog()
+{
+    if (!ImGui::BeginPopupModal("Add Server", nullptr,
+                                ImGuiWindowFlags_AlwaysAutoResize))
+        return;
+
+    static std::string validationError;
+
+    // Template combo
+    auto templates = GameTemplate::builtinTemplates();
+    const char *previewName = (m_addTemplateIdx >= 0 &&
+                               m_addTemplateIdx < static_cast<int>(templates.size()))
+        ? templates[m_addTemplateIdx].displayName.c_str()
+        : "Select...";
+
+    if (ImGui::BeginCombo("Game Template", previewName)) {
+        for (int i = 0; i < static_cast<int>(templates.size()); ++i) {
+            bool sel = (m_addTemplateIdx == i);
+            if (ImGui::Selectable(templates[i].displayName.c_str(), sel)) {
+                m_addTemplateIdx = i;
+                m_addAppId = templates[i].appid;
+                std::strncpy(m_addExe, templates[i].executable.c_str(),
+                             sizeof(m_addExe) - 1);
+                m_addExe[sizeof(m_addExe) - 1] = '\0';
+                std::strncpy(m_addArgs, templates[i].defaultArgs.c_str(),
+                             sizeof(m_addArgs) - 1);
+                m_addArgs[sizeof(m_addArgs) - 1] = '\0';
+            }
+        }
+        ImGui::EndCombo();
+    }
+
+    ImGui::Separator();
+    ImGui::InputText("Server Name",       m_addName, sizeof(m_addName));
+    ImGui::InputInt("Steam AppID",        &m_addAppId);
+    ImGui::InputText("Install Directory", m_addDir,  sizeof(m_addDir));
+    ImGui::InputText("Executable",        m_addExe,  sizeof(m_addExe));
+    ImGui::InputText("Launch Arguments",  m_addArgs, sizeof(m_addArgs));
+
+    ImGui::Separator();
+    ImGui::Text("RCON Settings");
+    ImGui::InputText("Host",     m_addRconHost, sizeof(m_addRconHost));
+    ImGui::InputInt("Port",      &m_addRconPort);
+    ImGui::InputText("Password", m_addRconPass, sizeof(m_addRconPass),
+                     ImGuiInputTextFlags_Password);
+
+    // Validation error display
+    if (!validationError.empty())
+        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s",
+                           validationError.c_str());
+
+    ImGui::Separator();
+    if (ImGui::Button("Add", ImVec2(120, 0))) {
+        ServerConfig s;
+        s.name         = m_addName;
+        s.appid        = m_addAppId;
+        s.dir          = m_addDir;
+        s.executable   = m_addExe;
+        s.launchArgs   = m_addArgs;
+        s.backupFolder = std::string(m_addDir) + "/Backups";
+        s.rcon.host    = m_addRconHost;
+        s.rcon.port    = m_addRconPort;
+        s.rcon.password = m_addRconPass;
+
+        m_manager->servers().push_back(s);
+        auto errors = m_manager->validateAll();
+        if (!errors.empty()) {
+            m_manager->servers().pop_back();
+            validationError.clear();
+            for (const auto &e : errors)
+                validationError += e + "\n";
+        } else {
+            validationError.clear();
+            m_manager->saveConfig();
+            addServerTab(m_manager->servers().back());
+            m_dashboard->refresh();
+            m_scheduler->startScheduler(s.name);
+            m_logModule->log(s.name, "Server added.");
+            m_trayManager->notify("Server Added",
+                                  "'" + s.name + "' has been added.");
+            ImGui::CloseCurrentPopup();
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+        validationError.clear();
+        ImGui::CloseCurrentPopup();
+    }
+
+    ImGui::EndPopup();
+}
+
+// ---------------------------------------------------------------------------
+// Clone Server dialog
+// ---------------------------------------------------------------------------
+
+void MainWindow::renderCloneServerDialog()
+{
+    if (!ImGui::BeginPopupModal("Clone Server", nullptr,
+                                ImGuiWindowFlags_AlwaysAutoResize))
+        return;
+
+    static std::string validationError;
+    const auto &servers = m_manager->servers();
+
+    if (servers.empty()) {
+        ImGui::Text("No servers to clone.");
+        if (ImGui::Button("OK", ImVec2(120, 0)))
+            ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+        return;
+    }
+
+    // Source server combo
+    const char *previewSource =
+        (m_cloneSourceIdx >= 0 &&
+         m_cloneSourceIdx < static_cast<int>(servers.size()))
+        ? servers[m_cloneSourceIdx].name.c_str()
+        : "Select...";
+
+    if (ImGui::BeginCombo("Source Server", previewSource)) {
+        for (int i = 0; i < static_cast<int>(servers.size()); ++i) {
+            bool sel = (m_cloneSourceIdx == i);
+            if (ImGui::Selectable(servers[i].name.c_str(), sel)) {
+                m_cloneSourceIdx = i;
+                std::snprintf(m_cloneName, sizeof(m_cloneName), "%s (Copy)",
+                              servers[i].name.c_str());
+            }
+        }
+        ImGui::EndCombo();
+    }
+
+    ImGui::InputText("New Server Name", m_cloneName, sizeof(m_cloneName));
+
+    if (!validationError.empty())
+        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s",
+                           validationError.c_str());
+
+    ImGui::Separator();
+    if (ImGui::Button("Clone", ImVec2(120, 0))) {
+        std::string newName = m_cloneName;
+
+        ServerConfig cloned = servers[m_cloneSourceIdx];
+        cloned.name = newName;
+
+        m_manager->servers().push_back(cloned);
+        auto errors = m_manager->validateAll();
+        if (!errors.empty()) {
+            m_manager->servers().pop_back();
+            validationError.clear();
+            for (const auto &e : errors)
+                validationError += e + "\n";
+        } else {
+            validationError.clear();
+            m_manager->saveConfig();
+            addServerTab(m_manager->servers().back());
+            m_dashboard->refresh();
+            m_scheduler->startScheduler(newName);
+            m_logModule->log(newName, "Cloned from '" +
+                             servers[m_cloneSourceIdx].name + "'.");
+            m_trayManager->notify("Server Cloned",
+                                  "'" + newName + "' cloned from '" +
+                                  servers[m_cloneSourceIdx].name + "'.");
+            ImGui::CloseCurrentPopup();
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+        validationError.clear();
+        ImGui::CloseCurrentPopup();
+    }
+
+    ImGui::EndPopup();
+}
+
+// ---------------------------------------------------------------------------
+// Remove Server dialog
+// ---------------------------------------------------------------------------
+
+void MainWindow::renderRemoveServerDialog()
+{
+    if (!ImGui::BeginPopupModal("Remove Server", nullptr,
+                                ImGuiWindowFlags_AlwaysAutoResize))
+        return;
+
+    static int removeIdx = 0;
+    const auto &servers = m_manager->servers();
+
+    if (servers.empty()) {
+        ImGui::Text("No servers to remove.");
+        if (ImGui::Button("OK", ImVec2(120, 0)))
+            ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+        return;
+    }
+
+    if (removeIdx >= static_cast<int>(servers.size()))
+        removeIdx = 0;
+
+    const char *previewRemove = servers[removeIdx].name.c_str();
+    if (ImGui::BeginCombo("Server", previewRemove)) {
+        for (int i = 0; i < static_cast<int>(servers.size()); ++i) {
+            bool sel = (removeIdx == i);
+            if (ImGui::Selectable(servers[i].name.c_str(), sel))
+                removeIdx = i;
+        }
+        ImGui::EndCombo();
+    }
+
+    ImGui::TextWrapped("This will stop the server if running.\n"
+                       "Server files on disk are NOT deleted.");
+
+    ImGui::Separator();
+    if (ImGui::Button("Remove", ImVec2(120, 0))) {
+        std::string name = servers[removeIdx].name;
+        m_scheduler->stopScheduler(name);
+        m_manager->removeServer(name);
+        m_manager->saveConfig();
+        rebuildServerTabs();
+        m_dashboard->refresh();
+        m_logModule->log(name, "Server removed.");
+        m_trayManager->notify("Server Removed",
+                              "'" + name + "' has been removed.");
+        removeIdx = 0;
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel", ImVec2(120, 0)))
+        ImGui::CloseCurrentPopup();
+
+    ImGui::EndPopup();
+}
+
+// ---------------------------------------------------------------------------
+// Export Server dialog
+// ---------------------------------------------------------------------------
+
+void MainWindow::renderExportServerDialog()
+{
+    if (!ImGui::BeginPopupModal("Export Server", nullptr,
+                                ImGuiWindowFlags_AlwaysAutoResize))
+        return;
+
+    const auto &servers = m_manager->servers();
+
+    if (servers.empty()) {
+        ImGui::Text("No servers to export.");
+        if (ImGui::Button("OK", ImVec2(120, 0)))
+            ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+        return;
+    }
+
+    if (m_exportSourceIdx >= static_cast<int>(servers.size()))
+        m_exportSourceIdx = 0;
+
+    const char *previewExport = servers[m_exportSourceIdx].name.c_str();
+    if (ImGui::BeginCombo("Server", previewExport)) {
+        for (int i = 0; i < static_cast<int>(servers.size()); ++i) {
+            bool sel = (m_exportSourceIdx == i);
+            if (ImGui::Selectable(servers[i].name.c_str(), sel)) {
+                m_exportSourceIdx = i;
+                std::snprintf(m_exportPath, sizeof(m_exportPath), "%s.json",
+                              servers[i].name.c_str());
+            }
+        }
+        ImGui::EndCombo();
+    }
+
+    ImGui::InputText("Export Path", m_exportPath, sizeof(m_exportPath));
+
+    ImGui::Separator();
+    static std::string exportStatus;
+
+    if (ImGui::Button("Export", ImVec2(120, 0)) && m_exportPath[0] != '\0') {
+        std::string name = servers[m_exportSourceIdx].name;
+        if (m_manager->exportServerConfig(name, m_exportPath)) {
+            m_logModule->log(name,
+                             "Config exported to " + std::string(m_exportPath));
+            m_trayManager->notify("Export Complete",
+                                  "'" + name + "' exported.");
+            exportStatus.clear();
+            ImGui::CloseCurrentPopup();
+        } else {
+            exportStatus = "Failed to export '" + name + "'.";
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+        exportStatus.clear();
+        ImGui::CloseCurrentPopup();
+    }
+
+    if (!exportStatus.empty())
+        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s",
+                           exportStatus.c_str());
+
+    ImGui::EndPopup();
+}
+
+// ---------------------------------------------------------------------------
+// Import Server dialog
+// ---------------------------------------------------------------------------
+
+void MainWindow::renderImportServerDialog()
+{
+    if (!ImGui::BeginPopupModal("Import Server", nullptr,
+                                ImGuiWindowFlags_AlwaysAutoResize))
+        return;
+
+    static char importPath[512] = {};
+    static std::string importError;
+
+    ImGui::Text("Path to server config JSON:");
+    ImGui::InputText("##importPath", importPath, sizeof(importPath));
+
+    if (!importError.empty())
+        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s",
+                           importError.c_str());
+
+    ImGui::Separator();
+    if (ImGui::Button("Import", ImVec2(120, 0)) && importPath[0] != '\0') {
+        std::string error = m_manager->importServerConfig(importPath);
+        if (!error.empty()) {
+            importError = error;
+        } else {
+            importError.clear();
+            ServerConfig &imported = m_manager->servers().back();
+            m_manager->saveConfig();
+            addServerTab(imported);
+            m_dashboard->refresh();
+            m_scheduler->startScheduler(imported.name);
+            m_logModule->log(imported.name,
+                             "Config imported from " + std::string(importPath));
+            m_trayManager->notify("Server Imported",
+                                  "'" + imported.name + "' imported.");
+            importPath[0] = '\0';
+            ImGui::CloseCurrentPopup();
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+        importError.clear();
+        importPath[0] = '\0';
+        ImGui::CloseCurrentPopup();
+    }
+
+    ImGui::EndPopup();
+}
+
+// ---------------------------------------------------------------------------
+// Broadcast Command dialog
+// ---------------------------------------------------------------------------
+
+void MainWindow::renderBroadcastDialog()
+{
+    if (!ImGui::BeginPopupModal("Broadcast Command", nullptr,
+                                ImGuiWindowFlags_AlwaysAutoResize))
+        return;
+
+    if (m_manager->servers().empty()) {
+        ImGui::Text("No servers configured.");
+        if (ImGui::Button("OK", ImVec2(120, 0)))
+            ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+        return;
+    }
+
+    static std::string resultText;
+
+    ImGui::Text("RCON command to send to ALL servers:");
+    ImGui::InputText("##broadcastCmd", m_broadcastCmd, sizeof(m_broadcastCmd));
+
+    if (!resultText.empty()) {
+        ImGui::Separator();
+        ImGui::TextWrapped("%s", resultText.c_str());
+    }
+
+    ImGui::Separator();
+    if (ImGui::Button("Send", ImVec2(120, 0)) && m_broadcastCmd[0] != '\0') {
+        auto results = m_manager->broadcastRconCommand(m_broadcastCmd);
+        resultText.clear();
+        for (const auto &r : results)
+            resultText += r + "\n";
+        if (resultText.empty())
+            resultText = "Command sent (no responses).";
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Close", ImVec2(120, 0))) {
+        resultText.clear();
+        ImGui::CloseCurrentPopup();
+    }
+
+    ImGui::EndPopup();
+}
+
+// ---------------------------------------------------------------------------
+// Server tab helpers
 // ---------------------------------------------------------------------------
 
 void MainWindow::addServerTab(ServerConfig &server)
 {
-    auto *tab = new ServerTabWidget(m_manager, server, m_tabs);
-    m_tabs->addTab(tab, server.name);
+    m_serverTabs.push_back(new ServerTabWidget(m_manager, server));
 }
 
-void MainWindow::rebuildSidebarList()
+void MainWindow::rebuildServerTabs()
 {
-    m_serverList->clear();
+    for (auto *tab : m_serverTabs)
+        delete tab;
+    m_serverTabs.clear();
 
-    // Build a sorted list: favorites first, then alphabetical within each group
-    QList<const ServerConfig *> sorted;
-    for (const ServerConfig &s : m_manager->servers())
-        sorted << &s;
-    std::stable_sort(sorted.begin(), sorted.end(),
-                     [](const ServerConfig *a, const ServerConfig *b) {
-                         if (a->favorite != b->favorite)
-                             return a->favorite > b->favorite;
-                         return a->name.compare(b->name, Qt::CaseInsensitive) < 0;
-                     });
+    for (auto &s : m_manager->servers())
+        addServerTab(s);
 
-    for (const ServerConfig *s : std::as_const(sorted)) {
-        QString label = s->favorite ? QStringLiteral("⭐ %1").arg(s->name) : s->name;
-        auto *item = new QListWidgetItem(label, m_serverList);
-        item->setData(Qt::UserRole, s->name);
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Slots
-// ---------------------------------------------------------------------------
-
-void MainWindow::onAddServer()
-{
-    bool ok = false;
-
-    // Step 1: Let the user pick a game template
-    QList<GameTemplate> templates = GameTemplate::builtinTemplates();
-    QStringList templateNames;
-    for (const GameTemplate &t : std::as_const(templates))
-        templateNames << t.displayName;
-
-    QString chosen = QInputDialog::getItem(
-        this, tr("Add Server"), tr("Select game type:"),
-        templateNames, 0, false, &ok);
-    if (!ok) return;
-
-    // Find the selected template
-    GameTemplate tmpl;
-    for (const GameTemplate &t : std::as_const(templates)) {
-        if (t.displayName == chosen) { tmpl = t; break; }
-    }
-
-    // Step 2: Server name
-    QString name = QInputDialog::getText(
-        this, tr("Add Server"), tr("Server Name:"),
-        QLineEdit::Normal, QString(), &ok);
-    if (!ok || name.trimmed().isEmpty()) return;
-    name = name.trimmed();
-
-    // Step 3: AppID (pre-filled from template)
-    int appid = QInputDialog::getInt(
-        this, tr("Add Server"), tr("Steam AppID:"),
-        tmpl.appid, 0, INT_MAX, 1, &ok);
-    if (!ok) return;
-
-    // Step 4: Install directory
-    QString dir = QFileDialog::getExistingDirectory(
-        this, tr("Select Installation Directory"));
-    if (dir.isEmpty()) return;
-
-    // Step 5: Executable (pre-filled from template)
-    QString exe = QInputDialog::getText(
-        this, tr("Add Server"),
-        tr("Server executable (relative to install dir, e.g. ShooterGameServer.exe):"),
-        QLineEdit::Normal, tmpl.executable, &ok);
-    if (!ok) return;
-
-    // Step 6: Launch args (pre-filled from template)
-    QString launchArgs = QInputDialog::getText(
-        this, tr("Add Server"), tr("Launch arguments:"),
-        QLineEdit::Normal, tmpl.defaultArgs, &ok);
-    if (!ok) launchArgs.clear();
-
-    // RCON settings (optional – user can skip)
-    QString rconHost = QInputDialog::getText(
-        this, tr("RCON Settings"), tr("RCON host (leave blank for 127.0.0.1):"),
-        QLineEdit::Normal, QStringLiteral("127.0.0.1"), &ok);
-    if (!ok) rconHost = QStringLiteral("127.0.0.1");
-
-    int rconPort = QInputDialog::getInt(
-        this, tr("RCON Settings"), tr("RCON port:"), 27015, 1, 65535, 1, &ok);
-    if (!ok) rconPort = 27015;
-
-    QString rconPass = QInputDialog::getText(
-        this, tr("RCON Settings"), tr("RCON password:"),
-        QLineEdit::Password, QString(), &ok);
-    if (!ok) rconPass.clear();
-
-    ServerConfig s;
-    s.name         = name;
-    s.appid        = appid;
-    s.dir          = dir;
-    s.executable   = exe;
-    s.launchArgs   = launchArgs;
-    s.backupFolder = dir + QStringLiteral("/Backups");
-    s.rcon.host    = rconHost;
-    s.rcon.port    = rconPort;
-    s.rcon.password= rconPass;
-
-    // Tentatively add the server and validate the full list (catches
-    // per-field errors and duplicate names in one place).
-    m_manager->servers() << s;
-    QStringList errors = m_manager->validateAll();
-    if (!errors.isEmpty()) {
-        m_manager->servers().removeLast();
-        QMessageBox::warning(this, tr("Validation Error"),
-                             tr("Cannot add server:\n\n%1").arg(errors.join(QLatin1Char('\n'))));
-        return;
-    }
-
-    m_manager->saveConfig();
-    addServerTab(m_manager->servers().last());
-    rebuildSidebarList();
-    m_dashboard->refresh();
-    m_scheduler->startScheduler(s.name);
-
-    // Offer to immediately deploy via SteamCMD
-    auto reply = QMessageBox::question(
-        this, tr("Deploy Server"),
-        tr("Deploy '%1' (AppID %2) via SteamCMD now?").arg(name).arg(appid));
-    if (reply == QMessageBox::Yes)
-        m_manager->deployServer(m_manager->servers().last());
-}
-
-void MainWindow::onSyncMods()
-{
-    auto reply = QMessageBox::question(
-        this, tr("Sync Mods"),
-        tr("Update mods for ALL servers via SteamCMD?"));
-    if (reply == QMessageBox::Yes)
-        m_manager->syncModsCluster();
-}
-
-void MainWindow::onSyncConfigs()
-{
-    QString zip = QFileDialog::getOpenFileName(
-        this, tr("Select Master Config Zip"),
-        QString(), tr("Zip archives (*.zip)"));
-    if (zip.isEmpty()) return;
-
-    auto reply = QMessageBox::question(
-        this, tr("Sync Configs"),
-        tr("Distribute config from:\n%1\nto ALL servers?").arg(zip));
-    if (reply == QMessageBox::Yes)
-        m_manager->syncConfigsCluster(zip);
-}
-
-void MainWindow::onSearchChanged(const QString &text)
-{
-    for (int i = 0; i < m_serverList->count(); ++i) {
-        QListWidgetItem *item = m_serverList->item(i);
-        QString name = item->data(Qt::UserRole).toString();
-        item->setHidden(!name.contains(text, Qt::CaseInsensitive));
-    }
-}
-
-void MainWindow::onServerListItemClicked(QListWidgetItem *item)
-{
-    if (!item) return;
-    QString name = item->data(Qt::UserRole).toString();
-    // Find matching tab (skip index 0 = Home Dashboard)
-    for (int i = 1; i < m_tabs->count(); ++i) {
-        auto *stw = qobject_cast<ServerTabWidget *>(m_tabs->widget(i));
-        if (stw && stw->serverName() == name) {
-            m_tabs->setCurrentIndex(i);
-            return;
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-
-void MainWindow::onCloneServer()
-{
-    if (m_manager->servers().isEmpty()) {
-        QMessageBox::information(this, tr("Clone Server"),
-                                 tr("No servers to clone."));
-        return;
-    }
-
-    // Build a list of server names for the user to pick from
-    QStringList names;
-    for (const ServerConfig &s : std::as_const(m_manager->servers()))
-        names << s.name;
-
-    bool ok = false;
-    QString source = QInputDialog::getItem(
-        this, tr("Clone Server"), tr("Select server to clone:"),
-        names, 0, false, &ok);
-    if (!ok || source.isEmpty()) return;
-
-    QString newName = QInputDialog::getText(
-        this, tr("Clone Server"), tr("New server name:"),
-        QLineEdit::Normal, source + QStringLiteral(" (Copy)"), &ok);
-    if (!ok || newName.trimmed().isEmpty()) return;
-    newName = newName.trimmed();
-
-    // Find the source config
-    const ServerConfig *src = nullptr;
-    for (const ServerConfig &s : std::as_const(m_manager->servers())) {
-        if (s.name == source) { src = &s; break; }
-    }
-    if (!src) return;
-
-    // Deep-copy the config with new name
-    ServerConfig cloned = *src;
-    cloned.name = newName;
-
-    // Validate before adding
-    m_manager->servers() << cloned;
-    QStringList errors = m_manager->validateAll();
-    if (!errors.isEmpty()) {
-        m_manager->servers().removeLast();
-        QMessageBox::warning(this, tr("Validation Error"),
-                             tr("Cannot clone server:\n\n%1").arg(errors.join(QLatin1Char('\n'))));
-        return;
-    }
-
-    m_manager->saveConfig();
-    addServerTab(m_manager->servers().last());
-    rebuildSidebarList();
-    m_dashboard->refresh();
-    m_scheduler->startScheduler(newName);
-
-    m_logModule->log(newName, QStringLiteral("Cloned from '%1'.").arg(source));
-    m_trayManager->notify(tr("Server Cloned"),
-                          tr("'%1' cloned from '%2'.").arg(newName, source));
-}
-
-// ---------------------------------------------------------------------------
-
-void MainWindow::onRemoveServer()
-{
-    if (m_manager->servers().isEmpty()) {
-        QMessageBox::information(this, tr("Remove Server"),
-                                 tr("No servers to remove."));
-        return;
-    }
-
-    QStringList names;
-    for (const ServerConfig &s : std::as_const(m_manager->servers()))
-        names << s.name;
-
-    bool ok = false;
-    QString target = QInputDialog::getItem(
-        this, tr("Remove Server"), tr("Select server to remove:"),
-        names, 0, false, &ok);
-    if (!ok || target.isEmpty()) return;
-
-    auto reply = QMessageBox::question(
-        this, tr("Remove Server"),
-        tr("Remove '%1' from configuration?\n\nThis will stop the server if running.\n"
-           "Server files on disk are NOT deleted.").arg(target));
-    if (reply != QMessageBox::Yes) return;
-
-    m_scheduler->stopScheduler(target);
-
-    // Remove the corresponding tab
-    for (int i = 1; i < m_tabs->count(); ++i) {
-        auto *stw = qobject_cast<ServerTabWidget *>(m_tabs->widget(i));
-        if (stw && stw->serverName() == target) {
-            m_tabs->removeTab(i);
-            stw->deleteLater();
-            break;
-        }
-    }
-
-    m_manager->removeServer(target);
-    m_manager->saveConfig();
-    rebuildSidebarList();
-    m_dashboard->refresh();
-
-    m_logModule->log(target, QStringLiteral("Server removed."));
-    m_trayManager->notify(tr("Server Removed"),
-                          tr("'%1' has been removed.").arg(target));
-}
-
-// ---------------------------------------------------------------------------
-
-void MainWindow::onExportServer()
-{
-    if (m_manager->servers().isEmpty()) {
-        QMessageBox::information(this, tr("Export Server"),
-                                 tr("No servers to export."));
-        return;
-    }
-
-    QStringList names;
-    for (const ServerConfig &s : std::as_const(m_manager->servers()))
-        names << s.name;
-
-    bool ok = false;
-    QString target = QInputDialog::getItem(
-        this, tr("Export Server"), tr("Select server to export:"),
-        names, 0, false, &ok);
-    if (!ok || target.isEmpty()) return;
-
-    QString path = QFileDialog::getSaveFileName(
-        this, tr("Export Server Config"), target + QStringLiteral(".json"),
-        tr("JSON files (*.json)"));
-    if (path.isEmpty()) return;
-
-    if (m_manager->exportServerConfig(target, path)) {
-        QMessageBox::information(this, tr("Export Server"),
-                                 tr("'%1' exported to:\n%2").arg(target, path));
-        m_logModule->log(target, QStringLiteral("Config exported to ") + path);
-    } else {
-        QMessageBox::warning(this, tr("Export Server"),
-                             tr("Failed to export '%1'.").arg(target));
-    }
-}
-
-void MainWindow::onImportServer()
-{
-    QString path = QFileDialog::getOpenFileName(
-        this, tr("Import Server Config"), QString(),
-        tr("JSON files (*.json);;All files (*)"));
-    if (path.isEmpty()) return;
-
-    QString error = m_manager->importServerConfig(path);
-    if (!error.isEmpty()) {
-        QMessageBox::warning(this, tr("Import Server"),
-                             tr("Cannot import server:\n\n%1").arg(error));
-        return;
-    }
-
-    ServerConfig &imported = m_manager->servers().last();
-    m_manager->saveConfig();
-    addServerTab(imported);
-    rebuildSidebarList();
-    m_dashboard->refresh();
-    m_scheduler->startScheduler(imported.name);
-
-    QMessageBox::information(this, tr("Import Server"),
-                             tr("'%1' imported successfully.").arg(imported.name));
-    m_logModule->log(imported.name, QStringLiteral("Config imported from ") + path);
-    m_trayManager->notify(tr("Server Imported"),
-                          tr("'%1' imported.").arg(imported.name));
-}
-
-// ---------------------------------------------------------------------------
-
-void MainWindow::onBroadcastCommand()
-{
-    if (m_manager->servers().isEmpty()) {
-        QMessageBox::information(this, tr("Broadcast"),
-                                 tr("No servers configured."));
-        return;
-    }
-
-    bool ok = false;
-    QString cmd = QInputDialog::getText(
-        this, tr("Broadcast RCON Command"),
-        tr("Command to send to ALL servers:"),
-        QLineEdit::Normal, QString(), &ok);
-    if (!ok || cmd.trimmed().isEmpty()) return;
-
-    QStringList results = m_manager->broadcastRconCommand(cmd.trimmed());
-    QMessageBox::information(this, tr("Broadcast Results"),
-                             results.join(QLatin1Char('\n')));
-}
-
-// ---------------------------------------------------------------------------
-
-void MainWindow::updateTabStatusIndicators()
-{
-    if (m_manager->servers().isEmpty())
-        return;
-
-    for (int i = 1; i < m_tabs->count(); ++i) {
-        auto *stw = qobject_cast<ServerTabWidget *>(m_tabs->widget(i));
-        if (!stw) continue;
-
-        QString name = stw->serverName();
-        // Find the server config
-        bool found = false;
-        for (const ServerConfig &s : std::as_const(m_manager->servers())) {
-            if (s.name == name) {
-                bool online = m_manager->isServerRunning(s);
-                QString indicator = online ? QStringLiteral("🟢 ") : QStringLiteral("🔴 ");
-                m_tabs->setTabText(i, indicator + name);
-                found = true;
-                break;
-            }
-        }
-        if (!found)
-            m_tabs->setTabText(i, name);
-    }
-}
-
-// ---------------------------------------------------------------------------
-
-void MainWindow::buildLogViewerTab()
-{
-    auto *logWidget = new QWidget(m_tabs);
-    auto *layout    = new QVBoxLayout(logWidget);
-
-    auto *title = new QLabel(tr("Operation Log"), logWidget);
-    title->setStyleSheet(QStringLiteral("font-size:16px; font-weight:bold; padding:4px;"));
-    layout->addWidget(title);
-
-    // Search/filter bar
-    auto *filterEdit = new QLineEdit(logWidget);
-    filterEdit->setPlaceholderText(tr("Filter log entries…"));
-    layout->addWidget(filterEdit);
-
-    auto *logView = new QTextEdit(logWidget);
-    logView->setReadOnly(true);
-    logView->setFont(QFontDatabase::systemFont(QFontDatabase::FixedFont));
-    layout->addWidget(logView);
-
-    // Populate with existing entries
-    for (const QString &entry : m_logModule->entries())
-        logView->append(entry);
-
-    // Live updates
-    connect(m_logModule, &LogModule::entryAdded, logView, &QTextEdit::append);
-
-    // Filter log entries when search text changes
-    connect(filterEdit, &QLineEdit::textChanged, this,
-            [this, logView](const QString &text) {
-                logView->clear();
-                for (const QString &entry : m_logModule->entries()) {
-                    if (text.isEmpty() || entry.contains(text, Qt::CaseInsensitive))
-                        logView->append(entry);
-                }
-            });
-
-    m_tabs->addTab(logWidget, tr("📝 Log"));
-}
-
-// ---------------------------------------------------------------------------
-
-void MainWindow::toggleDarkMode()
-{
-    QSettings settings;
-    bool isDark = settings.value(QStringLiteral("darkMode"), false).toBool();
-    isDark = !isDark;
-    settings.setValue(QStringLiteral("darkMode"), isDark);
-
-    if (isDark) {
-        QPalette dark;
-        dark.setColor(QPalette::Window,          QColor(53, 53, 53));
-        dark.setColor(QPalette::WindowText,      Qt::white);
-        dark.setColor(QPalette::Base,            QColor(35, 35, 35));
-        dark.setColor(QPalette::AlternateBase,   QColor(53, 53, 53));
-        dark.setColor(QPalette::ToolTipBase,     Qt::white);
-        dark.setColor(QPalette::ToolTipText,     Qt::white);
-        dark.setColor(QPalette::Text,            Qt::white);
-        dark.setColor(QPalette::Button,          QColor(53, 53, 53));
-        dark.setColor(QPalette::ButtonText,      Qt::white);
-        dark.setColor(QPalette::BrightText,      Qt::red);
-        dark.setColor(QPalette::Link,            QColor(42, 130, 218));
-        dark.setColor(QPalette::Highlight,       QColor(42, 130, 218));
-        dark.setColor(QPalette::HighlightedText, Qt::black);
-        qApp->setPalette(dark);
-    } else {
-        qApp->setPalette(qApp->style()->standardPalette());
-    }
+    m_selectedTab = 0; // Reset to Home after rebuild
 }
