@@ -25,7 +25,12 @@
     "rconCommandIntervalMinutes": 0,
     "maxPlayers": 70,
     "restartWarningMinutes": 15,
-    "restartWarningMessage": ""
+    "restartWarningMessage": "",
+    "group": "ARK Cluster",
+    "startupPriority": 1,
+    "backupBeforeRestart": true,
+    "gracefulShutdownSeconds": 15,
+    "environmentVariables": {}
   },
   {
     "name": "CS2 Server",
@@ -53,6 +58,13 @@
     "rconCommandIntervalMinutes": 0,
     "maxPlayers": 32,
     "restartWarningMinutes": 5,
-    "restartWarningMessage": "Server restarting in {minutes} min! Finish your round."
+    "restartWarningMessage": "Server restarting in {minutes} min! Finish your round.",
+    "group": "Competitive",
+    "startupPriority": 0,
+    "backupBeforeRestart": false,
+    "gracefulShutdownSeconds": 10,
+    "environmentVariables": {
+      "SRCDS_TOKEN": "your_token_here"
+    }
   }
 ]

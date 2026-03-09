@@ -50,6 +50,21 @@ struct ServerConfig {
     // ---- User-defined tags for categorization / filtering ----
     QStringList tags;
 
+    // ---- Server group for organization ----
+    QString group;                         // named group (e.g. "Production", "Testing", "ARK Cluster")
+
+    // ---- Startup priority for auto-start ordering ----
+    int startupPriority = 0;               // lower value starts first; 0 = default
+
+    // ---- Auto-backup before scheduled restart ----
+    bool backupBeforeRestart = false;      // take a snapshot before every scheduled restart
+
+    // ---- Graceful shutdown timeout ----
+    int gracefulShutdownSeconds = 10;      // seconds to wait after terminate before force-kill; 0 = immediate kill
+
+    // ---- Custom environment variables for server process ----
+    QMap<QString, QString> environmentVariables; // key=value pairs passed to the server process on launch
+
     /**
      * @brief Format a restart warning message with the given minutes remaining.
      * @param minutes Minutes until the server restarts.
@@ -115,6 +130,12 @@ struct ServerConfig {
 
         if (memAlertThresholdMB < 0.0)
             errors << QStringLiteral("Memory alert threshold must not be negative.");
+
+        if (startupPriority < 0)
+            errors << QStringLiteral("Startup priority must not be negative.");
+
+        if (gracefulShutdownSeconds < 0)
+            errors << QStringLiteral("Graceful shutdown timeout must not be negative.");
 
         return errors;
     }

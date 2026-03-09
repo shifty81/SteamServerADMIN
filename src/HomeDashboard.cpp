@@ -99,6 +99,17 @@ void HomeDashboard::refresh()
         topRow->addWidget(statusLight);
         topRow->addWidget(nameLabel);
         topRow->addStretch();
+
+        // Group label (shown only if group is set)
+        auto *groupLabel = new QLabel(card);
+        if (!server.group.trimmed().isEmpty()) {
+            groupLabel->setText(server.group);
+            groupLabel->setStyleSheet(QStringLiteral(
+                "font-size:10px; padding:1px 6px; border-radius:3px;"
+                " background:#555; color:#ddd;"));
+        }
+        topRow->addWidget(groupLabel);
+
         cardLayout->addLayout(topRow);
 
         // Row 2: players + uptime
@@ -211,6 +222,7 @@ void HomeDashboard::refresh()
         ServerBadge b;
         b.statusLight    = statusLight;
         b.nameLabel      = nameLabel;
+        b.groupLabel     = groupLabel;
         b.playersLabel   = playersLabel;
         b.uptimeLabel    = uptimeLabel;
         b.updateBadge    = updateBadge;

@@ -279,6 +279,29 @@ void ServerTabWidget::buildSettingsTab(QTabWidget *tabs)
     rconIntervalSpin->setValue(m_server.rconCommandIntervalMinutes);
     form->addRow(tr("RCON Command Interval:"), rconIntervalSpin);
 
+    // ---- Server Group ----
+    auto *groupEdit = new QLineEdit(m_server.group, scrollContent);
+    groupEdit->setPlaceholderText(tr("e.g. Production, Testing, ARK Cluster"));
+    form->addRow(tr("Server Group:"), groupEdit);
+
+    // ---- Startup Priority ----
+    auto *startupPrioritySpin = new QSpinBox(scrollContent);
+    startupPrioritySpin->setRange(0, 9999);
+    startupPrioritySpin->setValue(m_server.startupPriority);
+    form->addRow(tr("Startup Priority (0 = default):"), startupPrioritySpin);
+
+    // ---- Auto-backup before restart ----
+    auto *backupBeforeRestartCheck = new QCheckBox(scrollContent);
+    backupBeforeRestartCheck->setChecked(m_server.backupBeforeRestart);
+    form->addRow(tr("Backup before restart:"), backupBeforeRestartCheck);
+
+    // ---- Graceful shutdown timeout ----
+    auto *gracefulShutdownSpin = new QSpinBox(scrollContent);
+    gracefulShutdownSpin->setRange(0, 600);
+    gracefulShutdownSpin->setSuffix(tr(" sec"));
+    gracefulShutdownSpin->setValue(m_server.gracefulShutdownSeconds);
+    form->addRow(tr("Graceful Shutdown Timeout:"), gracefulShutdownSpin);
+
     scroll->setWidget(scrollContent);
     outerLayout->addWidget(scroll);
 
@@ -296,7 +319,8 @@ void ServerTabWidget::buildSettingsTab(QTabWidget *tabs)
             compressionSpin, maintStartSpin, maintEndSpin,
             restartWarnSpin, restartWarnMsgEdit,
             webhookUrlEdit, webhookTplEdit, consoleLogCheck,
-            rconIntervalSpin]() {
+            rconIntervalSpin, groupEdit, startupPrioritySpin,
+            backupBeforeRestartCheck, gracefulShutdownSpin]() {
         m_server.name           = nameEdit->text();
         m_server.appid          = appidSpin->value();
         m_server.dir            = dirEdit->text();
@@ -322,6 +346,10 @@ void ServerTabWidget::buildSettingsTab(QTabWidget *tabs)
         m_server.webhookTemplate   = webhookTplEdit->text();
         m_server.consoleLogging    = consoleLogCheck->isChecked();
         m_server.rconCommandIntervalMinutes = rconIntervalSpin->value();
+        m_server.group = groupEdit->text();
+        m_server.startupPriority = startupPrioritySpin->value();
+        m_server.backupBeforeRestart = backupBeforeRestartCheck->isChecked();
+        m_server.gracefulShutdownSeconds = gracefulShutdownSpin->value();
 
         QStringList errors = m_server.validate();
         if (!errors.isEmpty()) {
