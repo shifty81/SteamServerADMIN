@@ -1,7 +1,19 @@
 #include "RconClient.hpp"
 
-#include <QDataStream>
-#include <QDebug>
+#include <cstring>
+#include <iostream>
+
+#ifdef _WIN32
+bool RconClient::s_wsaInitialized = false;
+void RconClient::ensureWSA()
+{
+    if (!s_wsaInitialized) {
+        WSADATA wsaData;
+        WSAStartup(MAKEWORD(2, 2), &wsaData);
+        s_wsaInitialized = true;
+    }
+}
+#endif
 
 // ---------------------------------------------------------------------------
 // RCON packet layout (little-endian):
@@ -12,9 +24,11 @@
 //   char   empty  (null terminator)
 // ---------------------------------------------------------------------------
 
-RconClient::RconClient(QObject *parent) : QObject(parent)
+RconClient::RconClient()
 {
-    m_socket = new QTcpSocket(this);
+#ifdef _WIN32
+    ensureWSA();
+#endif
 }
 
 RconClient::~RconClient()
@@ -22,23 +36,102 @@ RconClient::~RconClient()
     disconnect();
 }
 
-bool RconClient::connect(const QString &host, int port, const QString &password,
-                         int timeoutMs)
+void RconClient::emitError(const std::string &msg)
 {
-    if (m_socket->state() != QAbstractSocket::UnconnectedState)
-        m_socket->disconnectFromHost();
+    if (onError) onError(msg);
+}
 
-    m_socket->connectToHost(host, static_cast<quint16>(port));
-    if (!m_socket->waitForConnected(timeoutMs)) {
-        emit errorOccurred(tr("Connection failed: %1").arg(m_socket->errorString()));
+bool RconClient::waitForData(int timeoutMs)
+{
+#ifdef _WIN32
+    fd_set readSet;
+    FD_ZERO(&readSet);
+    FD_SET(m_socket, &readSet);
+    timeval tv;
+    tv.tv_sec = timeoutMs / 1000;
+    tv.tv_usec = (timeoutMs % 1000) * 1000;
+    return select(0, &readSet, nullptr, nullptr, &tv) > 0;
+#else
+    struct pollfd pfd;
+    pfd.fd = m_socket;
+    pfd.events = POLLIN;
+    return poll(&pfd, 1, timeoutMs) > 0;
+#endif
+}
+
+int RconClient::socketSend(const void *data, int len)
+{
+#ifdef _WIN32
+    return ::send(m_socket, static_cast<const char*>(data), len, 0);
+#else
+    return static_cast<int>(::send(m_socket, data, len, 0));
+#endif
+}
+
+int RconClient::socketRecv(void *buf, int len)
+{
+#ifdef _WIN32
+    return ::recv(m_socket, static_cast<char*>(buf), len, 0);
+#else
+    return static_cast<int>(::recv(m_socket, buf, len, 0));
+#endif
+}
+
+bool RconClient::connectToServer(const std::string &host, int port, const std::string &password,
+                                 int timeoutMs)
+{
+    disconnect();
+
+    m_socket = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    if (m_socket == kInvalidSocket) {
+        emitError("Failed to create socket");
         return false;
     }
+
+    struct sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(static_cast<uint16_t>(port));
+
+    if (inet_pton(AF_INET, host.c_str(), &addr.sin_addr) <= 0) {
+        // Try hostname resolution
+        struct addrinfo hints{}, *result = nullptr;
+        hints.ai_family = AF_INET;
+        hints.ai_socktype = SOCK_STREAM;
+        if (getaddrinfo(host.c_str(), nullptr, &hints, &result) != 0 || !result) {
+            emitError("Cannot resolve host: " + host);
+            disconnect();
+            return false;
+        }
+        addr.sin_addr = reinterpret_cast<struct sockaddr_in*>(result->ai_addr)->sin_addr;
+        freeaddrinfo(result);
+    }
+
+    // Set receive/send timeout for the socket
+#ifdef _WIN32
+    DWORD tv = timeoutMs;
+    setsockopt(m_socket, SOL_SOCKET, SO_RCVTIMEO, reinterpret_cast<const char*>(&tv), sizeof(tv));
+    setsockopt(m_socket, SOL_SOCKET, SO_SNDTIMEO, reinterpret_cast<const char*>(&tv), sizeof(tv));
+#else
+    struct timeval tv;
+    tv.tv_sec = timeoutMs / 1000;
+    tv.tv_usec = (timeoutMs % 1000) * 1000;
+    setsockopt(m_socket, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(m_socket, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+#endif
+
+    if (::connect(m_socket, reinterpret_cast<struct sockaddr*>(&addr), sizeof(addr)) != 0) {
+        emitError("Connection failed to " + host + ":" + std::to_string(port));
+        disconnect();
+        return false;
+    }
+
+    m_connected = true;
 
     // Send auth packet
     Packet auth;
     auth.id   = m_nextId++;
     auth.type = SERVERDATA_AUTH;
-    auth.body = password.toUtf8();
+    auth.body.assign(password.begin(), password.end());
 
     if (!sendPacket(auth))
         return false;
@@ -46,14 +139,14 @@ bool RconClient::connect(const QString &host, int port, const QString &password,
     // Read auth response
     Packet resp;
     if (!recvPacket(resp, timeoutMs)) {
-        emit errorOccurred(tr("No auth response from server"));
+        emitError("No auth response from server");
         return false;
     }
 
     // id == -1 means wrong password
     if (resp.id == -1) {
-        emit errorOccurred(tr("RCON authentication failed: wrong password"));
-        m_socket->disconnectFromHost();
+        emitError("RCON authentication failed: wrong password");
+        disconnect();
         return false;
     }
 
@@ -62,40 +155,44 @@ bool RconClient::connect(const QString &host, int port, const QString &password,
 
 void RconClient::disconnect()
 {
-    if (m_socket && m_socket->state() != QAbstractSocket::UnconnectedState) {
-        m_socket->disconnectFromHost();
-        m_socket->waitForDisconnected(1000);
+    if (m_socket != kInvalidSocket) {
+#ifdef _WIN32
+        closesocket(m_socket);
+#else
+        ::close(m_socket);
+#endif
+        m_socket = kInvalidSocket;
     }
+    m_connected = false;
 }
 
 bool RconClient::isConnected() const
 {
-    return m_socket &&
-           m_socket->state() == QAbstractSocket::ConnectedState;
+    return m_connected && m_socket != kInvalidSocket;
 }
 
-QString RconClient::sendCommand(const QString &command, int timeoutMs)
+std::string RconClient::sendCommand(const std::string &command, int timeoutMs)
 {
     if (!isConnected()) {
-        emit errorOccurred(tr("Not connected to RCON"));
+        emitError("Not connected to RCON");
         return {};
     }
 
     Packet cmd;
     cmd.id   = m_nextId++;
     cmd.type = SERVERDATA_EXECCOMMAND;
-    cmd.body = command.toUtf8();
+    cmd.body.assign(command.begin(), command.end());
 
     if (!sendPacket(cmd))
         return {};
 
     // Read response (may be split across multiple packets)
-    QString result;
+    std::string result;
     Packet resp;
     while (recvPacket(resp, timeoutMs)) {
-        result += QString::fromUtf8(resp.body);
-        // A single-fragment response ends when there is no more data ready
-        if (!m_socket->waitForReadyRead(100))
+        result.append(resp.body.begin(), resp.body.end());
+        // Check if more data is pending
+        if (!waitForData(100))
             break;
     }
     return result;
@@ -105,83 +202,83 @@ QString RconClient::sendCommand(const QString &command, int timeoutMs)
 // Private helpers
 // ---------------------------------------------------------------------------
 
-QByteArray RconClient::buildRawPacket(const Packet &pkt) const
+std::vector<uint8_t> RconClient::buildRawPacket(const Packet &pkt) const
 {
-    QByteArray body = pkt.body;
-    // body + null terminator + empty string null terminator
-    int size = 4 + 4 + body.size() + 2;
+    int bodyLen = static_cast<int>(pkt.body.size());
+    int size = 4 + 4 + bodyLen + 2;  // id + type + body + 2 null terminators
 
-    QByteArray raw;
-    raw.resize(4 + size);
+    std::vector<uint8_t> raw(4 + size, 0);
 
-    auto write32 = [&](int offset, qint32 val) {
-        raw[offset]   = static_cast<char>(val & 0xFF);
-        raw[offset+1] = static_cast<char>((val >>  8) & 0xFF);
-        raw[offset+2] = static_cast<char>((val >> 16) & 0xFF);
-        raw[offset+3] = static_cast<char>((val >> 24) & 0xFF);
+    auto write32 = [&](int offset, int32_t val) {
+        raw[offset]   = static_cast<uint8_t>(val & 0xFF);
+        raw[offset+1] = static_cast<uint8_t>((val >>  8) & 0xFF);
+        raw[offset+2] = static_cast<uint8_t>((val >> 16) & 0xFF);
+        raw[offset+3] = static_cast<uint8_t>((val >> 24) & 0xFF);
     };
 
     write32(0, size);
     write32(4, pkt.id);
     write32(8, pkt.type);
-    raw.replace(12, body.size(), body);
-    raw[12 + body.size()]     = '\0';
-    raw[12 + body.size() + 1] = '\0';
+    std::memcpy(raw.data() + 12, pkt.body.data(), bodyLen);
+    raw[12 + bodyLen]     = 0;
+    raw[12 + bodyLen + 1] = 0;
     return raw;
 }
 
 bool RconClient::sendPacket(const Packet &pkt)
 {
-    QByteArray raw = buildRawPacket(pkt);
-    qint64 written = m_socket->write(raw);
-    if (written != raw.size()) {
-        emit errorOccurred(tr("Failed to send packet"));
+    std::vector<uint8_t> raw = buildRawPacket(pkt);
+    int sent = socketSend(raw.data(), static_cast<int>(raw.size()));
+    if (sent != static_cast<int>(raw.size())) {
+        emitError("Failed to send packet");
         return false;
     }
-    return m_socket->waitForBytesWritten(3000);
+    return true;
 }
 
 bool RconClient::recvPacket(Packet &pkt, int timeoutMs)
 {
     // Read 4-byte size field first
-    if (!m_socket->waitForReadyRead(timeoutMs))
+    if (!waitForData(timeoutMs))
         return false;
 
-    while (m_socket->bytesAvailable() < 4) {
-        if (!m_socket->waitForReadyRead(timeoutMs))
-            return false;
+    uint8_t sizeBuf[4];
+    int received = 0;
+    while (received < 4) {
+        int n = socketRecv(sizeBuf + received, 4 - received);
+        if (n <= 0) return false;
+        received += n;
     }
 
-    auto read32 = [](const QByteArray &b, int offset) -> qint32 {
-        return static_cast<qint32>(
-            (static_cast<unsigned char>(b[offset]))        |
-            (static_cast<unsigned char>(b[offset+1]) <<  8) |
-            (static_cast<unsigned char>(b[offset+2]) << 16) |
-            (static_cast<unsigned char>(b[offset+3]) << 24));
+    auto read32 = [](const uint8_t *b) -> int32_t {
+        return static_cast<int32_t>(
+            b[0] | (b[1] << 8) | (b[2] << 16) | (b[3] << 24));
     };
 
-    QByteArray sizeBuf = m_socket->read(4);
-    int packetSize = read32(sizeBuf, 0);
-
+    int packetSize = read32(sizeBuf);
     if (packetSize < 10 || packetSize > MAX_RCON_PACKET_SIZE) {
-        emit errorOccurred(tr("Invalid RCON packet size: %1").arg(packetSize));
+        emitError("Invalid RCON packet size: " + std::to_string(packetSize));
         return false;
     }
 
-    while (m_socket->bytesAvailable() < packetSize) {
-        if (!m_socket->waitForReadyRead(timeoutMs))
+    std::vector<uint8_t> data(packetSize);
+    received = 0;
+    while (received < packetSize) {
+        if (!waitForData(timeoutMs))
             return false;
+        int n = socketRecv(data.data() + received, packetSize - received);
+        if (n <= 0) return false;
+        received += n;
     }
 
-    QByteArray data = m_socket->read(packetSize);
-    pkt.id   = read32(data, 0);
-    pkt.type = read32(data, 4);
-    // body is null-terminated, starts at offset 8
-    int bodyLen = packetSize - 4 - 4 - 2; // subtract id, type, two nulls
-    if (bodyLen > 0)
-        pkt.body = data.mid(8, bodyLen);
-    else
+    pkt.id   = read32(data.data());
+    pkt.type = read32(data.data() + 4);
+    int bodyLen = packetSize - 4 - 4 - 2;
+    if (bodyLen > 0) {
+        pkt.body.assign(data.begin() + 8, data.begin() + 8 + bodyLen);
+    } else {
         pkt.body.clear();
+    }
 
     return true;
 }

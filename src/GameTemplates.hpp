@@ -1,7 +1,7 @@
 #pragma once
 
-#include <QList>
-#include <QString>
+#include <string>
+#include <vector>
 
 /**
  * @brief Pre-defined game server profiles for popular Steam dedicated servers.
@@ -11,54 +11,54 @@
  * manually when adding a new server.
  */
 struct GameTemplate {
-    QString displayName;   // human-readable game name
-    int     appid;
-    QString executable;    // server binary relative to install dir
-    QString defaultArgs;   // typical launch arguments
+    std::string displayName;   // human-readable game name
+    int         appid;
+    std::string executable;    // server binary relative to install dir
+    std::string defaultArgs;   // typical launch arguments
 
     /** Return the built-in list of known game server templates. */
-    static QList<GameTemplate> builtinTemplates()
+    static std::vector<GameTemplate> builtinTemplates()
     {
         return {
-            { QStringLiteral("ARK: Survival Ascended"),
+            { "ARK: Survival Ascended",
               2430930,
-              QStringLiteral("ShooterGameServer"),
-              QStringLiteral("TheIsland_WP?listen?MaxPlayers=70") },
+              "ShooterGameServer",
+              "TheIsland_WP?listen?MaxPlayers=70" },
 
-            { QStringLiteral("Counter-Strike 2"),
+            { "Counter-Strike 2",
               730,
-              QStringLiteral("cs2"),
-              QStringLiteral("-dedicated +map de_dust2") },
+              "cs2",
+              "-dedicated +map de_dust2" },
 
-            { QStringLiteral("Rust"),
+            { "Rust",
               258550,
-              QStringLiteral("RustDedicated"),
-              QStringLiteral("-batchmode +server.port 28015 +server.level Procedural Map") },
+              "RustDedicated",
+              "-batchmode +server.port 28015 +server.level Procedural Map" },
 
-            { QStringLiteral("Valheim"),
+            { "Valheim",
               896660,
-              QStringLiteral("valheim_server.x86_64"),
-              QStringLiteral("-name MyServer -port 2456 -world Dedicated") },
+              "valheim_server.x86_64",
+              "-name MyServer -port 2456 -world Dedicated" },
 
-            { QStringLiteral("Project Zomboid"),
+            { "Project Zomboid",
               380870,
-              QStringLiteral("start-server.sh"),
-              QString() },
+              "start-server.sh",
+              "" },
 
-            { QStringLiteral("Palworld"),
+            { "Palworld",
               2394010,
-              QStringLiteral("PalServer-Linux-Test"),
-              QStringLiteral("-useperfthreads -NoAsyncLoadingThread -UseMultithreadForDS") },
+              "PalServer-Linux-Test",
+              "-useperfthreads -NoAsyncLoadingThread -UseMultithreadForDS" },
 
-            { QStringLiteral("Satisfactory"),
+            { "Satisfactory",
               1690800,
-              QStringLiteral("FactoryServer"),
-              QStringLiteral("-unattended") },
+              "FactoryServer",
+              "-unattended" },
 
-            { QStringLiteral("Custom (manual entry)"),
+            { "Custom (manual entry)",
               0,
-              QString(),
-              QString() },
+              "",
+              "" },
         };
     }
 };

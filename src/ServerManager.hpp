@@ -5,13 +5,39 @@
 #include "ResourceMonitor.hpp"
 #include "EventHookManager.hpp"
 
-#include <QObject>
-#include <QList>
-#include <QString>
-#include <QProcess>
-#include <QMap>
-#include <QDateTime>
-#include <QElapsedTimer>
+#include <string>
+#include <vector>
+#include <map>
+#include <set>
+#include <functional>
+#include <chrono>
+#include <cstdint>
+
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <sys/types.h>
+#endif
+
+/**
+ * @brief Portable process information.
+ */
+struct ProcessInfo {
+#ifdef _WIN32
+    HANDLE processHandle = nullptr;
+    DWORD pid = 0;
+#else
+    pid_t pid = 0;
+#endif
+    bool running = false;
+};
+
+// Portable process helpers
+bool launchProcess(const std::string &exe, const std::vector<std::string> &args,
+                   const std::map<std::string, std::string> &env, ProcessInfo &out);
+bool isProcessRunning(const ProcessInfo &info);
+void terminateProcess(ProcessInfo &info);
+void killProcess(ProcessInfo &info);
 
 /**
  * @brief Central backend for managing all servers.
@@ -23,22 +49,19 @@
  *  - Delegating to BackupModule and SteamCmdModule
  *  - Cluster-wide operations (mod sync, config sync)
  */
-class ServerManager : public QObject {
-    Q_OBJECT
+class ServerManager {
 public:
-    explicit ServerManager(const QString &configFile, QObject *parent = nullptr);
+    explicit ServerManager(const std::string &configFile);
 
     // ---- Config persistence ----
     bool loadConfig();
     bool saveConfig() const;
 
     // ---- Validation ----
-    /** Validate all server configs and check for duplicate names.
-     *  Returns a list of error strings; empty list = all valid. */
-    QStringList validateAll() const;
+    std::vector<std::string> validateAll() const;
 
-    QList<ServerConfig> &servers();
-    const QList<ServerConfig> &servers() const;
+    std::vector<ServerConfig> &servers();
+    const std::vector<ServerConfig> &servers() const;
 
     // ---- Server lifecycle ----
     void startServer(ServerConfig &server);
@@ -46,7 +69,6 @@ public:
     void restartServer(ServerConfig &server);
     bool isServerRunning(const ServerConfig &server) const;
 
-    /** Start all servers that have autoStartOnLaunch enabled. */
     void autoStartServers();
 
     // ---- Batch server operations ----
@@ -69,123 +91,96 @@ public:
 
     // ---- SteamCMD ----
     void deployServer(ServerConfig &server);
-    /** Update all mods via SteamCMD. Takes a pre-update snapshot and
-     *  automatically rolls back if the update fails.
-     *  @return true on success, false on failure (rollback attempted). */
     bool updateMods(ServerConfig &server);
 
     // ---- Backup / restore ----
-    QString takeSnapshot(const ServerConfig &server);
-    bool restoreSnapshot(const QString &zipFile, const ServerConfig &server);
-    QStringList listSnapshots(const ServerConfig &server) const;
+    std::string takeSnapshot(const ServerConfig &server);
+    bool restoreSnapshot(const std::string &zipFile, const ServerConfig &server);
+    std::vector<std::string> listSnapshots(const ServerConfig &server) const;
 
     // ---- Player count (via RCON) ----
     int getPlayerCount(const ServerConfig &server);
-    QString sendRconCommand(const ServerConfig &server, const QString &cmd);
+    std::string sendRconCommand(const ServerConfig &server, const std::string &cmd);
 
     // ---- Server removal ----
-    /** Remove a server by name. Stops it first if running.
-     *  Returns true if found and removed. */
-    bool removeServer(const QString &serverName);
+    bool removeServer(const std::string &serverName);
 
     // ---- Cluster operations ----
     void syncModsCluster();
-    void syncConfigsCluster(const QString &masterConfigZip);
-    /** Send an RCON command to all servers and return combined results. */
-    QStringList broadcastRconCommand(const QString &cmd);
+    void syncConfigsCluster(const std::string &masterConfigZip);
+    std::vector<std::string> broadcastRconCommand(const std::string &cmd);
 
     // ---- Export / Import individual server configs ----
-    /** Export a single server's config to a JSON file.
-     *  Returns true on success. */
-    bool exportServerConfig(const QString &serverName, const QString &filePath) const;
-    /** Import a server config from a JSON file. Validates before adding.
-     *  Returns an error string on failure, or empty string on success. */
-    QString importServerConfig(const QString &filePath);
+    bool exportServerConfig(const std::string &serverName, const std::string &filePath) const;
+    std::string importServerConfig(const std::string &filePath);
 
     // ---- SteamCMD path ----
-    void setSteamCmdPath(const QString &path);
-    QString steamCmdPath() const;
+    void setSteamCmdPath(const std::string &path);
+    std::string steamCmdPath() const;
 
     // ---- Uptime tracking ----
-    /** Return the server start time, or an invalid QDateTime if not running. */
-    QDateTime serverStartTime(const QString &serverName) const;
-    /** Return the server uptime in seconds, or -1 if not running. */
-    qint64 serverUptimeSeconds(const QString &serverName) const;
+    std::chrono::system_clock::time_point serverStartTime(const std::string &serverName) const;
+    int64_t serverUptimeSeconds(const std::string &serverName) const;
 
     // ---- Crash backoff ----
-    /** Maximum consecutive crash restarts before giving up. */
     static constexpr int kMaxCrashRestarts = 5;
-    /** Base delay in milliseconds between crash restarts (doubled each time). */
     static constexpr int kCrashBackoffBaseMs = 2000;
-    /** Return the current crash count for a server (0 = no recent crashes). */
-    int crashCount(const QString &serverName) const;
-    /** Reset the crash counter for a server (e.g. after a manual start). */
-    void resetCrashCount(const QString &serverName);
+    int crashCount(const std::string &serverName) const;
+    void resetCrashCount(const std::string &serverName);
 
     // ---- Pending update tracking ----
-    /** Mark / clear whether a server has a pending game update. */
-    void setPendingUpdate(const QString &serverName, bool pending);
-    bool hasPendingUpdate(const QString &serverName) const;
-
-    /** Mark / clear whether a server has a pending mod update. */
-    void setPendingModUpdate(const QString &serverName, bool pending);
-    bool hasPendingModUpdate(const QString &serverName) const;
+    void setPendingUpdate(const std::string &serverName, bool pending);
+    bool hasPendingUpdate(const std::string &serverName) const;
+    void setPendingModUpdate(const std::string &serverName, bool pending);
+    bool hasPendingModUpdate(const std::string &serverName) const;
 
     // ---- Restart warning ----
-    /** Send an in-game RCON broadcast warning players about an upcoming restart.
-     *  @param minutesRemaining  minutes until the restart happens. */
     void sendRestartWarning(ServerConfig &server, int minutesRemaining);
 
     // ---- Resource monitoring ----
-    /** Return the shared ResourceMonitor instance. */
     ResourceMonitor *resourceMonitor();
 
     // ---- Event hooks ----
-    /** Return the shared EventHookManager instance. */
     EventHookManager *eventHookManager();
 
-    // ---- Server statistics ----
-    /** Flush accumulated uptime for all running servers into their configs.
-     *  Call this periodically or before saving config. */
-    void flushUptimeStats();
+    /** Call from main loop to check for crashed processes and pending restarts. */
+    void tick();
 
-    // ---- Auto-update check ----
-    /** Check for pending updates for a server by running SteamCMD with
-     *  +app_info_update.  Returns true if an update appears available,
-     *  false otherwise.  This is best-effort (runs a quick SteamCMD command). */
-    bool checkForUpdate(const ServerConfig &server);
-
-    /** Check all servers for pending updates and mark them via setPendingUpdate. */
-    void checkAllForUpdates();
-
-signals:
-    void logMessage(const QString &serverName, const QString &message);
-    void serverCrashed(const QString &serverName);
-    /** Emitted when a server's resource usage exceeds its configured thresholds. */
-    void resourceAlert(const QString &serverName, const QString &detail);
+    // ---- Callbacks (replacing Qt signals) ----
+    std::function<void(const std::string &serverName, const std::string &message)> onLogMessage;
+    std::function<void(const std::string &serverName)> onServerCrashed;
+    std::function<void(const std::string &serverName, const std::string &detail)> onResourceAlert;
 
 private:
-    void onProcessFinished(const QString &serverName, int exitCode,
-                           QProcess::ExitStatus exitStatus);
-    QString m_configFile;
-    QList<ServerConfig> m_servers;
-    QMap<QString, QProcess *> m_processes;                // keyed by server name
-    QMap<QString, QMetaObject::Connection> m_crashConns;  // crash-detection connections
-    QString m_steamCmdPath;
+    void checkProcesses();
+    void handleCrash(const std::string &serverName, int exitCode);
+    void processPendingRestarts();
+
+    std::string m_configFile;
+    std::vector<ServerConfig> m_servers;
+    std::map<std::string, ProcessInfo> m_processes;
+    std::string m_steamCmdPath;
 
     // Uptime: stores when each server was started
-    QMap<QString, QDateTime> m_startTimes;
+    std::map<std::string, std::chrono::system_clock::time_point> m_startTimes;
 
-    // Crash backoff: consecutive crash count per server
-    QMap<QString, int> m_crashCounts;
+    // Crash backoff
+    std::map<std::string, int> m_crashCounts;
 
     // Pending update tracking
-    QMap<QString, bool> m_pendingUpdates;
-    QMap<QString, bool> m_pendingModUpdates;
+    std::map<std::string, bool> m_pendingUpdates;
+    std::map<std::string, bool> m_pendingModUpdates;
 
-    QProcess *processFor(const ServerConfig &server) const;
+    // Pending crash restarts: {serverName -> time_point when restart should happen}
+    struct PendingRestart {
+        std::chrono::steady_clock::time_point when;
+    };
+    std::map<std::string, PendingRestart> m_pendingRestarts;
 
-    WebhookModule *m_webhook;
-    ResourceMonitor *m_resourceMonitor;
-    EventHookManager *m_eventHookManager;
+    WebhookModule    m_webhook;
+    ResourceMonitor  m_resourceMonitor;
+    EventHookManager m_eventHookManager;
+
+    void emitLog(const std::string &serverName, const std::string &msg);
+    std::string lookupEventHook(const std::string &serverName, const std::string &event) const;
 };

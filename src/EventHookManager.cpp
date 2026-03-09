@@ -1,32 +1,35 @@
 #include "EventHookManager.hpp"
+#include "ServerConfig.hpp"
 
-#include <QDir>
-#include <QFileInfo>
-#include <QProcess>
-#include <QProcessEnvironment>
-#include <QTimer>
+#include <filesystem>
+#include <cstdio>
+#include <cstdlib>
+#include <iostream>
+#include <thread>
+#include <string>
 
-// ---------------------------------------------------------------------------
-// Constructor
-// ---------------------------------------------------------------------------
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <unistd.h>
+#include <sys/wait.h>
+#include <signal.h>
+#endif
 
-EventHookManager::EventHookManager(QObject *parent)
-    : QObject(parent)
-{
-}
+namespace fs = std::filesystem;
 
 // ---------------------------------------------------------------------------
 // Known events
 // ---------------------------------------------------------------------------
 
-QStringList EventHookManager::knownEvents()
+std::vector<std::string> EventHookManager::knownEvents()
 {
     return {
-        QStringLiteral("onStart"),
-        QStringLiteral("onStop"),
-        QStringLiteral("onCrash"),
-        QStringLiteral("onBackup"),
-        QStringLiteral("onUpdate"),
+        "onStart",
+        "onStop",
+        "onCrash",
+        "onBackup",
+        "onUpdate",
     };
 }
 
@@ -34,60 +37,76 @@ QStringList EventHookManager::knownEvents()
 // Fire hook
 // ---------------------------------------------------------------------------
 
-void EventHookManager::fireHook(const QString &serverName,
-                                const QString &serverDir,
-                                const QString &event,
-                                const QString &scriptPath)
+void EventHookManager::fireHook(const std::string &serverName,
+                                const std::string &serverDir,
+                                const std::string &event,
+                                const std::string &scriptPath)
 {
-    if (scriptPath.trimmed().isEmpty())
+    if (trimString(scriptPath).empty())
         return;
 
     // Resolve the script path relative to the server directory if not absolute.
-    QString resolved = scriptPath;
-    if (!QFileInfo(resolved).isAbsolute())
-        resolved = serverDir + QDir::separator() + scriptPath;
+    std::string resolved = scriptPath;
+    if (!fs::path(resolved).is_absolute())
+        resolved = (fs::path(serverDir) / scriptPath).string();
 
-    if (!QFileInfo::exists(resolved)) {
-        emit hookFinished(serverName, event, -1,
-                          QStringLiteral("Script not found: %1").arg(resolved));
+    if (!fs::exists(resolved)) {
+        if (onHookFinished)
+            onHookFinished(serverName, event, -1, "Script not found: " + resolved);
         return;
     }
 
-    // Set up the subprocess
-    auto *proc = new QProcess(this);
-    proc->setWorkingDirectory(serverDir);
-
-    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
-    env.insert(QStringLiteral("SSA_SERVER_NAME"), serverName);
-    env.insert(QStringLiteral("SSA_EVENT"), event);
-    env.insert(QStringLiteral("SSA_SERVER_DIR"), serverDir);
-    proc->setProcessEnvironment(env);
-
-    // Capture server name and event for the finished lambda
-    QString sName = serverName;
-    QString evName = event;
     int timeout = m_timeoutSeconds;
+    auto callback = onHookFinished;
 
-    connect(proc, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
-            this, [this, proc, sName, evName](int exitCode, QProcess::ExitStatus /*st*/) {
-                QString output = QString::fromLocal8Bit(proc->readAllStandardOutput())
-                               + QString::fromLocal8Bit(proc->readAllStandardError());
-                emit hookFinished(sName, evName, exitCode, output.trimmed());
-                proc->deleteLater();
-            });
+    // Run the hook in a detached thread to avoid blocking
+    std::thread([resolved, serverName, serverDir, event, timeout, callback]() {
+        // Set environment variables and run the script
+        std::string cmd;
+#ifdef _WIN32
+        cmd = "set SSA_SERVER_NAME=" + serverName +
+              " && set SSA_EVENT=" + event +
+              " && set SSA_SERVER_DIR=" + serverDir +
+              " && cd /d " + serverDir +
+              " && " + resolved + " 2>&1";
+#else
+        cmd = "cd " + serverDir +
+              " && SSA_SERVER_NAME='" + serverName + "'"
+              " SSA_EVENT='" + event + "'"
+              " SSA_SERVER_DIR='" + serverDir + "'"
+              " " + resolved + " 2>&1";
+#endif
 
-    proc->start(resolved);
+        std::string output;
+        FILE *pipe = popen(cmd.c_str(), "r");
+        if (!pipe) {
+            if (callback)
+                callback(serverName, event, -1, "Failed to execute script");
+            return;
+        }
 
-    // Optionally enforce a timeout
-    if (timeout > 0) {
-        QTimer::singleShot(timeout * 1000, proc, [proc]() {
-            if (proc->state() != QProcess::NotRunning) {
-                proc->terminate();
-                if (!proc->waitForFinished(3000))
-                    proc->kill();
-            }
-        });
-    }
+        char buffer[512];
+        while (fgets(buffer, sizeof(buffer), pipe))
+            output += buffer;
+
+        int status = pclose(pipe);
+        int exitCode = 0;
+#ifdef _WIN32
+        exitCode = status;
+#else
+        if (WIFEXITED(status))
+            exitCode = WEXITSTATUS(status);
+        else
+            exitCode = -1;
+#endif
+
+        // Trim trailing whitespace
+        while (!output.empty() && (output.back() == '\n' || output.back() == '\r'))
+            output.pop_back();
+
+        if (callback)
+            callback(serverName, event, exitCode, output);
+    }).detach();
 }
 
 // ---------------------------------------------------------------------------

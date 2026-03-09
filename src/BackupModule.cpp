@@ -1,150 +1,132 @@
 #include "BackupModule.hpp"
 
-#include <QDir>
-#include <QDateTime>
-#include <QFileInfo>
-#include <QProcess>
-#include <QDebug>
+#include <filesystem>
+#include <chrono>
+#include <ctime>
+#include <cstdlib>
+#include <cstdio>
+#include <iostream>
+#include <algorithm>
+#include <sstream>
+
+namespace fs = std::filesystem;
 
 // ---------------------------------------------------------------------------
-// Zip helpers – use platform-native tools via QProcess so we don't need an
+// Zip helpers – use platform-native tools via system() so we don't need an
 // additional library dependency.
 //   Windows  : PowerShell Compress-Archive / Expand-Archive
-//              Paths are passed as PowerShell script variables to avoid any
-//              special-character injection in the -Command string.
-//   Linux/Mac: zip / unzip (paths passed as separate QProcess arguments)
+//   Linux/Mac: zip / unzip (paths passed as arguments)
 // ---------------------------------------------------------------------------
 
+#ifdef _WIN32
 // Escape a path for use in a PowerShell double-quoted string.
-// Only double-quotes and backticks need escaping inside "…".
-static QString escapePwshArg(const QString &path)
+static std::string escapePwshArg(const std::string &path)
 {
-    QString s = path;
-    s.replace(QLatin1Char('`'),  QStringLiteral("``"));
-    s.replace(QLatin1Char('"'),  QStringLiteral("`\""));
-    s.replace(QLatin1Char('$'),  QStringLiteral("`$"));
+    std::string s = path;
+    s = replaceAll(s, "`",  "``");
+    s = replaceAll(s, "\"", "`\"");
+    s = replaceAll(s, "$",  "`$");
     return s;
 }
+#endif
 
-bool BackupModule::createZip(const QString &sourceDir, const QString &destZip,
+static int runCommand(const std::string &cmd)
+{
+    return std::system(cmd.c_str());
+}
+
+bool BackupModule::createZip(const std::string &sourceDir, const std::string &destZip,
                              int compressionLevel)
 {
-    QFileInfo srcInfo(sourceDir);
-    if (!srcInfo.exists() || !srcInfo.isDir()) {
-        qWarning() << "BackupModule::createZip: source dir does not exist:" << sourceDir;
+    if (!fs::exists(sourceDir) || !fs::is_directory(sourceDir)) {
+        std::cerr << "BackupModule::createZip: source dir does not exist: " << sourceDir << "\n";
         return false;
     }
 
-    // Clamp to valid range
     if (compressionLevel < 0) compressionLevel = 0;
     if (compressionLevel > 9) compressionLevel = 9;
 
     // Ensure destination parent directory exists
-    QDir().mkpath(QFileInfo(destZip).absolutePath());
+    fs::create_directories(fs::path(destZip).parent_path());
 
-    QProcess process;
-#ifdef Q_OS_WIN
-    // Assign paths to PowerShell variables first to avoid injection.
-    // PowerShell Compress-Archive does not expose a compression level
-    // parameter, so we use the Optimal level when compressionLevel > 0
-    // and NoCompression (store only) when compressionLevel == 0.
-    QString levelArg = (compressionLevel == 0)
-                           ? QStringLiteral("NoCompression")
-                           : QStringLiteral("Optimal");
-    QString script = QStringLiteral(
-        "$src = \"%1\\*\"; $dst = \"%2\"; "
-        "Compress-Archive -LiteralPath $src -DestinationPath $dst -CompressionLevel %3 -Force")
-        .arg(escapePwshArg(QDir::toNativeSeparators(sourceDir)),
-             escapePwshArg(QDir::toNativeSeparators(destZip)),
-             levelArg);
-    QString cmd = QStringLiteral("powershell");
-    QStringList args = {
-        QStringLiteral("-NoProfile"),
-        QStringLiteral("-NonInteractive"),
-        QStringLiteral("-Command"),
-        script
-    };
+#ifdef _WIN32
+    std::string levelArg = (compressionLevel == 0) ? "NoCompression" : "Optimal";
+    std::string nativeSrc = fs::path(sourceDir).string();
+    std::string nativeDst = fs::path(destZip).string();
+    std::string script =
+        "$src = \"" + escapePwshArg(nativeSrc) + "\\*\"; "
+        "$dst = \"" + escapePwshArg(nativeDst) + "\"; "
+        "Compress-Archive -LiteralPath $src -DestinationPath $dst"
+        " -CompressionLevel " + levelArg + " -Force";
+    std::string cmd = "powershell -NoProfile -NonInteractive -Command \"" + script + "\"";
 #else
-    QString cmd = QStringLiteral("zip");
-    QStringList args = {
-        QStringLiteral("-r"),
-        QStringLiteral("-%1").arg(compressionLevel),
-        destZip,
-        QStringLiteral(".")
-    };
-    process.setWorkingDirectory(sourceDir);
+    std::string cmd = "cd " + sourceDir + " && zip -r -" + std::to_string(compressionLevel)
+                    + " " + destZip + " . 2>&1";
 #endif
-    process.start(cmd, args);
-    if (!process.waitForFinished(120000)) {
-        qWarning() << "BackupModule::createZip: process timed out";
-        return false;
-    }
-    if (process.exitCode() != 0) {
-        qWarning() << "BackupModule::createZip: process failed:"
-                   << process.readAllStandardError();
+    int ret = runCommand(cmd);
+    if (ret != 0) {
+        std::cerr << "BackupModule::createZip: process failed with exit code " << ret << "\n";
         return false;
     }
     return true;
 }
 
-bool BackupModule::extractZip(const QString &zipFile, const QString &destDir)
+bool BackupModule::extractZip(const std::string &zipFile, const std::string &destDir)
 {
-    QDir().mkpath(destDir);
+    fs::create_directories(destDir);
 
-    QProcess process;
-#ifdef Q_OS_WIN
-    QString script = QStringLiteral(
-        "$src = \"%1\"; $dst = \"%2\"; "
-        "Expand-Archive -LiteralPath $src -DestinationPath $dst -Force")
-        .arg(escapePwshArg(QDir::toNativeSeparators(zipFile)),
-             escapePwshArg(QDir::toNativeSeparators(destDir)));
-    QString cmd = QStringLiteral("powershell");
-    QStringList args = {
-        QStringLiteral("-NoProfile"),
-        QStringLiteral("-NonInteractive"),
-        QStringLiteral("-Command"),
-        script
-    };
+#ifdef _WIN32
+    std::string nativeSrc = fs::path(zipFile).string();
+    std::string nativeDst = fs::path(destDir).string();
+    std::string script =
+        "$src = \"" + escapePwshArg(nativeSrc) + "\"; "
+        "$dst = \"" + escapePwshArg(nativeDst) + "\"; "
+        "Expand-Archive -LiteralPath $src -DestinationPath $dst -Force";
+    std::string cmd = "powershell -NoProfile -NonInteractive -Command \"" + script + "\"";
 #else
-    QString cmd = QStringLiteral("unzip");
-    QStringList args = { QStringLiteral("-o"), zipFile, QStringLiteral("-d"), destDir };
+    std::string cmd = "unzip -o " + zipFile + " -d " + destDir + " 2>&1";
 #endif
-    process.start(cmd, args);
-    if (!process.waitForFinished(120000)) {
-        qWarning() << "BackupModule::extractZip: process timed out";
-        return false;
-    }
-    if (process.exitCode() != 0) {
-        qWarning() << "BackupModule::extractZip: process failed:"
-                   << process.readAllStandardError();
+    int ret = runCommand(cmd);
+    if (ret != 0) {
+        std::cerr << "BackupModule::extractZip: process failed with exit code " << ret << "\n";
         return false;
     }
     return true;
 }
 
-QString BackupModule::takeSnapshot(const ServerConfig &server)
+std::string BackupModule::takeSnapshot(const ServerConfig &server)
 {
-    QString timestamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss"));
-    QString base      = server.backupFolder + QDir::separator() + timestamp;
+    auto now = std::chrono::system_clock::now();
+    std::time_t t = std::chrono::system_clock::to_time_t(now);
+    std::tm tm{};
+#ifdef _WIN32
+    localtime_s(&tm, &t);
+#else
+    localtime_r(&t, &tm);
+#endif
+    char tsBuf[32];
+    std::strftime(tsBuf, sizeof(tsBuf), "%Y%m%d_%H%M%S", &tm);
+    std::string timestamp(tsBuf);
 
-    QDir().mkpath(server.backupFolder);
+    std::string base = (fs::path(server.backupFolder) / timestamp).string();
+    fs::create_directories(server.backupFolder);
 
     bool ok = true;
 
-    QString configDir = server.dir + QStringLiteral("/Configs");
-    if (QDir(configDir).exists())
-        ok &= createZip(configDir, base + QStringLiteral("_config.zip"), server.backupCompressionLevel);
+    std::string configDir = (fs::path(server.dir) / "Configs").string();
+    if (fs::exists(configDir))
+        ok &= createZip(configDir, base + "_config.zip", server.backupCompressionLevel);
 
-    QString mapDir = server.dir + QStringLiteral("/Maps");
-    if (QDir(mapDir).exists())
-        ok &= createZip(mapDir, base + QStringLiteral("_map.zip"), server.backupCompressionLevel);
+    std::string mapDir = (fs::path(server.dir) / "Maps").string();
+    if (fs::exists(mapDir))
+        ok &= createZip(mapDir, base + "_map.zip", server.backupCompressionLevel);
 
-    QString modsDir = server.dir + QStringLiteral("/Mods");
-    if (QDir(modsDir).exists())
-        ok &= createZip(modsDir, base + QStringLiteral("_mods.zip"), server.backupCompressionLevel);
+    std::string modsDir = (fs::path(server.dir) / "Mods").string();
+    if (fs::exists(modsDir))
+        ok &= createZip(modsDir, base + "_mods.zip", server.backupCompressionLevel);
 
     if (!ok) {
-        qWarning() << "BackupModule::takeSnapshot: one or more parts failed for" << server.name;
+        std::cerr << "BackupModule::takeSnapshot: one or more parts failed for " << server.name << "\n";
         return {};
     }
 
@@ -152,56 +134,53 @@ QString BackupModule::takeSnapshot(const ServerConfig &server)
     return timestamp;
 }
 
-bool BackupModule::restoreSnapshot(const QString &zipFile, const ServerConfig &server)
+bool BackupModule::restoreSnapshot(const std::string &zipFile, const ServerConfig &server)
 {
-    // Determine target sub-directory from zip file name suffix
-    QFileInfo fi(zipFile);
-    QString base = fi.completeBaseName(); // e.g. "20260301_120000_config"
+    fs::path p(zipFile);
+    std::string base = p.stem().string();  // e.g. "20260301_120000_config"
 
-    QString destDir;
-    if (base.endsWith(QLatin1String("_config")))
-        destDir = server.dir + QStringLiteral("/Configs");
-    else if (base.endsWith(QLatin1String("_map")))
-        destDir = server.dir + QStringLiteral("/Maps");
-    else if (base.endsWith(QLatin1String("_mods")))
-        destDir = server.dir + QStringLiteral("/Mods");
+    std::string destDir;
+    if (base.size() >= 7 && base.substr(base.size() - 7) == "_config")
+        destDir = (fs::path(server.dir) / "Configs").string();
+    else if (base.size() >= 4 && base.substr(base.size() - 4) == "_map")
+        destDir = (fs::path(server.dir) / "Maps").string();
+    else if (base.size() >= 5 && base.substr(base.size() - 5) == "_mods")
+        destDir = (fs::path(server.dir) / "Mods").string();
     else
         destDir = server.dir;
 
     return extractZip(zipFile, destDir);
 }
 
-QStringList BackupModule::listSnapshots(const ServerConfig &server)
+std::vector<std::string> BackupModule::listSnapshots(const ServerConfig &server)
 {
-    QDir dir(server.backupFolder);
-    if (!dir.exists())
+    if (!fs::exists(server.backupFolder))
         return {};
 
-    QStringList files = dir.entryList({ QStringLiteral("*.zip") },
-                                      QDir::Files, QDir::Name | QDir::Reversed);
-    QStringList result;
-    result.reserve(files.size());
-    for (const QString &f : std::as_const(files))
-        result << dir.absoluteFilePath(f);
+    std::vector<std::string> result;
+    for (const auto &entry : fs::directory_iterator(server.backupFolder)) {
+        if (entry.is_regular_file() && entry.path().extension() == ".zip")
+            result.push_back(fs::absolute(entry.path()).string());
+    }
+    // Sort newest-first (reverse alphabetical)
+    std::sort(result.begin(), result.end(), std::greater<std::string>());
     return result;
 }
 
 void BackupModule::rotateBackups(const ServerConfig &server)
 {
-    // Group files by type suffix and keep only keepBackups of each
-    QStringList all = listSnapshots(server);
-    QStringList types = { QStringLiteral("_config.zip"),
-                          QStringLiteral("_map.zip"),
-                          QStringLiteral("_mods.zip") };
+    std::vector<std::string> all = listSnapshots(server);
+    std::vector<std::string> types = { "_config.zip", "_map.zip", "_mods.zip" };
 
-    for (const QString &suffix : std::as_const(types)) {
-        QStringList typed;
-        for (const QString &f : std::as_const(all)) {
-            if (f.endsWith(suffix))
-                typed << f;
+    for (const std::string &suffix : types) {
+        std::vector<std::string> typed;
+        for (const std::string &f : all) {
+            if (f.size() >= suffix.size() &&
+                f.substr(f.size() - suffix.size()) == suffix)
+                typed.push_back(f);
         }
         // Already sorted newest-first
-        for (int i = server.keepBackups; i < typed.size(); ++i)
-            QFile::remove(typed.at(i));
+        for (int i = server.keepBackups; i < static_cast<int>(typed.size()); ++i)
+            fs::remove(typed[i]);
     }
 }

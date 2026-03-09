@@ -1,38 +1,41 @@
 #include "SteamCmdModule.hpp"
 
-#include <QDir>
-#include <QProcess>
-#include <QDebug>
+#include <filesystem>
+#include <cstdio>
+#include <iostream>
+#include <sstream>
 
-SteamCmdModule::SteamCmdModule(QObject *parent) : QObject(parent)
+namespace fs = std::filesystem;
+
+SteamCmdModule::SteamCmdModule()
 {
-#ifdef Q_OS_WIN
-    m_steamCmdPath = QStringLiteral("steamcmd.exe");
+#ifdef _WIN32
+    m_steamCmdPath = "steamcmd.exe";
 #else
-    m_steamCmdPath = QStringLiteral("steamcmd");
+    m_steamCmdPath = "steamcmd";
 #endif
 }
 
-void SteamCmdModule::setSteamCmdPath(const QString &path)
+void SteamCmdModule::setSteamCmdPath(const std::string &path)
 {
     m_steamCmdPath = path;
 }
 
-QString SteamCmdModule::steamCmdPath() const
+std::string SteamCmdModule::steamCmdPath() const
 {
     return m_steamCmdPath;
 }
 
 void SteamCmdModule::deployServer(const ServerConfig &server)
 {
-    QDir().mkpath(server.dir);
+    fs::create_directories(server.dir);
 
-    QStringList args = {
-        QStringLiteral("+login"),    QStringLiteral("anonymous"),
-        QStringLiteral("+force_install_dir"), server.dir,
-        QStringLiteral("+app_update"), QString::number(server.appid),
-        QStringLiteral("validate"),
-        QStringLiteral("+quit")
+    std::vector<std::string> args = {
+        "+login",    "anonymous",
+        "+force_install_dir", server.dir,
+        "+app_update", std::to_string(server.appid),
+        "validate",
+        "+quit"
     };
     runSteamCmd(args);
 }
@@ -49,36 +52,42 @@ bool SteamCmdModule::updateMods(const ServerConfig &server)
 
 bool SteamCmdModule::downloadMod(int appid, int modId)
 {
-    QStringList args = {
-        QStringLiteral("+login"),    QStringLiteral("anonymous"),
-        QStringLiteral("+workshop_download_item"),
-        QString::number(appid), QString::number(modId),
-        QStringLiteral("+quit")
+    std::vector<std::string> args = {
+        "+login",    "anonymous",
+        "+workshop_download_item",
+        std::to_string(appid), std::to_string(modId),
+        "+quit"
     };
     return runSteamCmd(args);
 }
 
-bool SteamCmdModule::runSteamCmd(const QStringList &args)
+bool SteamCmdModule::runSteamCmd(const std::vector<std::string> &args)
 {
-    QProcess process;
-    process.setProgram(m_steamCmdPath);
-    process.setArguments(args);
-    process.setProcessChannelMode(QProcess::MergedChannels);
+    // Build command line
+    std::string cmd = m_steamCmdPath;
+    for (const auto &arg : args)
+        cmd += " " + arg;
+    cmd += " 2>&1";
 
-    process.start();
-    while (process.waitForReadyRead(5000)) {
-        while (process.canReadLine()) {
-            QString line = QString::fromLocal8Bit(process.readLine()).trimmed();
-            emit outputLine(line);
-        }
+    FILE *pipe = popen(cmd.c_str(), "r");
+    if (!pipe) {
+        if (onOutputLine) onOutputLine("Failed to launch SteamCMD");
+        if (onFinished) onFinished(false);
+        return false;
     }
-    // Drain any remaining output
-    QByteArray remaining = process.readAll();
-    if (!remaining.isEmpty())
-        emit outputLine(QString::fromLocal8Bit(remaining).trimmed());
 
-    process.waitForFinished(-1);
-    bool ok = process.exitCode() == 0;
-    emit finished(ok);
+    char buffer[512];
+    while (fgets(buffer, sizeof(buffer), pipe)) {
+        std::string line(buffer);
+        // Trim trailing newline
+        while (!line.empty() && (line.back() == '\n' || line.back() == '\r'))
+            line.pop_back();
+        if (!line.empty() && onOutputLine)
+            onOutputLine(line);
+    }
+
+    int status = pclose(pipe);
+    bool ok = (status == 0);
+    if (onFinished) onFinished(ok);
     return ok;
 }

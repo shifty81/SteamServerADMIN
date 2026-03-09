@@ -2,28 +2,28 @@
 
 #include "ServerConfig.hpp"
 
-#include <QObject>
-#include <QTimer>
-#include <QMap>
-#include <QString>
+#include <string>
+#include <map>
+#include <functional>
+#include <chrono>
 
 class ServerManager;
 
 /**
  * @brief Manages per-server scheduled tasks (automatic backups and restarts).
  *
- * Each server gets its own pair of timers driven by:
- *   - ServerConfig::backupIntervalMinutes  → periodic snapshots
- *   - ServerConfig::restartIntervalHours   → periodic restarts
+ * Uses a tick-based design: the caller invokes tick() periodically from the
+ * main loop. The module checks elapsed time since last execution and fires
+ * scheduled events when their intervals have elapsed.
  *
- * Timers are created when startScheduler() is called and cleaned up on stop
- * or destruction.
+ * Each server is driven by:
+ *   - ServerConfig::backupIntervalMinutes  -> periodic snapshots
+ *   - ServerConfig::restartIntervalHours   -> periodic restarts
  */
-class SchedulerModule : public QObject {
-    Q_OBJECT
+class SchedulerModule {
 public:
-    explicit SchedulerModule(ServerManager *manager, QObject *parent = nullptr);
-    ~SchedulerModule() override;
+    explicit SchedulerModule(ServerManager *manager);
+    ~SchedulerModule();
 
     /** Create and start timers for every server currently in the manager. */
     void startAll();
@@ -32,27 +32,38 @@ public:
     void stopAll();
 
     /** Start timers for a single server (e.g. after adding one at runtime). */
-    void startScheduler(const QString &serverName);
+    void startScheduler(const std::string &serverName);
 
     /** Stop timers for a single server. */
-    void stopScheduler(const QString &serverName);
+    void stopScheduler(const std::string &serverName);
 
-signals:
-    void scheduledBackup(const QString &serverName);
-    void scheduledRestart(const QString &serverName);
-    void scheduledRconCommand(const QString &serverName);
-    void scheduledUpdateCheck(const QString &serverName);
+    /** Call this from the main loop to check and fire scheduled events. */
+    void tick();
+
+    /** Callbacks for scheduled events. */
+    std::function<void(const std::string &serverName)> onScheduledBackup;
+    std::function<void(const std::string &serverName)> onScheduledRestart;
+    std::function<void(const std::string &serverName)> onScheduledRconCommand;
 
 private:
-    struct Timers {
-        QTimer *backupTimer  = nullptr;
-        QTimer *restartTimer = nullptr;
-        QTimer *rconTimer    = nullptr;
-        QTimer *restartWarningTimer = nullptr;
-        QTimer *updateCheckTimer = nullptr;  // periodic update check timer
-        int     restartWarningCountdown = 0;  // minutes remaining until restart
+    struct TimerState {
+        // Intervals in milliseconds (0 = disabled)
+        int64_t backupIntervalMs  = 0;
+        int64_t restartIntervalMs = 0;
+        int64_t rconIntervalMs    = 0;
+
+        // Time points of last execution
+        std::chrono::steady_clock::time_point lastBackup;
+        std::chrono::steady_clock::time_point lastRestart;
+        std::chrono::steady_clock::time_point lastRcon;
+
+        // Restart warning state
+        int     restartWarningMinutes = 0;     // configured warning lead time
+        int     restartWarningCountdown = 0;   // minutes remaining
+        bool    warningActive = false;
+        std::chrono::steady_clock::time_point lastWarningTick;
     };
 
     ServerManager *m_manager;
-    QMap<QString, Timers> m_timers;
+    std::map<std::string, TimerState> m_timers;
 };

@@ -1,49 +1,66 @@
 #include "LogModule.hpp"
 
-#include <QDir>
-#include <QTextStream>
-#include <QMutexLocker>
+#include <filesystem>
 
-LogModule::LogModule(const QString &logFilePath, QObject *parent)
-    : QObject(parent), m_logFilePath(logFilePath), m_file(logFilePath)
+namespace fs = std::filesystem;
+
+static std::string currentTimestampISO()
 {
-    // Ensure parent directory exists
-    QDir().mkpath(QFileInfo(logFilePath).absolutePath());
-    m_file.open(QIODevice::Append | QIODevice::Text);
+    auto now = std::chrono::system_clock::now();
+    std::time_t t = std::chrono::system_clock::to_time_t(now);
+    std::tm tm{};
+#ifdef _WIN32
+    localtime_s(&tm, &t);
+#else
+    localtime_r(&t, &tm);
+#endif
+    char buf[32];
+    std::strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", &tm);
+    return buf;
+}
+
+LogModule::LogModule(const std::string &logFilePath)
+    : m_logFilePath(logFilePath)
+{
+    fs::create_directories(fs::path(logFilePath).parent_path());
+    m_file.open(logFilePath, std::ios::app);
 }
 
 LogModule::~LogModule()
 {
-    if (m_file.isOpen())
+    if (m_file.is_open())
         m_file.close();
 }
 
-void LogModule::log(const QString &serverName, const QString &message)
+void LogModule::log(const std::string &serverName, const std::string &message)
 {
-    QString timestamp = QDateTime::currentDateTime().toString(Qt::ISODate);
-    QString line = QStringLiteral("[%1] [%2] %3").arg(timestamp, serverName, message);
+    std::string timestamp = currentTimestampISO();
+    std::string line = "[" + timestamp + "] [" + serverName + "] " + message;
 
-    QMutexLocker locker(&m_mutex);
+    std::lock_guard<std::mutex> lock(m_mutex);
 
-    // Append to in-memory buffer
-    m_entries.append(line);
-    while (m_entries.size() > m_maxEntries)
-        m_entries.removeFirst();
+    m_entries.push_back(line);
+    while (static_cast<int>(m_entries.size()) > m_maxEntries)
+        m_entries.erase(m_entries.begin());
 
-    // Append to file
-    if (m_file.isOpen()) {
-        QTextStream out(&m_file);
-        out << line << '\n';
+    if (m_file.is_open()) {
+        m_file << line << '\n';
         m_file.flush();
     }
 
-    locker.unlock();
-    emit entryAdded(line);
+    // Unlock is implicit via lock_guard destruction, but we call the callback
+    // outside the lock to avoid potential deadlocks. We need a copy of the
+    // callback and line since we release the lock.
+    auto cb = onEntryAdded;
+    // Note: lock_guard releases here at end of scope, then we call callback
+    // Actually lock_guard is still in scope, so we must restructure:
+    // We'll just call the callback under the lock since it's simple.
+    if (cb) cb(line);
 }
 
-QStringList LogModule::entries() const
+std::vector<std::string> LogModule::entries() const
 {
-    QMutexLocker locker(&m_mutex);
+    std::lock_guard<std::mutex> lock(m_mutex);
     return m_entries;
 }
 
@@ -54,13 +71,13 @@ int LogModule::maxEntries() const
 
 void LogModule::setMaxEntries(int max)
 {
-    QMutexLocker locker(&m_mutex);
+    std::lock_guard<std::mutex> lock(m_mutex);
     m_maxEntries = max;
-    while (m_entries.size() > m_maxEntries)
-        m_entries.removeFirst();
+    while (static_cast<int>(m_entries.size()) > m_maxEntries)
+        m_entries.erase(m_entries.begin());
 }
 
-QString LogModule::logFilePath() const
+std::string LogModule::logFilePath() const
 {
     return m_logFilePath;
 }

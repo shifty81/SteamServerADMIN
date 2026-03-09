@@ -1,36 +1,31 @@
 #pragma once
 
-#include <QObject>
-#include <QString>
-#include <QNetworkAccessManager>
+#include <string>
+#include <functional>
 
 /**
  * @brief Sends HTTP POST requests to Discord webhook URLs for event notifications.
  *
- * Notifications are non-blocking (fire-and-forget).
+ * Notifications are non-blocking (fire-and-forget via a detached curl process).
  * An optional message template may contain placeholders:
- *   {server}    – server name
- *   {event}     – event description
- *   {timestamp} – current date/time (ISO 8601)
+ *   {server}    - server name
+ *   {event}     - event description
+ *   {timestamp} - current date/time (ISO 8601)
  */
-class WebhookModule : public QObject {
-    Q_OBJECT
+class WebhookModule {
 public:
-    explicit WebhookModule(QObject *parent = nullptr);
+    WebhookModule() = default;
 
     /** Send a notification to a Discord webhook. Non-blocking.
      *  @param messageTemplate  Optional custom template.  If empty, the
      *         default format "**[{server}]** {event}" is used. */
-    void sendNotification(const QString &webhookUrl,
-                          const QString &serverName,
-                          const QString &message,
-                          const QString &messageTemplate = QString());
+    void sendNotification(const std::string &webhookUrl,
+                          const std::string &serverName,
+                          const std::string &message,
+                          const std::string &messageTemplate = "");
 
     /** Format a message using the template string. Exposed for testing. */
-    static QString formatMessage(const QString &tpl,
-                                 const QString &serverName,
-                                 const QString &event);
-
-private:
-    QNetworkAccessManager *m_nam;
+    static std::string formatMessage(const std::string &tpl,
+                                     const std::string &serverName,
+                                     const std::string &event);
 };

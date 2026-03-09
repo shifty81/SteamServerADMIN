@@ -1,23 +1,39 @@
 #pragma once
 
-#include <QObject>
-#include <QTcpSocket>
-#include <QByteArray>
-#include <QString>
+#include <string>
+#include <vector>
+#include <cstdint>
+#include <functional>
+
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#pragma comment(lib, "ws2_32.lib")
+using SocketType = SOCKET;
+constexpr SocketType kInvalidSocket = INVALID_SOCKET;
+#else
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <netdb.h>
+#include <unistd.h>
+#include <poll.h>
+using SocketType = int;
+constexpr SocketType kInvalidSocket = -1;
+#endif
 
 /**
  * @brief Implements the Valve Source RCON protocol.
  *
  * https://developer.valvesoftware.com/wiki/Source_RCON_Protocol
  */
-class RconClient : public QObject {
-    Q_OBJECT
+class RconClient {
 public:
-    explicit RconClient(QObject *parent = nullptr);
-    ~RconClient() override;
+    RconClient();
+    ~RconClient();
 
-    bool connect(const QString &host, int port, const QString &password,
-                 int timeoutMs = 5000);
+    bool connectToServer(const std::string &host, int port, const std::string &password,
+                         int timeoutMs = 5000);
     void disconnect();
     bool isConnected() const;
 
@@ -25,10 +41,10 @@ public:
      * @brief Send an RCON command and return the response.
      * @return Response string, or empty string on error.
      */
-    QString sendCommand(const QString &command, int timeoutMs = 5000);
+    std::string sendCommand(const std::string &command, int timeoutMs = 5000);
 
-signals:
-    void errorOccurred(const QString &message);
+    /** Callback invoked when an error occurs. */
+    std::function<void(const std::string &message)> onError;
 
 private:
     // RCON packet types
@@ -36,19 +52,29 @@ private:
     static constexpr int SERVERDATA_AUTH_RESPONSE  = 2;
     static constexpr int SERVERDATA_EXECCOMMAND    = 2;
     static constexpr int SERVERDATA_RESPONSE_VALUE = 0;
-    // Source RCON spec: max body is 4096 bytes; total packet ≤ 4110 bytes.
     static constexpr int MAX_RCON_PACKET_SIZE      = 4110;
 
     struct Packet {
         int id;
         int type;
-        QByteArray body;
+        std::vector<uint8_t> body;
     };
 
     bool sendPacket(const Packet &pkt);
     bool recvPacket(Packet &pkt, int timeoutMs);
-    QByteArray buildRawPacket(const Packet &pkt) const;
+    std::vector<uint8_t> buildRawPacket(const Packet &pkt) const;
 
-    QTcpSocket *m_socket = nullptr;
+    bool waitForData(int timeoutMs);
+    int socketSend(const void *data, int len);
+    int socketRecv(void *buf, int len);
+    void emitError(const std::string &msg);
+
+    SocketType m_socket = kInvalidSocket;
     int m_nextId = 1;
+    bool m_connected = false;
+
+#ifdef _WIN32
+    static bool s_wsaInitialized;
+    static void ensureWSA();
+#endif
 };
