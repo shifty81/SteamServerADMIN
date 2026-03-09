@@ -1,6 +1,6 @@
 # SSA – Steam Server ADMIN
 
-A cross-platform Qt6 desktop application for managing SteamCMD-based game servers (ARK, CS2, Rust, Valheim, and any other Steam dedicated server).
+A cross-platform Dear ImGui / GLFW desktop application for managing SteamCMD-based game servers (ARK, CS2, Rust, Valheim, and any other Steam dedicated server).
 
 ---
 
@@ -76,15 +76,16 @@ A cross-platform Qt6 desktop application for managing SteamCMD-based game server
 
 ### Prerequisites
 
-- Qt 6.4+ (Core, Widgets, Network)
 - CMake 3.22+
 - A C++20 compiler (GCC 12+, Clang 15+, MSVC 2022+)
+- OpenGL development libraries (system-provided)
+- GLFW, Dear ImGui, nlohmann/json, Google Test (fetched automatically by CMake)
 - `zip` / `unzip` (Linux/macOS) **or** PowerShell (Windows) for backup compression
 - [SteamCMD](https://developer.valvesoftware.com/wiki/SteamCMD) on your `PATH` (or configure the path inside the app)
 
 ### Automated Build (recommended)
 
-The build scripts automatically detect or install Qt6 and compile the project:
+The build scripts compile the project and run tests:
 
 **Linux / macOS:**
 
@@ -102,10 +103,9 @@ The build scripts automatically detect or install Qt6 and compile the project:
 
 The scripts will:
 1. Check for CMake
-2. Detect Qt6 — install it automatically if missing (apt/dnf/pacman/brew)
-3. Configure and build the project
-4. Run tests if available
-5. Write all output to the `logs/` directory in the project root
+2. Configure and build the project (dependencies are fetched automatically via CMake FetchContent)
+3. Run tests if available
+4. Write all output to the `logs/` directory in the project root
 
 ### Build Logs
 
@@ -126,13 +126,6 @@ If you prefer to build manually, or the scripts do not suit your setup:
 ```bash
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
-```
-
-On Windows, if Qt6 is not on the default search path, pass its location:
-
-```powershell
-cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="C:\Qt\6.x.x\msvc20xx_64"
-cmake --build build --config Release
 ```
 
 ### CMake Presets
@@ -211,7 +204,7 @@ Adding a new server = append a new object and restart, **or** use the **＋ Add 
 ```
 SSA/
 ├── src/
-│   ├── main.cpp              # Qt entry point
+│   ├── main.cpp              # GLFW/ImGui entry point
 │   ├── MainWindow.*          # Main window, sidebar, tab management
 │   ├── HomeDashboard.*       # Landing dashboard with server health & players
 │   ├── ServerTabWidget.*     # Per-server tabs (Overview/Config/Mods/Backups/Console/Logs)
@@ -228,7 +221,7 @@ SSA/
 │   ├── ResourceMonitor.*     # Per-process CPU/memory usage monitoring
 │   └── EventHookManager.*    # Custom script execution on server events
 ├── tests/
-│   └── test_serverconfig.cpp # Qt Test unit tests
+│   └── test_serverconfig.cpp # Google Test unit tests
 ├── CMakeLists.txt
 ├── servers.json              # Example server configuration
 └── README.md

@@ -1,962 +1,471 @@
 #include "ServerTabWidget.hpp"
-
-#include <QVBoxLayout>
-#include <QHBoxLayout>
-#include <QTabWidget>
-#include <QLabel>
-#include <QPushButton>
-#include <QTextEdit>
-#include <QLineEdit>
-#include <QTableWidget>
-#include <QListWidget>
-#include <QHeaderView>
-#include <QFileDialog>
-#include <QInputDialog>
-#include <QMessageBox>
-#include <QFile>
-#include <QFileInfo>
-#include <QDir>
-#include <QTimer>
-#include <QScrollBar>
-#include <QGroupBox>
-#include <QKeyEvent>
-#include <QCheckBox>
-#include <QSpinBox>
-#include <QFormLayout>
-#include <QScrollArea>
-
-// ---------------------------------------------------------------------------
-
-ServerTabWidget::ServerTabWidget(ServerManager *manager,
-                                 ServerConfig  &server,
-                                 QWidget       *parent)
-    : QWidget(parent), m_manager(manager), m_server(server)
-{
-    auto *outerLayout = new QVBoxLayout(this);
-    outerLayout->setContentsMargins(0, 0, 0, 0);
-
-    auto *tabs = new QTabWidget(this);
-    outerLayout->addWidget(tabs);
-
-    buildOverviewTab(tabs);
-    buildSettingsTab(tabs);
-    buildConfigTab(tabs);
-    buildModsTab(tabs);
-    buildBackupsTab(tabs);
-    buildConsoleTab(tabs);
-    buildLogsTab(tabs);
-
-    // Connect log messages from manager to console
-    connect(m_manager, &ServerManager::logMessage,
-            this, [this](const QString &serverName, const QString &msg) {
-                if (serverName == m_server.name)
-                    appendConsole(msg);
-            });
-
-    // Periodic status refresh
-    m_statusTimer = new QTimer(this);
-    connect(m_statusTimer, &QTimer::timeout, this, &ServerTabWidget::refreshStatus);
-    m_statusTimer->start(5000);
-}
-
-const QString &ServerTabWidget::serverName() const { return m_server.name; }
-
-// ---------------------------------------------------------------------------
-// Tab builders
-// ---------------------------------------------------------------------------
-
-void ServerTabWidget::buildOverviewTab(QTabWidget *tabs)
-{
-    auto *w      = new QWidget(tabs);
-    auto *layout = new QVBoxLayout(w);
-
-    auto *statusBox = new QGroupBox(tr("Status"), w);
-    auto *sbLayout  = new QHBoxLayout(statusBox);
-
-    m_statusLight  = new QLabel(QStringLiteral("⬜"), statusBox);
-    m_statusLight->setStyleSheet(QStringLiteral("font-size:24px;"));
-    m_playersLabel = new QLabel(tr("Players: –"), statusBox);
-    m_playersLabel->setStyleSheet(QStringLiteral("font-size:14px;"));
-    m_uptimeLabel  = new QLabel(tr("Uptime: –"), statusBox);
-    m_uptimeLabel->setStyleSheet(QStringLiteral("font-size:14px;"));
-
-    sbLayout->addWidget(m_statusLight);
-    sbLayout->addWidget(m_playersLabel);
-    sbLayout->addWidget(m_uptimeLabel);
-    sbLayout->addStretch();
-    layout->addWidget(statusBox);
-
-    auto *actBox = new QGroupBox(tr("Server Control"), w);
-    auto *actLayout = new QHBoxLayout(actBox);
-
-    auto *startBtn   = new QPushButton(tr("▶  Start"),   actBox);
-    auto *stopBtn    = new QPushButton(tr("■  Stop"),    actBox);
-    auto *restartBtn = new QPushButton(tr("↺  Restart"), actBox);
-    auto *deployBtn  = new QPushButton(tr("⬇  Deploy / Update"), actBox);
-
-    actLayout->addWidget(startBtn);
-    actLayout->addWidget(stopBtn);
-    actLayout->addWidget(restartBtn);
-    actLayout->addWidget(deployBtn);
-    actLayout->addStretch();
-    layout->addWidget(actBox);
-
-    // Server notes
-    auto *notesBox    = new QGroupBox(tr("Notes"), w);
-    auto *notesLayout = new QVBoxLayout(notesBox);
-
-    auto *notesEdit = new QTextEdit(notesBox);
-    notesEdit->setFont(QFont(QStringLiteral("Monospace"), 9));
-    notesEdit->setPlaceholderText(tr("Enter notes about this server…"));
-    notesEdit->setMaximumHeight(120);
-    notesEdit->setPlainText(m_server.notes);
-    notesLayout->addWidget(notesEdit);
-
-    auto *saveNotesBtn = new QPushButton(tr("Save Notes"), notesBox);
-    notesLayout->addWidget(saveNotesBtn);
-    layout->addWidget(notesBox);
-
-    // Auto-start on launch checkbox
-    auto *autoStartCheck = new QCheckBox(tr("Auto-start on launch"), w);
-    autoStartCheck->setChecked(m_server.autoStartOnLaunch);
-    layout->addWidget(autoStartCheck);
-
-    connect(autoStartCheck, &QCheckBox::toggled, this, [this](bool checked) {
-        m_server.autoStartOnLaunch = checked;
-        m_manager->saveConfig();
-        appendConsole(checked ? tr("[SSA] Auto-start on launch enabled.")
-                              : tr("[SSA] Auto-start on launch disabled."));
-    });
-
-    connect(saveNotesBtn, &QPushButton::clicked, this, [this, notesEdit]() {
-        m_server.notes = notesEdit->toPlainText();
-        m_manager->saveConfig();
-        appendConsole(tr("[SSA] Notes saved."));
-    });
-
-    layout->addStretch();
-
-    connect(startBtn,   &QPushButton::clicked, this, [this]() { m_manager->startServer(m_server);   });
-    connect(stopBtn,    &QPushButton::clicked, this, [this]() { m_manager->stopServer(m_server);    });
-    connect(restartBtn, &QPushButton::clicked, this, [this]() { m_manager->restartServer(m_server); });
-    connect(deployBtn,  &QPushButton::clicked, this, &ServerTabWidget::onDeployServer);
-
-    tabs->addTab(w, tr("Overview"));
-}
-
-void ServerTabWidget::buildSettingsTab(QTabWidget *tabs)
-{
-    auto *w = new QWidget(tabs);
-    auto *outerLayout = new QVBoxLayout(w);
-
-    auto *scroll = new QScrollArea(w);
-    scroll->setWidgetResizable(true);
-    auto *scrollContent = new QWidget(scroll);
-    auto *form = new QFormLayout(scrollContent);
-    form->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
-
-    // ---- Server Identity ----
-    auto *nameEdit = new QLineEdit(m_server.name, scrollContent);
-    form->addRow(tr("Server Name:"), nameEdit);
-
-    auto *appidSpin = new QSpinBox(scrollContent);
-    appidSpin->setRange(1, 9999999);
-    appidSpin->setValue(m_server.appid);
-    form->addRow(tr("Steam AppID:"), appidSpin);
-
-    auto *dirEdit = new QLineEdit(m_server.dir, scrollContent);
-    form->addRow(tr("Install Directory:"), dirEdit);
-
-    auto *exeEdit = new QLineEdit(m_server.executable, scrollContent);
-    form->addRow(tr("Executable:"), exeEdit);
-
-    auto *argsEdit = new QLineEdit(m_server.launchArgs, scrollContent);
-    form->addRow(tr("Launch Arguments:"), argsEdit);
-
-    // ---- RCON ----
-    auto *rconHostEdit = new QLineEdit(m_server.rcon.host, scrollContent);
-    form->addRow(tr("RCON Host:"), rconHostEdit);
-
-    auto *rconPortSpin = new QSpinBox(scrollContent);
-    rconPortSpin->setRange(1, 65535);
-    rconPortSpin->setValue(m_server.rcon.port);
-    form->addRow(tr("RCON Port:"), rconPortSpin);
-
-    auto *rconPassEdit = new QLineEdit(m_server.rcon.password, scrollContent);
-    rconPassEdit->setEchoMode(QLineEdit::Password);
-    form->addRow(tr("RCON Password:"), rconPassEdit);
-
-    // ---- Paths ----
-    auto *backupDirEdit = new QLineEdit(m_server.backupFolder, scrollContent);
-    form->addRow(tr("Backup Folder:"), backupDirEdit);
-
-    // ---- Players ----
-    auto *maxPlayersSpin = new QSpinBox(scrollContent);
-    maxPlayersSpin->setRange(0, 9999);
-    maxPlayersSpin->setSpecialValueText(tr("Unlimited"));
-    maxPlayersSpin->setValue(m_server.maxPlayers);
-    form->addRow(tr("Max Players (0 = unlimited):"), maxPlayersSpin);
-
-    // ---- Automation ----
-    auto *autoUpdateCheck = new QCheckBox(scrollContent);
-    autoUpdateCheck->setChecked(m_server.autoUpdate);
-    form->addRow(tr("Auto-update mods on start:"), autoUpdateCheck);
-
-    auto *autoStartCheck = new QCheckBox(scrollContent);
-    autoStartCheck->setChecked(m_server.autoStartOnLaunch);
-    form->addRow(tr("Auto-start on launch:"), autoStartCheck);
-
-    auto *favoriteCheck = new QCheckBox(scrollContent);
-    favoriteCheck->setChecked(m_server.favorite);
-    form->addRow(tr("Favorite (pinned):"), favoriteCheck);
-
-    // ---- Intervals ----
-    auto *backupIntervalSpin = new QSpinBox(scrollContent);
-    backupIntervalSpin->setRange(0, 99999);
-    backupIntervalSpin->setSuffix(tr(" min"));
-    backupIntervalSpin->setValue(m_server.backupIntervalMinutes);
-    form->addRow(tr("Backup Interval:"), backupIntervalSpin);
-
-    auto *restartIntervalSpin = new QSpinBox(scrollContent);
-    restartIntervalSpin->setRange(0, 9999);
-    restartIntervalSpin->setSuffix(tr(" hrs"));
-    restartIntervalSpin->setValue(m_server.restartIntervalHours);
-    form->addRow(tr("Restart Interval:"), restartIntervalSpin);
-
-    auto *keepBackupsSpin = new QSpinBox(scrollContent);
-    keepBackupsSpin->setRange(0, 9999);
-    keepBackupsSpin->setValue(m_server.keepBackups);
-    form->addRow(tr("Keep Backups:"), keepBackupsSpin);
-
-    auto *compressionSpin = new QSpinBox(scrollContent);
-    compressionSpin->setRange(0, 9);
-    compressionSpin->setValue(m_server.backupCompressionLevel);
-    form->addRow(tr("Backup Compression (0-9):"), compressionSpin);
-
-    // ---- Maintenance window ----
-    auto *maintStartSpin = new QSpinBox(scrollContent);
-    maintStartSpin->setRange(-1, 23);
-    maintStartSpin->setSpecialValueText(tr("Disabled"));
-    maintStartSpin->setValue(m_server.maintenanceStartHour);
-    form->addRow(tr("Maintenance Start Hour (-1=off):"), maintStartSpin);
-
-    auto *maintEndSpin = new QSpinBox(scrollContent);
-    maintEndSpin->setRange(-1, 23);
-    maintEndSpin->setSpecialValueText(tr("Disabled"));
-    maintEndSpin->setValue(m_server.maintenanceEndHour);
-    form->addRow(tr("Maintenance End Hour (-1=off):"), maintEndSpin);
-
-    // ---- Restart warning ----
-    auto *restartWarnSpin = new QSpinBox(scrollContent);
-    restartWarnSpin->setRange(0, 120);
-    restartWarnSpin->setSuffix(tr(" min"));
-    restartWarnSpin->setValue(m_server.restartWarningMinutes);
-    form->addRow(tr("Restart Warning Time:"), restartWarnSpin);
-
-    auto *restartWarnMsgEdit = new QLineEdit(m_server.restartWarningMessage, scrollContent);
-    restartWarnMsgEdit->setPlaceholderText(
-        tr("Server will restart in {minutes} minute(s). Please save your progress."));
-    form->addRow(tr("Restart Warning Message:"), restartWarnMsgEdit);
-
-    // ---- Discord ----
-    auto *webhookUrlEdit = new QLineEdit(m_server.discordWebhookUrl, scrollContent);
-    webhookUrlEdit->setPlaceholderText(tr("https://discord.com/api/webhooks/..."));
-    form->addRow(tr("Discord Webhook URL:"), webhookUrlEdit);
-
-    auto *webhookTplEdit = new QLineEdit(m_server.webhookTemplate, scrollContent);
-    webhookTplEdit->setPlaceholderText(tr("{server} {event} {timestamp}"));
-    form->addRow(tr("Webhook Template:"), webhookTplEdit);
-
-    // ---- Console logging ----
-    auto *consoleLogCheck = new QCheckBox(scrollContent);
-    consoleLogCheck->setChecked(m_server.consoleLogging);
-    form->addRow(tr("Console Logging:"), consoleLogCheck);
-
-    // ---- Scheduled RCON ----
-    auto *rconIntervalSpin = new QSpinBox(scrollContent);
-    rconIntervalSpin->setRange(0, 99999);
-    rconIntervalSpin->setSuffix(tr(" min"));
-    rconIntervalSpin->setValue(m_server.rconCommandIntervalMinutes);
-    form->addRow(tr("RCON Command Interval:"), rconIntervalSpin);
-
-    // ---- Server Group ----
-    auto *groupEdit = new QLineEdit(m_server.group, scrollContent);
-    groupEdit->setPlaceholderText(tr("e.g. Production, Testing, ARK Cluster"));
-    form->addRow(tr("Server Group:"), groupEdit);
-
-    // ---- Startup Priority ----
-    auto *startupPrioritySpin = new QSpinBox(scrollContent);
-    startupPrioritySpin->setRange(0, 9999);
-    startupPrioritySpin->setValue(m_server.startupPriority);
-    form->addRow(tr("Startup Priority (0 = default):"), startupPrioritySpin);
-
-    // ---- Auto-backup before restart ----
-    auto *backupBeforeRestartCheck = new QCheckBox(scrollContent);
-    backupBeforeRestartCheck->setChecked(m_server.backupBeforeRestart);
-    form->addRow(tr("Backup before restart:"), backupBeforeRestartCheck);
-
-    // ---- Graceful shutdown timeout ----
-    auto *gracefulShutdownSpin = new QSpinBox(scrollContent);
-    gracefulShutdownSpin->setRange(0, 600);
-    gracefulShutdownSpin->setSuffix(tr(" sec"));
-    gracefulShutdownSpin->setValue(m_server.gracefulShutdownSeconds);
-    form->addRow(tr("Graceful Shutdown Timeout:"), gracefulShutdownSpin);
-
-    // ---- Auto-update check interval ----
-    auto *updateCheckSpin = new QSpinBox(scrollContent);
-    updateCheckSpin->setRange(0, 1440);
-    updateCheckSpin->setSuffix(tr(" min"));
-    updateCheckSpin->setSpecialValueText(tr("Disabled"));
-    updateCheckSpin->setValue(m_server.autoUpdateCheckIntervalMinutes);
-    form->addRow(tr("Auto-Update Check Interval:"), updateCheckSpin);
-
-    // ---- Server statistics (read-only) ----
-    auto *statsLabel = new QLabel(scrollContent);
-    auto formatUptime = [](qint64 secs) -> QString {
-        if (secs <= 0) return QStringLiteral("0s");
-        int d = static_cast<int>(secs / 86400);
-        int h = static_cast<int>((secs % 86400) / 3600);
-        int m = static_cast<int>((secs % 3600) / 60);
-        QString result;
-        if (d > 0) result += QStringLiteral("%1d ").arg(d);
-        if (h > 0) result += QStringLiteral("%1h ").arg(h);
-        result += QStringLiteral("%1m").arg(m);
-        return result;
-    };
-    QString statsText = tr("Total Uptime: %1  |  Total Crashes: %2")
-        .arg(formatUptime(m_server.totalUptimeSeconds))
-        .arg(m_server.totalCrashes);
-    if (!m_server.lastCrashTime.isEmpty())
-        statsText += tr("  |  Last Crash: %1").arg(m_server.lastCrashTime);
-    statsLabel->setText(statsText);
-    statsLabel->setStyleSheet(QStringLiteral("color: gray; font-style: italic;"));
-    form->addRow(tr("Statistics:"), statsLabel);
-
-    scroll->setWidget(scrollContent);
-    outerLayout->addWidget(scroll);
-
-    // ---- Save button ----
-    auto *saveBtn = new QPushButton(tr("💾  Save Settings"), w);
-    saveBtn->setStyleSheet(QStringLiteral(
-        "QPushButton { font-size:14px; padding:8px 20px; }"));
-    outerLayout->addWidget(saveBtn);
-
-    connect(saveBtn, &QPushButton::clicked, this, [this,
-            nameEdit, appidSpin, dirEdit, exeEdit, argsEdit,
-            rconHostEdit, rconPortSpin, rconPassEdit, backupDirEdit,
-            maxPlayersSpin, autoUpdateCheck, autoStartCheck, favoriteCheck,
-            backupIntervalSpin, restartIntervalSpin, keepBackupsSpin,
-            compressionSpin, maintStartSpin, maintEndSpin,
-            restartWarnSpin, restartWarnMsgEdit,
-            webhookUrlEdit, webhookTplEdit, consoleLogCheck,
-            rconIntervalSpin, groupEdit, startupPrioritySpin,
-            backupBeforeRestartCheck, gracefulShutdownSpin, updateCheckSpin]() {
-        m_server.name           = nameEdit->text();
-        m_server.appid          = appidSpin->value();
-        m_server.dir            = dirEdit->text();
-        m_server.executable     = exeEdit->text();
-        m_server.launchArgs     = argsEdit->text();
-        m_server.rcon.host      = rconHostEdit->text();
-        m_server.rcon.port      = rconPortSpin->value();
-        m_server.rcon.password  = rconPassEdit->text();
-        m_server.backupFolder   = backupDirEdit->text();
-        m_server.maxPlayers     = maxPlayersSpin->value();
-        m_server.autoUpdate     = autoUpdateCheck->isChecked();
-        m_server.autoStartOnLaunch = autoStartCheck->isChecked();
-        m_server.favorite       = favoriteCheck->isChecked();
-        m_server.backupIntervalMinutes  = backupIntervalSpin->value();
-        m_server.restartIntervalHours   = restartIntervalSpin->value();
-        m_server.keepBackups    = keepBackupsSpin->value();
-        m_server.backupCompressionLevel = compressionSpin->value();
-        m_server.maintenanceStartHour   = maintStartSpin->value();
-        m_server.maintenanceEndHour     = maintEndSpin->value();
-        m_server.restartWarningMinutes  = restartWarnSpin->value();
-        m_server.restartWarningMessage  = restartWarnMsgEdit->text();
-        m_server.discordWebhookUrl = webhookUrlEdit->text();
-        m_server.webhookTemplate   = webhookTplEdit->text();
-        m_server.consoleLogging    = consoleLogCheck->isChecked();
-        m_server.rconCommandIntervalMinutes = rconIntervalSpin->value();
-        m_server.group = groupEdit->text();
-        m_server.startupPriority = startupPrioritySpin->value();
-        m_server.backupBeforeRestart = backupBeforeRestartCheck->isChecked();
-        m_server.gracefulShutdownSeconds = gracefulShutdownSpin->value();
-        m_server.autoUpdateCheckIntervalMinutes = updateCheckSpin->value();
-
-        QStringList errors = m_server.validate();
-        if (!errors.isEmpty()) {
-            QMessageBox::warning(this, tr("Validation Error"),
-                                 errors.join(QStringLiteral("\n")));
-            return;
-        }
-
-        if (m_manager->saveConfig())
-            appendConsole(tr("[SSA] Settings saved successfully."));
-        else
-            QMessageBox::warning(this, tr("Save Failed"),
-                                 tr("Could not save configuration."));
-    });
-
-    tabs->addTab(w, tr("⚙ Settings"));
-}
-
-void ServerTabWidget::buildConfigTab(QTabWidget *tabs)
-{
-    auto *w      = new QWidget(tabs);
-    auto *layout = new QVBoxLayout(w);
-
-    // Try the server's primary config file
-    m_configPath = m_server.dir + QStringLiteral("/Configs/GameUserSettings.ini");
-
-    auto *pathLabel = new QLabel(tr("Editing: %1").arg(m_configPath), w);
-    pathLabel->setWordWrap(true);
-    layout->addWidget(pathLabel);
-
-    m_configEditor = new QTextEdit(w);
-    m_configEditor->setFont(QFont(QStringLiteral("Monospace"), 9));
-
-    QFile f(m_configPath);
-    if (f.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        m_originalConfigContent = QString::fromUtf8(f.readAll());
-        m_configEditor->setPlainText(m_originalConfigContent);
-        f.close();
-    } else {
-        m_configEditor->setPlaceholderText(
-            tr("Config file not found.\nPath: %1").arg(m_configPath));
-    }
-    layout->addWidget(m_configEditor);
-
-    auto *btnRow    = new QHBoxLayout();
-    auto *saveBtn   = new QPushButton(tr("Save Config"), w);
-    auto *revertBtn = new QPushButton(tr("Revert Changes"), w);
-    auto *openBtn   = new QPushButton(tr("Open Different File…"), w);
-    btnRow->addWidget(saveBtn);
-    btnRow->addWidget(revertBtn);
-    btnRow->addWidget(openBtn);
-    btnRow->addStretch();
-    layout->addLayout(btnRow);
-
-    connect(saveBtn,   &QPushButton::clicked, this, &ServerTabWidget::onSaveConfig);
-    connect(revertBtn, &QPushButton::clicked, this, &ServerTabWidget::onRevertConfig);
-    connect(openBtn, &QPushButton::clicked, this, [this, pathLabel]() {
-        QString path = QFileDialog::getOpenFileName(
-            this, tr("Open Config File"), m_server.dir,
-            tr("Config files (*.ini *.cfg *.json *.txt);;All files (*)"));
-        if (!path.isEmpty()) {
-            m_configPath = path;
-            pathLabel->setText(tr("Editing: %1").arg(m_configPath));
-            QFile f2(m_configPath);
-            if (f2.open(QIODevice::ReadOnly | QIODevice::Text)) {
-                m_originalConfigContent = QString::fromUtf8(f2.readAll());
-                m_configEditor->setPlainText(m_originalConfigContent);
-                f2.close();
-            }
-        }
-    });
-
-    tabs->addTab(w, tr("Config"));
-}
-
-void ServerTabWidget::buildModsTab(QTabWidget *tabs)
-{
-    auto *w      = new QWidget(tabs);
-    auto *layout = new QVBoxLayout(w);
-
-    m_modTable = new QTableWidget(0, 3, w);
-    m_modTable->setHorizontalHeaderLabels({ tr("Workshop Mod ID"), tr("Status"), tr("Enabled") });
-    m_modTable->horizontalHeader()->setStretchLastSection(true);
-    m_modTable->setSelectionBehavior(QAbstractItemView::SelectRows);
-    m_modTable->setDragDropMode(QAbstractItemView::InternalMove);
-    m_modTable->setDragEnabled(true);
-    m_modTable->setAcceptDrops(true);
-    m_modTable->setDropIndicatorShown(true);
-    m_modTable->verticalHeader()->setSectionsMovable(true);
-    m_modTable->verticalHeader()->setDragEnabled(true);
-    m_modTable->verticalHeader()->setDragDropMode(QAbstractItemView::InternalMove);
-    layout->addWidget(m_modTable);
-
-    populateModTable();
-
-    auto *btnRow      = new QHBoxLayout();
-    auto *addModBtn   = new QPushButton(tr("Add Mod…"),       w);
-    auto *removeModBtn= new QPushButton(tr("Remove Selected"),w);
-    auto *updateBtn   = new QPushButton(tr("Update All Mods"),w);
-    auto *saveOrderBtn= new QPushButton(tr("Save Order"),     w);
-    btnRow->addWidget(addModBtn);
-    btnRow->addWidget(removeModBtn);
-    btnRow->addWidget(updateBtn);
-    btnRow->addWidget(saveOrderBtn);
-    btnRow->addStretch();
-    layout->addLayout(btnRow);
-
-    auto *hint = new QLabel(tr("💡 Drag rows by their row-number header to reorder mods, then click Save Order."), w);
-    hint->setStyleSheet(QStringLiteral("color: gray; font-size: 11px;"));
-    layout->addWidget(hint);
-
-    connect(addModBtn,    &QPushButton::clicked, this, &ServerTabWidget::onAddMod);
-    connect(removeModBtn, &QPushButton::clicked, this, &ServerTabWidget::onRemoveMod);
-    connect(updateBtn,    &QPushButton::clicked, this, &ServerTabWidget::onUpdateMods);
-    connect(saveOrderBtn, &QPushButton::clicked, this, [this]() { persistModOrder(); });
-
-    tabs->addTab(w, tr("Mods"));
-}
-
-void ServerTabWidget::buildBackupsTab(QTabWidget *tabs)
-{
-    auto *w      = new QWidget(tabs);
-    auto *layout = new QVBoxLayout(w);
-
-    auto *label = new QLabel(tr("Versioned snapshots (newest first):"), w);
-    layout->addWidget(label);
-
-    m_backupList = new QListWidget(w);
-    layout->addWidget(m_backupList);
-
-    populateBackupList();
-
-    auto *btnRow     = new QHBoxLayout();
-    auto *snapshotBtn= new QPushButton(tr("Take Snapshot Now"),    w);
-    auto *restoreBtn = new QPushButton(tr("Restore Selected…"),    w);
-    auto *refreshBtn = new QPushButton(tr("Refresh List"),          w);
-    btnRow->addWidget(snapshotBtn);
-    btnRow->addWidget(restoreBtn);
-    btnRow->addWidget(refreshBtn);
-    btnRow->addStretch();
-    layout->addLayout(btnRow);
-
-    connect(snapshotBtn, &QPushButton::clicked, this, &ServerTabWidget::onTakeSnapshot);
-    connect(restoreBtn,  &QPushButton::clicked, this, &ServerTabWidget::onRestoreSnapshot);
-    connect(refreshBtn,  &QPushButton::clicked, this, [this]() { populateBackupList(); });
-
-    tabs->addTab(w, tr("Backups"));
-}
-
-void ServerTabWidget::buildConsoleTab(QTabWidget *tabs)
-{
-    auto *w      = new QWidget(tabs);
-    auto *layout = new QVBoxLayout(w);
-
-    m_consoleOutput = new QTextEdit(w);
-    m_consoleOutput->setReadOnly(true);
-    m_consoleOutput->setFont(QFont(QStringLiteral("Monospace"), 9));
-    m_consoleOutput->setStyleSheet(
-        QStringLiteral("background:#1e1e1e; color:#d4d4d4;"));
-    layout->addWidget(m_consoleOutput);
-
-    auto *inputRow = new QHBoxLayout();
-    auto *lineEdit = new QLineEdit(w);
-    lineEdit->setPlaceholderText(tr("Enter RCON command…"));
-    m_consoleInput = lineEdit;
-
-    // Install event filter for command history (Up/Down arrow keys)
-    lineEdit->installEventFilter(this);
-
-    auto *sendBtn = new QPushButton(tr("Send"), w);
-    inputRow->addWidget(lineEdit);
-    inputRow->addWidget(sendBtn);
-    layout->addLayout(inputRow);
-
-    connect(sendBtn,  &QPushButton::clicked, this, &ServerTabWidget::onSendCommand);
-    connect(lineEdit, &QLineEdit::returnPressed, this, &ServerTabWidget::onSendCommand);
-
-    tabs->addTab(w, tr("Console"));
-}
-
-void ServerTabWidget::buildLogsTab(QTabWidget *tabs)
-{
-    auto *w      = new QWidget(tabs);
-    auto *layout = new QVBoxLayout(w);
-
-    // Determine log file path – use a common log location relative to server dir
-    m_logFilePath = m_server.dir + QStringLiteral("/Logs/server.log");
-
-    auto *pathLabel = new QLabel(tr("Log file: %1").arg(m_logFilePath), w);
-    pathLabel->setWordWrap(true);
-    layout->addWidget(pathLabel);
-
-    m_logViewer = new QTextEdit(w);
-    m_logViewer->setReadOnly(true);
-    m_logViewer->setFont(QFont(QStringLiteral("Monospace"), 9));
-    m_logViewer->setStyleSheet(
-        QStringLiteral("background:#1e1e1e; color:#d4d4d4;"));
-    layout->addWidget(m_logViewer);
-
-    auto *btnRow     = new QHBoxLayout();
-    auto *refreshBtn = new QPushButton(tr("Refresh"), w);
-    auto *openBtn    = new QPushButton(tr("Open Different Log…"), w);
-    btnRow->addWidget(refreshBtn);
-    btnRow->addWidget(openBtn);
-    btnRow->addStretch();
-    layout->addLayout(btnRow);
-
-    connect(refreshBtn, &QPushButton::clicked, this, &ServerTabWidget::refreshLogViewer);
-    connect(openBtn,    &QPushButton::clicked, this, [this, pathLabel]() {
-        QString path = QFileDialog::getOpenFileName(
-            this, tr("Open Log File"), m_server.dir,
-            tr("Log files (*.log *.txt);;All files (*)"));
-        if (!path.isEmpty()) {
-            m_logFilePath = path;
-            pathLabel->setText(tr("Log file: %1").arg(m_logFilePath));
-            refreshLogViewer();
-        }
-    });
-
-    // Load initial content
-    refreshLogViewer();
-
-    tabs->addTab(w, tr("Logs"));
-}
-
-// ---------------------------------------------------------------------------
-// Slot implementations
-// ---------------------------------------------------------------------------
-
-void ServerTabWidget::onSendCommand()
-{
-    auto *lineEdit = qobject_cast<QLineEdit *>(m_consoleInput);
-    if (!lineEdit || lineEdit->text().trimmed().isEmpty()) return;
-
-    QString cmd = lineEdit->text().trimmed();
-    lineEdit->clear();
-    appendConsole(QStringLiteral("> ") + cmd);
-
-    // Add to command history (avoid consecutive duplicates)
-    if (m_commandHistory.isEmpty() || m_commandHistory.last() != cmd)
-        m_commandHistory << cmd;
-    m_historyIndex = -1;
-
-    QString resp = m_manager->sendRconCommand(m_server, cmd);
-    if (!resp.isEmpty())
-        appendConsole(resp);
-}
-
-void ServerTabWidget::onAddMod()
-{
-    bool ok = false;
-    int modId = QInputDialog::getInt(this, tr("Add Mod"),
-                                     tr("Enter Steam Workshop Mod ID:"),
-                                     0, 1, INT_MAX, 1, &ok);
-    if (!ok) return;
-
-    if (m_server.mods.contains(modId)) {
-        QMessageBox::information(this, tr("Add Mod"),
-                                 tr("Mod %1 is already in the list.").arg(modId));
-        return;
-    }
-
-    m_server.mods << modId;
-    m_manager->saveConfig();
-    populateModTable();
-}
-
-void ServerTabWidget::onRemoveMod()
-{
-    QList<QTableWidgetItem *> selected = m_modTable->selectedItems();
-    if (selected.isEmpty()) return;
-
-    int row = m_modTable->row(selected.first());
-    bool ok = false;
-    int modId = m_modTable->item(row, 0)->text().toInt(&ok);
-    if (!ok) return;
-
-    m_server.mods.removeAll(modId);
-    m_manager->saveConfig();
-    populateModTable();
-}
-
-void ServerTabWidget::onUpdateMods()
-{
-    appendConsole(tr("[SSA] Updating mods via SteamCMD…"));
-    m_manager->updateMods(m_server);
-}
-
-void ServerTabWidget::onTakeSnapshot()
-{
-    appendConsole(tr("[SSA] Taking snapshot…"));
-    QString ts = m_manager->takeSnapshot(m_server);
-    if (!ts.isEmpty()) {
-        populateBackupList();
-        appendConsole(tr("[SSA] Snapshot: ") + ts);
-    }
-}
-
-void ServerTabWidget::onRestoreSnapshot()
-{
-    QListWidgetItem *item = m_backupList->currentItem();
-    if (!item) {
-        QMessageBox::information(this, tr("Restore"),
-                                 tr("Please select a snapshot from the list."));
-        return;
-    }
-
-    QString zip = item->data(Qt::UserRole).toString();
-    auto reply  = QMessageBox::question(
-        this, tr("Restore Snapshot"),
-        tr("Restore from:\n%1\n\nThis will overwrite current server files. Continue?").arg(zip));
-    if (reply != QMessageBox::Yes) return;
-
-    bool ok = m_manager->restoreSnapshot(zip, m_server);
-    QMessageBox::information(this, tr("Restore"),
-                             ok ? tr("Restore complete.") : tr("Restore failed."));
-}
-
-void ServerTabWidget::onSaveConfig()
-{
-    QString content = m_configEditor->toPlainText();
-
-    // Show diff preview if content has changed
-    if (content != m_originalConfigContent) {
-        QString diff = computeDiff(m_originalConfigContent, content);
-        auto reply = QMessageBox::question(
-            this, tr("Save Config – Changes Detected"),
-            tr("The following changes will be saved:\n\n%1\n\nProceed?").arg(diff),
-            QMessageBox::Yes | QMessageBox::No);
-        if (reply != QMessageBox::Yes)
-            return;
-    }
-
-    QDir().mkpath(QFileInfo(m_configPath).absolutePath());
-    QFile f(m_configPath);
-    if (!f.open(QIODevice::WriteOnly | QIODevice::Text | QIODevice::Truncate)) {
-        QMessageBox::warning(this, tr("Save Config"),
-                             tr("Cannot write to:\n%1").arg(m_configPath));
-        return;
-    }
-    f.write(content.toUtf8());
-    m_originalConfigContent = content;   // update baseline after save
-    appendConsole(tr("[SSA] Config saved: ") + m_configPath);
-}
-
-void ServerTabWidget::onRevertConfig()
-{
-    if (m_configEditor->toPlainText() == m_originalConfigContent) {
-        QMessageBox::information(this, tr("Revert"), tr("No unsaved changes."));
-        return;
-    }
-    auto reply = QMessageBox::question(
-        this, tr("Revert Changes"),
-        tr("Discard all unsaved edits and revert to the last saved version?"));
-    if (reply != QMessageBox::Yes) return;
-
-    m_configEditor->setPlainText(m_originalConfigContent);
-    appendConsole(tr("[SSA] Config reverted to last saved version."));
-}
-
-void ServerTabWidget::onDeployServer()
-{
-    auto reply = QMessageBox::question(
-        this, tr("Deploy / Update Server"),
-        tr("Run SteamCMD to install or update '%1'?\n(AppID %2)")
-            .arg(m_server.name).arg(m_server.appid));
-    if (reply != QMessageBox::Yes) return;
-
-    appendConsole(tr("[SSA] Starting SteamCMD deployment…"));
-    m_manager->deployServer(m_server);
-}
-
-// ---------------------------------------------------------------------------
-// Event filter (RCON command history with Up/Down arrows)
-// ---------------------------------------------------------------------------
-
-bool ServerTabWidget::eventFilter(QObject *obj, QEvent *event)
-{
-    if (obj == m_consoleInput && event->type() == QEvent::KeyPress) {
-        auto *keyEvent = static_cast<QKeyEvent *>(event);
-        auto *lineEdit = qobject_cast<QLineEdit *>(m_consoleInput);
-        if (!lineEdit || m_commandHistory.isEmpty())
-            return QWidget::eventFilter(obj, event);
-
-        if (keyEvent->key() == Qt::Key_Up) {
-            if (m_historyIndex < 0)
-                m_historyIndex = m_commandHistory.size() - 1;
-            else if (m_historyIndex > 0)
-                --m_historyIndex;
-            lineEdit->setText(m_commandHistory.at(m_historyIndex));
-            return true;
-        }
-        if (keyEvent->key() == Qt::Key_Down) {
-            if (m_historyIndex < 0)
-                return QWidget::eventFilter(obj, event);
-            if (m_historyIndex < m_commandHistory.size() - 1) {
-                ++m_historyIndex;
-                lineEdit->setText(m_commandHistory.at(m_historyIndex));
-            } else {
-                m_historyIndex = -1;
-                lineEdit->clear();
-            }
-            return true;
-        }
-    }
-    return QWidget::eventFilter(obj, event);
-}
+#include "BackupModule.hpp"
+#include "ConsoleLogWriter.hpp"
+
+#include "imgui.h"
+
+#include <algorithm>
+#include <cstring>
+#include <cstdio>
+#include <fstream>
+#include <filesystem>
+#include <sstream>
+
+namespace fs = std::filesystem;
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-void ServerTabWidget::refreshStatus()
+static void copyStr(char *dest, size_t destSize, const std::string &src)
 {
-    if (!m_statusLight) return;
+    std::strncpy(dest, src.c_str(), destSize - 1);
+    dest[destSize - 1] = '\0';
+}
 
-    bool online  = m_manager->isServerRunning(m_server);
-    int  players = online ? m_manager->getPlayerCount(m_server) : -1;
+static std::string readFileToString(const std::string &path)
+{
+    std::ifstream f(path);
+    if (!f.is_open())
+        return {};
+    return std::string{std::istreambuf_iterator<char>(f),
+                       std::istreambuf_iterator<char>()};
+}
 
-    if (!online) {
-        m_statusLight->setText(QStringLiteral("🔴"));
-        m_playersLabel->setText(tr("Players: –  (Offline)"));
-    } else if (players > 0) {
-        m_statusLight->setText(QStringLiteral("🟢"));
-        m_playersLabel->setText(tr("Players: %1  (Online)").arg(players));
-    } else {
-        m_statusLight->setText(QStringLiteral("🟡"));
-        m_playersLabel->setText(tr("Players: 0  (Idle)"));
+static std::string formatUptime(int64_t secs)
+{
+    if (secs < 0) return "\xe2\x80\x93"; // –
+    int d = static_cast<int>(secs / 86400);
+    int h = static_cast<int>((secs % 86400) / 3600);
+    int m = static_cast<int>((secs % 3600) / 60);
+    char buf[64];
+    if (d > 0) std::snprintf(buf, sizeof(buf), "%dd %dh %dm", d, h, m);
+    else if (h > 0) std::snprintf(buf, sizeof(buf), "%dh %dm", h, m);
+    else std::snprintf(buf, sizeof(buf), "%dm", m);
+    return buf;
+}
+
+// ---------------------------------------------------------------------------
+// Construction
+// ---------------------------------------------------------------------------
+
+ServerTabWidget::ServerTabWidget(ServerManager *manager, ServerConfig &server)
+    : m_manager(manager), m_server(server)
+{
+    copyStr(m_notesBuf, sizeof(m_notesBuf), m_server.notes);
+}
+
+// ---------------------------------------------------------------------------
+// Main render
+// ---------------------------------------------------------------------------
+
+void ServerTabWidget::render()
+{
+    if (ImGui::BeginTabBar("##ServerSubTabs")) {
+        if (ImGui::BeginTabItem("Overview"))  { renderOverviewTab();  ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("Settings"))  { renderSettingsTab();  ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("Config"))    { renderConfigTab();    ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("Mods"))      { renderModsTab();      ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("Backups"))   { renderBackupsTab();   ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("Console"))   { renderConsoleTab();   ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("Logs"))      { renderLogsTab();      ImGui::EndTabItem(); }
+        ImGui::EndTabBar();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Overview
+// ---------------------------------------------------------------------------
+
+void ServerTabWidget::renderOverviewTab()
+{
+    bool running = m_manager->isServerRunning(m_server);
+    int64_t uptime = m_manager->serverUptimeSeconds(m_server.name);
+    int players = m_manager->getPlayerCount(m_server);
+
+    // Status
+    ImGui::SeparatorText("Status");
+    if (running)
+        ImGui::TextColored(ImVec4(0, 1, 0, 1), "ONLINE");
+    else
+        ImGui::TextColored(ImVec4(1, 0, 0, 1), "OFFLINE");
+    ImGui::SameLine();
+    ImGui::Text("  Players: %d / %d   Uptime: %s",
+                players, m_server.maxPlayers, formatUptime(uptime).c_str());
+
+    // Server control
+    ImGui::SeparatorText("Server Control");
+    if (ImGui::Button("Start"))   m_manager->startServer(m_server);
+    ImGui::SameLine();
+    if (ImGui::Button("Stop"))    m_manager->stopServer(m_server);
+    ImGui::SameLine();
+    if (ImGui::Button("Restart")) m_manager->restartServer(m_server);
+    ImGui::SameLine();
+    if (ImGui::Button("Deploy / Update")) m_manager->deployServer(m_server);
+
+    // Notes
+    ImGui::SeparatorText("Notes");
+    ImGui::InputTextMultiline("##Notes", m_notesBuf, sizeof(m_notesBuf),
+                              ImVec2(-1, 100));
+    if (ImGui::Button("Save Notes")) {
+        m_server.notes = m_notesBuf;
+        m_manager->saveConfig();
     }
 
-    // Update uptime
-    if (m_uptimeLabel) {
-        qint64 secs = m_manager->serverUptimeSeconds(m_server.name);
-        if (secs < 0) {
-            m_uptimeLabel->setText(tr("Uptime: –"));
+    // Auto-start checkbox
+    bool autoStart = m_server.autoStartOnLaunch;
+    if (ImGui::Checkbox("Auto-start on launch", &autoStart)) {
+        m_server.autoStartOnLaunch = autoStart;
+        m_manager->saveConfig();
+    }
+
+    // Statistics
+    ImGui::SeparatorText("Statistics");
+    ImGui::Text("Total Uptime: %s  |  Total Crashes: %d",
+                formatUptime(m_server.totalUptimeSeconds).c_str(),
+                m_server.totalCrashes);
+    if (!m_server.lastCrashTime.empty())
+        ImGui::Text("Last Crash: %s", m_server.lastCrashTime.c_str());
+}
+
+// ---------------------------------------------------------------------------
+// Settings
+// ---------------------------------------------------------------------------
+
+void ServerTabWidget::renderSettingsTab()
+{
+    if (!m_settingsInitialized) {
+        copyStr(m_settName,       sizeof(m_settName),       m_server.name);
+        m_settAppid = m_server.appid;
+        copyStr(m_settDir,        sizeof(m_settDir),        m_server.dir);
+        copyStr(m_settExe,        sizeof(m_settExe),        m_server.executable);
+        copyStr(m_settArgs,       sizeof(m_settArgs),       m_server.launchArgs);
+        copyStr(m_settRconHost,   sizeof(m_settRconHost),   m_server.rcon.host);
+        m_settRconPort = m_server.rcon.port;
+        copyStr(m_settRconPass,   sizeof(m_settRconPass),   m_server.rcon.password);
+        copyStr(m_settBackupDir,  sizeof(m_settBackupDir),  m_server.backupFolder);
+        m_settMaxPlayers      = m_server.maxPlayers;
+        m_settAutoUpdate      = m_server.autoUpdate;
+        m_settAutoStart       = m_server.autoStartOnLaunch;
+        m_settFavorite        = m_server.favorite;
+        m_settBackupInterval  = m_server.backupIntervalMinutes;
+        m_settRestartInterval = m_server.restartIntervalHours;
+        m_settKeepBackups     = m_server.keepBackups;
+        m_settRestartWarnMin  = m_server.restartWarningMinutes;
+        copyStr(m_settRestartWarnMsg, sizeof(m_settRestartWarnMsg), m_server.restartWarningMessage);
+        m_settGracefulShutdown    = m_server.gracefulShutdownSeconds;
+        m_settStartupPriority     = m_server.startupPriority;
+        m_settBackupBeforeRestart = m_server.backupBeforeRestart;
+        m_settCpuAlert            = m_server.cpuAlertThreshold;
+        m_settMemAlert            = m_server.memAlertThresholdMB;
+        m_settCompression         = m_server.backupCompressionLevel;
+        m_settMaintStart          = m_server.maintenanceStartHour;
+        m_settMaintEnd            = m_server.maintenanceEndHour;
+        m_settConsoleLogging      = m_server.consoleLogging;
+        copyStr(m_settWebhookUrl, sizeof(m_settWebhookUrl), m_server.discordWebhookUrl);
+        copyStr(m_settWebhookTpl, sizeof(m_settWebhookTpl), m_server.webhookTemplate);
+        copyStr(m_settGroup,      sizeof(m_settGroup),      m_server.group);
+        m_settRconCmdInterval     = m_server.rconCommandIntervalMinutes;
+        m_settAutoUpdateCheck     = m_server.autoUpdateCheckIntervalMinutes;
+        m_settingsInitialized = true;
+    }
+
+    ImGui::SeparatorText("Server Identity");
+    ImGui::InputText("Name",           m_settName,     sizeof(m_settName));
+    ImGui::InputInt("AppID",           &m_settAppid);
+    ImGui::InputText("Directory",      m_settDir,      sizeof(m_settDir));
+    ImGui::InputText("Executable",     m_settExe,      sizeof(m_settExe));
+    ImGui::InputText("Launch Args",    m_settArgs,     sizeof(m_settArgs));
+
+    ImGui::SeparatorText("RCON");
+    ImGui::InputText("Host",           m_settRconHost, sizeof(m_settRconHost));
+    ImGui::InputInt("Port",            &m_settRconPort);
+    ImGui::InputText("Password",       m_settRconPass, sizeof(m_settRconPass),
+                     ImGuiInputTextFlags_Password);
+
+    ImGui::SeparatorText("Paths");
+    ImGui::InputText("Backup Folder",  m_settBackupDir, sizeof(m_settBackupDir));
+
+    ImGui::SeparatorText("Players");
+    ImGui::InputInt("Max Players (0 = unlimited)", &m_settMaxPlayers);
+
+    ImGui::SeparatorText("Automation");
+    ImGui::Checkbox("Auto Update",     &m_settAutoUpdate);
+    ImGui::Checkbox("Auto Start",      &m_settAutoStart);
+    ImGui::Checkbox("Favorite",        &m_settFavorite);
+    ImGui::InputInt("Backup Interval (min)", &m_settBackupInterval);
+    ImGui::InputInt("Restart Interval (hrs)", &m_settRestartInterval);
+    ImGui::InputInt("Keep Backups",    &m_settKeepBackups);
+    ImGui::InputInt("Restart Warning (min)", &m_settRestartWarnMin);
+    ImGui::InputText("Warning Message", m_settRestartWarnMsg, sizeof(m_settRestartWarnMsg));
+    ImGui::InputInt("Graceful Shutdown (sec)", &m_settGracefulShutdown);
+    ImGui::InputInt("Startup Priority", &m_settStartupPriority);
+    ImGui::Checkbox("Backup Before Restart", &m_settBackupBeforeRestart);
+
+    ImGui::SeparatorText("Resource Alerts");
+    ImGui::InputDouble("CPU Alert (%)", &m_settCpuAlert, 0.0, 0.0, "%.1f");
+    ImGui::InputDouble("Memory Alert (MB)", &m_settMemAlert, 0.0, 0.0, "%.1f");
+
+    ImGui::SeparatorText("Backup");
+    ImGui::SliderInt("Compression Level", &m_settCompression, 0, 9);
+
+    ImGui::SeparatorText("Maintenance");
+    ImGui::InputInt("Start Hour (-1 = disabled)", &m_settMaintStart);
+    ImGui::InputInt("End Hour (-1 = disabled)",   &m_settMaintEnd);
+    ImGui::Checkbox("Console Logging", &m_settConsoleLogging);
+
+    ImGui::SeparatorText("Webhooks");
+    ImGui::InputText("Discord URL",    m_settWebhookUrl, sizeof(m_settWebhookUrl));
+    ImGui::InputText("Message Template", m_settWebhookTpl, sizeof(m_settWebhookTpl));
+
+    ImGui::SeparatorText("Organization");
+    ImGui::InputText("Group",          m_settGroup,     sizeof(m_settGroup));
+    ImGui::InputInt("RCON Cmd Interval (min)", &m_settRconCmdInterval);
+    ImGui::InputInt("Update Check Interval (min)", &m_settAutoUpdateCheck);
+
+    ImGui::Spacing();
+    if (ImGui::Button("Save Settings")) {
+        m_server.name                        = m_settName;
+        m_server.appid                       = m_settAppid;
+        m_server.dir                         = m_settDir;
+        m_server.executable                  = m_settExe;
+        m_server.launchArgs                  = m_settArgs;
+        m_server.rcon.host                   = m_settRconHost;
+        m_server.rcon.port                   = m_settRconPort;
+        m_server.rcon.password               = m_settRconPass;
+        m_server.backupFolder                = m_settBackupDir;
+        m_server.maxPlayers                  = m_settMaxPlayers;
+        m_server.autoUpdate                  = m_settAutoUpdate;
+        m_server.autoStartOnLaunch           = m_settAutoStart;
+        m_server.favorite                    = m_settFavorite;
+        m_server.backupIntervalMinutes       = m_settBackupInterval;
+        m_server.restartIntervalHours        = m_settRestartInterval;
+        m_server.keepBackups                 = m_settKeepBackups;
+        m_server.restartWarningMinutes       = m_settRestartWarnMin;
+        m_server.restartWarningMessage       = m_settRestartWarnMsg;
+        m_server.gracefulShutdownSeconds     = m_settGracefulShutdown;
+        m_server.startupPriority             = m_settStartupPriority;
+        m_server.backupBeforeRestart         = m_settBackupBeforeRestart;
+        m_server.cpuAlertThreshold           = m_settCpuAlert;
+        m_server.memAlertThresholdMB         = m_settMemAlert;
+        m_server.backupCompressionLevel      = m_settCompression;
+        m_server.maintenanceStartHour        = m_settMaintStart;
+        m_server.maintenanceEndHour          = m_settMaintEnd;
+        m_server.consoleLogging              = m_settConsoleLogging;
+        m_server.discordWebhookUrl           = m_settWebhookUrl;
+        m_server.webhookTemplate             = m_settWebhookTpl;
+        m_server.group                       = m_settGroup;
+        m_server.rconCommandIntervalMinutes  = m_settRconCmdInterval;
+        m_server.autoUpdateCheckIntervalMinutes = m_settAutoUpdateCheck;
+
+        auto errors = m_server.validate();
+        if (errors.empty()) {
+            m_manager->saveConfig();
+            m_consoleOutput += "[SSA] Settings saved.\n";
         } else {
-            int days  = static_cast<int>(secs / 86400);
-            int hours = static_cast<int>((secs % 86400) / 3600);
-            int mins  = static_cast<int>((secs % 3600) / 60);
-            if (days > 0)
-                m_uptimeLabel->setText(tr("Uptime: %1d %2h %3m").arg(days).arg(hours).arg(mins));
-            else if (hours > 0)
-                m_uptimeLabel->setText(tr("Uptime: %1h %2m").arg(hours).arg(mins));
-            else
-                m_uptimeLabel->setText(tr("Uptime: %1m").arg(mins));
+            for (const auto &e : errors)
+                m_consoleOutput += "[ERROR] " + e + "\n";
         }
     }
 }
 
-void ServerTabWidget::appendConsole(const QString &text)
+// ---------------------------------------------------------------------------
+// Config editor
+// ---------------------------------------------------------------------------
+
+void ServerTabWidget::renderConfigTab()
 {
-    if (!m_consoleOutput) return;
-    m_consoleOutput->append(text);
-    m_consoleOutput->verticalScrollBar()->setValue(
-        m_consoleOutput->verticalScrollBar()->maximum());
+    if (!m_configLoaded) {
+        m_configPath = m_server.dir + "/GameUserSettings.ini";
+        m_originalConfig = readFileToString(m_configPath);
+        copyStr(m_configBuf, sizeof(m_configBuf), m_originalConfig);
+        m_configLoaded = true;
+    }
+
+    ImGui::Text("File: %s", m_configPath.c_str());
+    ImGui::InputTextMultiline("##ConfigEdit", m_configBuf, sizeof(m_configBuf),
+                              ImVec2(-1, -60), ImGuiInputTextFlags_AllowTabInput);
+
+    if (ImGui::Button("Save")) {
+        std::ofstream f(m_configPath);
+        if (f.is_open()) {
+            f << m_configBuf;
+            m_originalConfig = m_configBuf;
+            m_consoleOutput += "[SSA] Config saved.\n";
+        } else {
+            m_consoleOutput += "[ERROR] Could not write config file.\n";
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Revert")) {
+        copyStr(m_configBuf, sizeof(m_configBuf), m_originalConfig);
+        m_consoleOutput += "[SSA] Config reverted.\n";
+    }
 }
 
-void ServerTabWidget::populateModTable()
+// ---------------------------------------------------------------------------
+// Mods
+// ---------------------------------------------------------------------------
+
+void ServerTabWidget::renderModsTab()
 {
-    m_modTable->setRowCount(0);
-    for (int modId : std::as_const(m_server.mods)) {
-        int row = m_modTable->rowCount();
-        m_modTable->insertRow(row);
-        m_modTable->setItem(row, 0, new QTableWidgetItem(QString::number(modId)));
+    ImGui::SeparatorText("Mods");
+    ImGui::InputText("Mod ID", m_newModId, sizeof(m_newModId));
+    ImGui::SameLine();
+    if (ImGui::Button("Add")) {
+        int modId = std::atoi(m_newModId);
+        if (modId > 0) {
+            if (std::find(m_server.mods.begin(), m_server.mods.end(), modId)
+                    == m_server.mods.end()) {
+                m_server.mods.push_back(modId);
+                m_manager->saveConfig();
+            }
+            m_newModId[0] = '\0';
+        }
+    }
 
-        bool disabled = m_server.disabledMods.contains(modId);
-        m_modTable->setItem(row, 1, new QTableWidgetItem(
-            disabled ? tr("Disabled") : tr("Installed")));
+    if (ImGui::Button("Update All Mods")) {
+        m_manager->updateMods(m_server);
+    }
 
-        auto *toggleBtn = new QPushButton(disabled ? tr("Enable") : tr("Disable"));
-        connect(toggleBtn, &QPushButton::clicked, this, [this, modId]() {
-            if (m_server.disabledMods.contains(modId))
-                m_server.disabledMods.removeAll(modId);
-            else
-                m_server.disabledMods << modId;
+    ImGui::Spacing();
+    if (ImGui::BeginTable("##Mods", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+        ImGui::TableSetupColumn("Mod ID", ImGuiTableColumnFlags_WidthFixed, 120);
+        ImGui::TableSetupColumn("Status", ImGuiTableColumnFlags_WidthFixed, 100);
+        ImGui::TableSetupColumn("Actions", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableHeadersRow();
+
+        int removeIdx = -1;
+        int toggleIdx = -1;
+        for (int i = 0; i < static_cast<int>(m_server.mods.size()); ++i) {
+            int mid = m_server.mods[i];
+            bool disabled = std::find(m_server.disabledMods.begin(),
+                                      m_server.disabledMods.end(), mid)
+                            != m_server.disabledMods.end();
+
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::Text("%d", mid);
+
+            ImGui::TableNextColumn();
+            ImGui::Text("%s", disabled ? "Disabled" : "Enabled");
+
+            ImGui::TableNextColumn();
+            ImGui::PushID(i);
+            if (ImGui::SmallButton("Remove"))
+                removeIdx = i;
+            ImGui::SameLine();
+            if (ImGui::SmallButton(disabled ? "Enable" : "Disable"))
+                toggleIdx = i;
+            ImGui::PopID();
+        }
+
+        if (removeIdx >= 0) {
+            m_server.mods.erase(m_server.mods.begin() + removeIdx);
             m_manager->saveConfig();
-            populateModTable();
-        });
-        m_modTable->setCellWidget(row, 2, toggleBtn);
+        }
+        if (toggleIdx >= 0) {
+            int mid = m_server.mods[toggleIdx];
+            auto it = std::find(m_server.disabledMods.begin(),
+                                m_server.disabledMods.end(), mid);
+            if (it != m_server.disabledMods.end())
+                m_server.disabledMods.erase(it);
+            else
+                m_server.disabledMods.push_back(mid);
+            m_manager->saveConfig();
+        }
+
+        ImGui::EndTable();
     }
 }
 
-void ServerTabWidget::populateBackupList()
-{
-    static constexpr qint64 kBytesPerKB = 1024;
-    static constexpr qint64 kBytesPerMB = 1024 * 1024;
+// ---------------------------------------------------------------------------
+// Backups
+// ---------------------------------------------------------------------------
 
-    m_backupList->clear();
-    QStringList snapshots = m_manager->listSnapshots(m_server);
-    for (const QString &path : std::as_const(snapshots)) {
-        QFileInfo fi(path);
-        QString sizeStr;
-        qint64 bytes = fi.size();
-        if (bytes >= kBytesPerMB)
-            sizeStr = QStringLiteral("%1 MB").arg(bytes / static_cast<double>(kBytesPerMB), 0, 'f', 1);
-        else if (bytes >= kBytesPerKB)
-            sizeStr = QStringLiteral("%1 KB").arg(bytes / static_cast<double>(kBytesPerKB), 0, 'f', 1);
+void ServerTabWidget::renderBackupsTab()
+{
+    ImGui::SeparatorText("Backups");
+    if (ImGui::Button("Take Snapshot")) {
+        std::string ts = m_manager->takeSnapshot(m_server);
+        if (!ts.empty())
+            m_consoleOutput += "[SSA] Snapshot created: " + ts + "\n";
         else
-            sizeStr = QStringLiteral("%1 B").arg(bytes);
+            m_consoleOutput += "[ERROR] Snapshot failed.\n";
+    }
 
-        QString label = QStringLiteral("%1  (%2)").arg(fi.fileName(), sizeStr);
-        auto *item = new QListWidgetItem(label, m_backupList);
-        item->setData(Qt::UserRole, path);
+    auto snapshots = m_manager->listSnapshots(m_server);
+    static int selectedSnap = -1;
+    if (ImGui::BeginListBox("##Snapshots", ImVec2(-1, 200))) {
+        for (int i = 0; i < static_cast<int>(snapshots.size()); ++i) {
+            bool sel = (selectedSnap == i);
+            if (ImGui::Selectable(snapshots[i].c_str(), sel))
+                selectedSnap = i;
+        }
+        ImGui::EndListBox();
+    }
+
+    if (ImGui::Button("Restore Selected") && selectedSnap >= 0 &&
+        selectedSnap < static_cast<int>(snapshots.size())) {
+        bool ok = m_manager->restoreSnapshot(snapshots[selectedSnap], m_server);
+        m_consoleOutput += ok ? "[SSA] Restore complete.\n" : "[ERROR] Restore failed.\n";
     }
 }
 
-void ServerTabWidget::persistModOrder()
+// ---------------------------------------------------------------------------
+// Console
+// ---------------------------------------------------------------------------
+
+void ServerTabWidget::renderConsoleTab()
 {
-    // Build the new order using the visual positions
-    QList<int> newOrder;
-    QVector<QPair<int, int>> visualRows;   // (visualIndex, modId)
-    for (int logicalRow = 0; logicalRow < m_modTable->rowCount(); ++logicalRow) {
-        int vis = m_modTable->verticalHeader()->visualIndex(logicalRow);
-        bool ok = false;
-        int modId = m_modTable->item(logicalRow, 0)->text().toInt(&ok);
-        if (ok)
-            visualRows.append({ vis, modId });
+    ImGui::SeparatorText("RCON Console");
+
+    // Output area
+    ImGui::BeginChild("##ConsoleOutput", ImVec2(-1, -40), ImGuiChildFlags_Borders);
+    ImGui::TextUnformatted(m_consoleOutput.c_str());
+    if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
+        ImGui::SetScrollHereY(1.0f);
+    ImGui::EndChild();
+
+    // Input line
+    bool send = ImGui::InputText("##CmdInput", m_consoleCmdBuf, sizeof(m_consoleCmdBuf),
+                                 ImGuiInputTextFlags_EnterReturnsTrue);
+    ImGui::SameLine();
+    send |= ImGui::Button("Send");
+
+    if (send && m_consoleCmdBuf[0] != '\0') {
+        std::string cmd = m_consoleCmdBuf;
+        m_consoleOutput += "> " + cmd + "\n";
+        m_commandHistory.push_back(cmd);
+        m_historyIndex = static_cast<int>(m_commandHistory.size());
+
+        std::string response = m_manager->sendRconCommand(m_server, cmd);
+        m_consoleOutput += response + "\n";
+
+        if (m_server.consoleLogging)
+            ConsoleLogWriter::append(m_server.dir, m_server.name, "> " + cmd + "\n" + response);
+
+        m_consoleCmdBuf[0] = '\0';
     }
-    std::sort(visualRows.begin(), visualRows.end(),
-              [](const QPair<int,int> &a, const QPair<int,int> &b) { return a.first < b.first; });
-
-    newOrder.reserve(visualRows.size());
-    for (const auto &pair : std::as_const(visualRows))
-        newOrder << pair.second;
-
-    m_server.mods = newOrder;
-    m_manager->saveConfig();
-    populateModTable();
-    appendConsole(tr("[SSA] Mod load order updated."));
 }
 
-void ServerTabWidget::refreshLogViewer()
+// ---------------------------------------------------------------------------
+// Logs
+// ---------------------------------------------------------------------------
+
+void ServerTabWidget::renderLogsTab()
 {
-    if (!m_logViewer) return;
-
-    QFile f(m_logFilePath);
-    if (!f.exists()) {
-        m_logViewer->setPlainText(tr("Log file not found:\n%1").arg(m_logFilePath));
-        return;
-    }
-    if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) {
-        m_logViewer->setPlainText(tr("Cannot open log file:\n%1").arg(m_logFilePath));
-        return;
+    auto now = std::chrono::steady_clock::now();
+    if (now - m_lastLogRefresh > std::chrono::seconds(2)) {
+        std::string logPath = m_server.dir + "/server.log";
+        m_logContent = readFileToString(logPath);
+        m_lastLogRefresh = now;
     }
 
-    // Read the last portion of the file (tail)
-    static constexpr qint64 kMaxTailBytes = 256 * 1024;   // 256 KB
-    if (f.size() > kMaxTailBytes)
-        f.seek(f.size() - kMaxTailBytes);
-
-    m_logViewer->setPlainText(QString::fromUtf8(f.readAll()));
-
-    // Scroll to bottom
-    m_logViewer->verticalScrollBar()->setValue(
-        m_logViewer->verticalScrollBar()->maximum());
-}
-
-QString ServerTabWidget::computeDiff(const QString &original, const QString &modified) const
-{
-    QStringList oldLines = original.split(QLatin1Char('\n'));
-    QStringList newLines = modified.split(QLatin1Char('\n'));
-
-    QStringList diff;
-    int maxLines = qMax(oldLines.size(), newLines.size());
-    for (int i = 0; i < maxLines; ++i) {
-        QString oldLine = (i < oldLines.size()) ? oldLines.at(i) : QString();
-        QString newLine = (i < newLines.size()) ? newLines.at(i) : QString();
-
-        if (oldLine == newLine)
-            continue;
-
-        if (i < oldLines.size())
-            diff << QStringLiteral("- %1").arg(oldLine);
-        if (i < newLines.size())
-            diff << QStringLiteral("+ %1").arg(newLine);
-    }
-
-    return diff.isEmpty() ? QStringLiteral("(no changes)") : diff.join(QLatin1Char('\n'));
+    ImGui::SeparatorText("Server Log");
+    ImGui::BeginChild("##LogView", ImVec2(-1, -1), ImGuiChildFlags_Borders);
+    ImGui::TextUnformatted(m_logContent.c_str());
+    if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
+        ImGui::SetScrollHereY(1.0f);
+    ImGui::EndChild();
 }

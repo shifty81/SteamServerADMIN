@@ -386,6 +386,13 @@ static double jsonDouble(const json &obj, const std::string &key, double def = 0
     return def;
 }
 
+static int64_t jsonInt64(const json &obj, const std::string &key, int64_t def = 0)
+{
+    if (obj.contains(key) && obj[key].is_number_integer())
+        return obj[key].get<int64_t>();
+    return def;
+}
+
 bool ServerManager::loadConfig()
 {
     std::ifstream file(m_configFile);
@@ -446,6 +453,10 @@ bool ServerManager::loadConfig()
         s.startupPriority = jsonInt(obj, "startupPriority", 0);
         s.backupBeforeRestart = jsonBool(obj, "backupBeforeRestart", false);
         s.gracefulShutdownSeconds = jsonInt(obj, "gracefulShutdownSeconds", 10);
+        s.autoUpdateCheckIntervalMinutes = jsonInt(obj, "autoUpdateCheckIntervalMinutes", 0);
+        s.totalUptimeSeconds = jsonInt64(obj, "totalUptimeSeconds", 0);
+        s.totalCrashes = jsonInt(obj, "totalCrashes", 0);
+        s.lastCrashTime = jsonStr(obj, "lastCrashTime");
 
         if (obj.contains("environmentVariables") && obj["environmentVariables"].is_object()) {
             for (auto &[k, v] : obj["environmentVariables"].items())
@@ -538,6 +549,10 @@ static json serverToJson(const ServerConfig &s)
     obj["startupPriority"] = s.startupPriority;
     obj["backupBeforeRestart"] = s.backupBeforeRestart;
     obj["gracefulShutdownSeconds"] = s.gracefulShutdownSeconds;
+    obj["autoUpdateCheckIntervalMinutes"] = s.autoUpdateCheckIntervalMinutes;
+    obj["totalUptimeSeconds"] = s.totalUptimeSeconds;
+    obj["totalCrashes"] = s.totalCrashes;
+    obj["lastCrashTime"] = s.lastCrashTime;
 
     json envVarsObj = json::object();
     for (const auto &[k, v] : s.environmentVariables) envVarsObj[k] = v;
@@ -611,13 +626,13 @@ void ServerManager::autoStartServers()
 void ServerManager::startAllServers()
 {
     // Respect startup priority ordering
-    QList<int> indices;
-    for (int i = 0; i < m_servers.size(); ++i)
-        indices << i;
+    std::vector<int> indices;
+    for (int i = 0; i < static_cast<int>(m_servers.size()); ++i)
+        indices.push_back(i);
     std::sort(indices.begin(), indices.end(), [this](int a, int b) {
         return m_servers[a].startupPriority < m_servers[b].startupPriority;
     });
-    for (int idx : std::as_const(indices))
+    for (int idx : indices)
         startServer(m_servers[idx]);
 }
 
@@ -1114,6 +1129,10 @@ std::string ServerManager::importServerConfig(const std::string &filePath)
     s.startupPriority = jsonInt(obj, "startupPriority", 0);
     s.backupBeforeRestart = jsonBool(obj, "backupBeforeRestart", false);
     s.gracefulShutdownSeconds = jsonInt(obj, "gracefulShutdownSeconds", 10);
+    s.autoUpdateCheckIntervalMinutes = jsonInt(obj, "autoUpdateCheckIntervalMinutes", 0);
+    s.totalUptimeSeconds = jsonInt64(obj, "totalUptimeSeconds", 0);
+    s.totalCrashes = jsonInt(obj, "totalCrashes", 0);
+    s.lastCrashTime = jsonStr(obj, "lastCrashTime");
 
     if (obj.contains("environmentVariables") && obj["environmentVariables"].is_object()) {
         for (auto &[k, v] : obj["environmentVariables"].items())
