@@ -1,13 +1,11 @@
 #pragma once
 
 #include "ServerManager.hpp"
+#include <string>
+#include <vector>
+#include <chrono>
 
-#include <QMainWindow>
-#include <QTabWidget>
-#include <QListWidget>
-#include <QLineEdit>
-#include <memory>
-
+struct GLFWwindow;
 class HomeDashboard;
 class ServerTabWidget;
 class SchedulerModule;
@@ -15,7 +13,7 @@ class LogModule;
 class TrayManager;
 
 /**
- * @brief Main application window.
+ * @brief Main application window (Dear ImGui).
  *
  * Layout:
  *   ┌──────────┬────────────────────────────────────────┐
@@ -27,37 +25,77 @@ class TrayManager;
  *   │ [Sync]   │                                        │
  *   └──────────┴────────────────────────────────────────┘
  */
-class MainWindow : public QMainWindow {
-    Q_OBJECT
+class MainWindow {
 public:
-    explicit MainWindow(QWidget *parent = nullptr);
-    ~MainWindow() override = default;
+    explicit MainWindow(GLFWwindow *window);
+    ~MainWindow();
 
-private slots:
-    void onAddServer();
-    void onCloneServer();
-    void onRemoveServer();
-    void onExportServer();
-    void onImportServer();
-    void onSyncMods();
-    void onSyncConfigs();
-    void onBroadcastCommand();
-    void onSearchChanged(const QString &text);
-    void onServerListItemClicked(QListWidgetItem *item);
-    void updateTabStatusIndicators();
-    void toggleDarkMode();
+    void render();      // called every frame
+    bool wantQuit() const;
 
 private:
-    void addServerTab(ServerConfig &server);
-    void rebuildSidebarList();
-    void buildLogViewerTab();
+    // Rendering helpers
+    void renderMenuBar();
+    void renderSidebar();
+    void renderTabArea();
+    void renderLogViewerTab();
+    void renderNotifications();
+    void renderAddServerDialog();
+    void renderCloneServerDialog();
+    void renderRemoveServerDialog();
+    void renderExportServerDialog();
+    void renderImportServerDialog();
+    void renderBroadcastDialog();
 
-    ServerManager   *m_manager        = nullptr;
-    SchedulerModule *m_scheduler      = nullptr;
-    LogModule       *m_logModule      = nullptr;
-    std::unique_ptr<TrayManager> m_trayManager;
-    QTabWidget      *m_tabs           = nullptr;
-    QListWidget     *m_serverList     = nullptr;
-    QLineEdit       *m_searchBox      = nullptr;
-    HomeDashboard   *m_dashboard      = nullptr;
+    GLFWwindow *m_window = nullptr;
+    ServerManager *m_manager = nullptr;
+    SchedulerModule *m_scheduler = nullptr;
+    LogModule *m_logModule = nullptr;
+    TrayManager *m_trayManager = nullptr;
+    HomeDashboard *m_dashboard = nullptr;
+    std::vector<ServerTabWidget *> m_serverTabs;
+
+    // UI state
+    bool m_wantQuit = false;
+    int m_selectedTab = 0;        // 0 = Home, 1..N = servers, last = Log
+    std::string m_searchText;
+    std::string m_logFilterText;
+    int m_selectedSidebarServer = -1;
+
+    // Dialog state
+    bool m_showAddServer = false;
+    bool m_showCloneServer = false;
+    bool m_showRemoveServer = false;
+    bool m_showExportServer = false;
+    bool m_showImportServer = false;
+    bool m_showBroadcast = false;
+
+    // Add server dialog fields
+    int m_addTemplateIdx = 0;
+    char m_addName[256] = {};
+    int m_addAppId = 0;
+    char m_addDir[512] = {};
+    char m_addExe[256] = {};
+    char m_addArgs[512] = {};
+    char m_addRconHost[128] = "127.0.0.1";
+    int m_addRconPort = 27015;
+    char m_addRconPass[128] = {};
+
+    // Clone dialog
+    int m_cloneSourceIdx = 0;
+    char m_cloneName[256] = {};
+
+    // Export dialog
+    int m_exportSourceIdx = 0;
+    char m_exportPath[512] = {};
+
+    // Broadcast dialog
+    char m_broadcastCmd[512] = {};
+
+    // Tick timing
+    std::chrono::steady_clock::time_point m_lastTick;
+
+    // Helpers
+    void addServerTab(ServerConfig &server);
+    void rebuildServerTabs();
 };
