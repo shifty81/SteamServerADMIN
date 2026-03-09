@@ -386,6 +386,13 @@ static double jsonDouble(const json &obj, const std::string &key, double def = 0
     return def;
 }
 
+static int64_t jsonInt64(const json &obj, const std::string &key, int64_t def = 0)
+{
+    if (obj.contains(key) && obj[key].is_number_integer())
+        return obj[key].get<int64_t>();
+    return def;
+}
+
 bool ServerManager::loadConfig()
 {
     std::ifstream file(m_configFile);
@@ -447,7 +454,7 @@ bool ServerManager::loadConfig()
         s.backupBeforeRestart = jsonBool(obj, "backupBeforeRestart", false);
         s.gracefulShutdownSeconds = jsonInt(obj, "gracefulShutdownSeconds", 10);
         s.autoUpdateCheckIntervalMinutes = jsonInt(obj, "autoUpdateCheckIntervalMinutes", 0);
-        s.totalUptimeSeconds = static_cast<int64_t>(jsonInt(obj, "totalUptimeSeconds", 0));
+        s.totalUptimeSeconds = jsonInt64(obj, "totalUptimeSeconds", 0);
         s.totalCrashes = jsonInt(obj, "totalCrashes", 0);
         s.lastCrashTime = jsonStr(obj, "lastCrashTime");
 
@@ -1123,7 +1130,7 @@ std::string ServerManager::importServerConfig(const std::string &filePath)
     s.backupBeforeRestart = jsonBool(obj, "backupBeforeRestart", false);
     s.gracefulShutdownSeconds = jsonInt(obj, "gracefulShutdownSeconds", 10);
     s.autoUpdateCheckIntervalMinutes = jsonInt(obj, "autoUpdateCheckIntervalMinutes", 0);
-    s.totalUptimeSeconds = static_cast<int64_t>(jsonInt(obj, "totalUptimeSeconds", 0));
+    s.totalUptimeSeconds = jsonInt64(obj, "totalUptimeSeconds", 0);
     s.totalCrashes = jsonInt(obj, "totalCrashes", 0);
     s.lastCrashTime = jsonStr(obj, "lastCrashTime");
 

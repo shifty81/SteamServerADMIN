@@ -73,6 +73,16 @@ void writeFile(const std::string &path, const std::string &content) {
     f << content;
 }
 
+// Helper: join a vector of strings with a separator
+std::string joinStrings(const std::vector<std::string> &v, const std::string &sep) {
+    std::string r;
+    for (size_t i = 0; i < v.size(); ++i) {
+        if (i) r += sep;
+        r += v[i];
+    }
+    return r;
+}
+
 TEST(ServerConfig, SaveAndLoad)
 {
     TempDir tmp;
@@ -277,7 +287,7 @@ TEST(ServerConfig, ValidateValidConfig)
     s.rcon.port = 27015;
 
     std::vector<std::string> errors = s.validate();
-    ASSERT_TRUE(errors.empty()) << "Expected no errors, got: " << [&](){ std::string r; for(size_t i=0;i<errors.size();++i){if(i)r+="; ";r+=errors[i];} return r; }();
+    ASSERT_TRUE(errors.empty()) << "Expected no errors, got: " << joinStrings(errors, "; ");
 }
 
 TEST(ServerConfig, ValidateEmptyName)
@@ -619,7 +629,7 @@ TEST(ServerConfig, CloneServerConfig)
 
     // Validate – should pass (no duplicates, both configs valid)
     std::vector<std::string> errors = mgr.validateAll();
-    ASSERT_TRUE(errors.empty()) << "Expected no errors: " << [&](){ std::string r; for(size_t i=0;i<errors.size();++i){if(i)r+="; ";r+=errors[i];} return r; }();
+    ASSERT_TRUE(errors.empty()) << "Expected no errors: " << joinStrings(errors, "; ");
 
     // Verify clone has same fields
     const ServerConfig &c = mgr.servers().back();
@@ -1275,9 +1285,14 @@ TEST(ServerConfig, AutoStartServersMethod)
     // autoStartServers should not crash even when executables don't exist
     mgr.autoStartServers();
 
-    // Give forked children time to exec and exit (Linux: fork always succeeds)
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    mgr.tick();
+    // Wait for forked children to exec and exit (Linux: fork always succeeds,
+    // but child exits immediately since the executable doesn't exist)
+    for (int i = 0; i < 20; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        mgr.tick();
+        if (!mgr.isServerRunning(mgr.servers()[0]))
+            break;
+    }
 
     // Server1 should have had a start attempt (won't actually run, but
     // autoStartServers should gracefully handle missing executables)
@@ -2886,9 +2901,12 @@ TEST(ServerConfig, StartAllServers)
 
     // startAllServers should not crash even with non-existent executables
     mgr.startAllServers();
-    // Give forked children time to exec and exit
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    mgr.tick();
+    // Wait for forked children to exit
+    for (int i = 0; i < 20; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        mgr.tick();
+        if (mgr.runningServerCount() == 0) break;
+    }
     // Servers won't actually start (no executables), so running count = 0
     EXPECT_EQ(mgr.runningServerCount(), 0);
 }
@@ -2953,9 +2971,12 @@ TEST(ServerConfig, StartGroup)
 
     // startGroup should only attempt to start servers in the specified group
     mgr.startGroup("Production");
-    // Give forked children time to exec and exit
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    mgr.tick();
+    // Wait for forked children to exit
+    for (int i = 0; i < 20; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        mgr.tick();
+        if (mgr.runningServerCount() == 0) break;
+    }
     EXPECT_EQ(mgr.runningServerCount(), 0); // No executables, but shouldn't crash
 }
 
