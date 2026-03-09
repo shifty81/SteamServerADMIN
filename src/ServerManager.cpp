@@ -637,21 +637,21 @@ void ServerManager::restartAllServers()
     }
 }
 
-void ServerManager::startGroup(const QString &group)
+void ServerManager::startGroup(const std::string &group)
 {
-    QList<int> indices;
-    for (int i = 0; i < m_servers.size(); ++i) {
+    std::vector<int> indices;
+    for (int i = 0; i < static_cast<int>(m_servers.size()); ++i) {
         if (m_servers[i].group == group)
-            indices << i;
+            indices.push_back(i);
     }
     std::sort(indices.begin(), indices.end(), [this](int a, int b) {
         return m_servers[a].startupPriority < m_servers[b].startupPriority;
     });
-    for (int idx : std::as_const(indices))
+    for (int idx : indices)
         startServer(m_servers[idx]);
 }
 
-void ServerManager::stopGroup(const QString &group)
+void ServerManager::stopGroup(const std::string &group)
 {
     for (ServerConfig &s : m_servers) {
         if (s.group == group && isServerRunning(s))
@@ -659,7 +659,7 @@ void ServerManager::stopGroup(const QString &group)
     }
 }
 
-void ServerManager::restartGroup(const QString &group)
+void ServerManager::restartGroup(const std::string &group)
 {
     for (ServerConfig &s : m_servers) {
         if (s.group == group && isServerRunning(s))
@@ -667,15 +667,21 @@ void ServerManager::restartGroup(const QString &group)
     }
 }
 
-QStringList ServerManager::serverGroups() const
+std::vector<std::string> ServerManager::serverGroups() const
 {
-    QSet<QString> groups;
+    std::set<std::string> groups;
     for (const ServerConfig &s : m_servers) {
-        if (!s.group.trimmed().isEmpty())
+        if (!trimString(s.group).empty())
             groups.insert(s.group);
     }
-    QStringList result(groups.begin(), groups.end());
-    result.sort(Qt::CaseInsensitive);
+    std::vector<std::string> result(groups.begin(), groups.end());
+    std::sort(result.begin(), result.end(), [](const std::string &a, const std::string &b) {
+        // Case-insensitive sort
+        std::string la = a, lb = b;
+        std::transform(la.begin(), la.end(), la.begin(), ::tolower);
+        std::transform(lb.begin(), lb.end(), lb.begin(), ::tolower);
+        return la < lb;
+    });
     return result;
 }
 

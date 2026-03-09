@@ -85,9 +85,9 @@ struct ServerConfig {
     int autoUpdateCheckIntervalMinutes = 0;  // interval (minutes) for periodic SteamCMD update checks; 0 = disabled
 
     // ---- Server statistics (persisted across sessions) ----
-    qint64 totalUptimeSeconds = 0;           // cumulative uptime in seconds across all sessions
+    int64_t totalUptimeSeconds = 0;          // cumulative uptime in seconds across all sessions
     int totalCrashes = 0;                    // total crash count across all sessions
-    QString lastCrashTime;                   // ISO 8601 timestamp of most recent crash (empty = never)
+    std::string lastCrashTime;               // ISO 8601 timestamp of most recent crash (empty = never)
 
     /**
      * @brief Format a restart warning message with the given minutes remaining.
@@ -162,13 +162,13 @@ struct ServerConfig {
             errors.push_back("Graceful shutdown timeout must not be negative.");
 
         if (autoUpdateCheckIntervalMinutes < 0)
-            errors << QStringLiteral("Auto-update check interval must not be negative.");
+            errors.push_back("Auto-update check interval must not be negative.");
 
         if (totalUptimeSeconds < 0)
-            errors << QStringLiteral("Total uptime must not be negative.");
+            errors.push_back("Total uptime must not be negative.");
 
         if (totalCrashes < 0)
-            errors << QStringLiteral("Total crashes must not be negative.");
+            errors.push_back("Total crashes must not be negative.");
 
         return errors;
     }
