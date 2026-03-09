@@ -202,6 +202,35 @@ private slots:
     void testTagsPersistence();
     void testTagsExportImport();
     void testTagsMultiple();
+
+    // ---- Server group tests ----
+    void testGroupDefault();
+    void testGroupPersistence();
+    void testGroupExportImport();
+
+    // ---- Startup priority tests ----
+    void testStartupPriorityDefault();
+    void testStartupPriorityPersistence();
+    void testStartupPriorityValidation();
+    void testStartupPriorityExportImport();
+    void testAutoStartRespectsStartupPriority();
+
+    // ---- Backup before restart tests ----
+    void testBackupBeforeRestartDefault();
+    void testBackupBeforeRestartPersistence();
+    void testBackupBeforeRestartExportImport();
+
+    // ---- Graceful shutdown timeout tests ----
+    void testGracefulShutdownDefault();
+    void testGracefulShutdownPersistence();
+    void testGracefulShutdownValidation();
+    void testGracefulShutdownExportImport();
+
+    // ---- Environment variables tests ----
+    void testEnvironmentVariablesDefault();
+    void testEnvironmentVariablesPersistence();
+    void testEnvironmentVariablesExportImport();
+    void testEnvironmentVariablesMultiple();
 };
 
 void TestServerConfig::testSaveAndLoad()
@@ -2608,6 +2637,370 @@ void TestServerConfig::testTagsMultiple()
     QCOMPARE(mgr2.servers().size(), 2);
     QCOMPARE(mgr2.servers().at(0).tags, QStringList({QStringLiteral("pve"), QStringLiteral("eu")}));
     QCOMPARE(mgr2.servers().at(1).tags, QStringList({QStringLiteral("pvp"), QStringLiteral("us")}));
+}
+
+// ---------------------------------------------------------------------------
+// Server group tests
+// ---------------------------------------------------------------------------
+
+void TestServerConfig::testGroupDefault()
+{
+    ServerConfig s;
+    QVERIFY(s.group.isEmpty());
+}
+
+void TestServerConfig::testGroupPersistence()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+
+    ServerManager mgr(configPath);
+    ServerConfig s;
+    s.name = QStringLiteral("GroupTest");
+    s.appid = 1;
+    s.dir = QStringLiteral("/srv/grp");
+    s.group = QStringLiteral("Production");
+    mgr.servers() << s;
+    QVERIFY(mgr.saveConfig());
+
+    ServerManager mgr2(configPath);
+    QVERIFY(mgr2.loadConfig());
+    QCOMPARE(mgr2.servers().at(0).group, QStringLiteral("Production"));
+}
+
+void TestServerConfig::testGroupExportImport()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    QString exportPath = tmp.filePath(QStringLiteral("export.json"));
+
+    ServerManager mgr(configPath);
+    ServerConfig s;
+    s.name = QStringLiteral("GrpExp");
+    s.appid = 1;
+    s.dir = QStringLiteral("/srv/grpexp");
+    s.group = QStringLiteral("Testing");
+    mgr.servers() << s;
+    QVERIFY(mgr.exportServerConfig(QStringLiteral("GrpExp"), exportPath));
+
+    ServerManager mgr2(tmp.filePath(QStringLiteral("servers2.json")));
+    QVERIFY(mgr2.importServerConfig(exportPath).isEmpty());
+    QCOMPARE(mgr2.servers().at(0).group, QStringLiteral("Testing"));
+}
+
+// ---------------------------------------------------------------------------
+// Startup priority tests
+// ---------------------------------------------------------------------------
+
+void TestServerConfig::testStartupPriorityDefault()
+{
+    ServerConfig s;
+    QCOMPARE(s.startupPriority, 0);
+}
+
+void TestServerConfig::testStartupPriorityPersistence()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+
+    ServerManager mgr(configPath);
+    ServerConfig s;
+    s.name = QStringLiteral("PrioTest");
+    s.appid = 1;
+    s.dir = QStringLiteral("/srv/prio");
+    s.startupPriority = 5;
+    mgr.servers() << s;
+    QVERIFY(mgr.saveConfig());
+
+    ServerManager mgr2(configPath);
+    QVERIFY(mgr2.loadConfig());
+    QCOMPARE(mgr2.servers().at(0).startupPriority, 5);
+}
+
+void TestServerConfig::testStartupPriorityValidation()
+{
+    ServerConfig s;
+    s.name = QStringLiteral("V");
+    s.appid = 1;
+    s.dir = QStringLiteral("/srv/v");
+    s.startupPriority = -1;
+    QStringList errors = s.validate();
+    bool found = false;
+    for (const QString &e : errors)
+        if (e.contains(QStringLiteral("Startup priority"))) { found = true; break; }
+    QVERIFY(found);
+}
+
+void TestServerConfig::testStartupPriorityExportImport()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    QString exportPath = tmp.filePath(QStringLiteral("export.json"));
+
+    ServerManager mgr(configPath);
+    ServerConfig s;
+    s.name = QStringLiteral("PrioExp");
+    s.appid = 1;
+    s.dir = QStringLiteral("/srv/prioexp");
+    s.startupPriority = 3;
+    mgr.servers() << s;
+    QVERIFY(mgr.exportServerConfig(QStringLiteral("PrioExp"), exportPath));
+
+    ServerManager mgr2(tmp.filePath(QStringLiteral("servers2.json")));
+    QVERIFY(mgr2.importServerConfig(exportPath).isEmpty());
+    QCOMPARE(mgr2.servers().at(0).startupPriority, 3);
+}
+
+void TestServerConfig::testAutoStartRespectsStartupPriority()
+{
+    // Verify that autoStartServers processes servers in priority order
+    // by listening to the logMessage signal which is emitted when
+    // startServer is called (even if the process fails to launch).
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+
+    ServerManager mgr(configPath);
+
+    ServerConfig s1;
+    s1.name = QStringLiteral("LowPrio");
+    s1.appid = 1;
+    s1.dir = QStringLiteral("/srv/low");
+    s1.autoStartOnLaunch = true;
+    s1.startupPriority = 10;
+
+    ServerConfig s2;
+    s2.name = QStringLiteral("HighPrio");
+    s2.appid = 2;
+    s2.dir = QStringLiteral("/srv/high");
+    s2.autoStartOnLaunch = true;
+    s2.startupPriority = 1;
+
+    // Insert LowPrio first in the list; autoStartServers should still
+    // process HighPrio (priority 1) before LowPrio (priority 10).
+    mgr.servers() << s1 << s2;
+
+    QStringList startOrder;
+    QObject::connect(&mgr, &ServerManager::logMessage,
+                     [&startOrder](const QString &server, const QString &) {
+        if (!startOrder.contains(server))
+            startOrder << server;
+    });
+
+    mgr.autoStartServers();
+
+    // Both servers should have been attempted (executables won't exist, but
+    // the signal still fires in order).
+    QVERIFY(startOrder.size() >= 2);
+    QVERIFY(startOrder.indexOf(QStringLiteral("HighPrio"))
+            < startOrder.indexOf(QStringLiteral("LowPrio")));
+}
+
+// ---------------------------------------------------------------------------
+// Backup before restart tests
+// ---------------------------------------------------------------------------
+
+void TestServerConfig::testBackupBeforeRestartDefault()
+{
+    ServerConfig s;
+    QCOMPARE(s.backupBeforeRestart, false);
+}
+
+void TestServerConfig::testBackupBeforeRestartPersistence()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+
+    ServerManager mgr(configPath);
+    ServerConfig s;
+    s.name = QStringLiteral("BbrTest");
+    s.appid = 1;
+    s.dir = QStringLiteral("/srv/bbr");
+    s.backupBeforeRestart = true;
+    mgr.servers() << s;
+    QVERIFY(mgr.saveConfig());
+
+    ServerManager mgr2(configPath);
+    QVERIFY(mgr2.loadConfig());
+    QCOMPARE(mgr2.servers().at(0).backupBeforeRestart, true);
+}
+
+void TestServerConfig::testBackupBeforeRestartExportImport()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    QString exportPath = tmp.filePath(QStringLiteral("export.json"));
+
+    ServerManager mgr(configPath);
+    ServerConfig s;
+    s.name = QStringLiteral("BbrExp");
+    s.appid = 1;
+    s.dir = QStringLiteral("/srv/bbrexp");
+    s.backupBeforeRestart = true;
+    mgr.servers() << s;
+    QVERIFY(mgr.exportServerConfig(QStringLiteral("BbrExp"), exportPath));
+
+    ServerManager mgr2(tmp.filePath(QStringLiteral("servers2.json")));
+    QVERIFY(mgr2.importServerConfig(exportPath).isEmpty());
+    QCOMPARE(mgr2.servers().at(0).backupBeforeRestart, true);
+}
+
+// ---------------------------------------------------------------------------
+// Graceful shutdown timeout tests
+// ---------------------------------------------------------------------------
+
+void TestServerConfig::testGracefulShutdownDefault()
+{
+    ServerConfig s;
+    QCOMPARE(s.gracefulShutdownSeconds, 10);
+}
+
+void TestServerConfig::testGracefulShutdownPersistence()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+
+    ServerManager mgr(configPath);
+    ServerConfig s;
+    s.name = QStringLiteral("GsTest");
+    s.appid = 1;
+    s.dir = QStringLiteral("/srv/gs");
+    s.gracefulShutdownSeconds = 30;
+    mgr.servers() << s;
+    QVERIFY(mgr.saveConfig());
+
+    ServerManager mgr2(configPath);
+    QVERIFY(mgr2.loadConfig());
+    QCOMPARE(mgr2.servers().at(0).gracefulShutdownSeconds, 30);
+}
+
+void TestServerConfig::testGracefulShutdownValidation()
+{
+    ServerConfig s;
+    s.name = QStringLiteral("V");
+    s.appid = 1;
+    s.dir = QStringLiteral("/srv/v");
+    s.gracefulShutdownSeconds = -5;
+    QStringList errors = s.validate();
+    bool found = false;
+    for (const QString &e : errors)
+        if (e.contains(QStringLiteral("Graceful shutdown"))) { found = true; break; }
+    QVERIFY(found);
+}
+
+void TestServerConfig::testGracefulShutdownExportImport()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    QString exportPath = tmp.filePath(QStringLiteral("export.json"));
+
+    ServerManager mgr(configPath);
+    ServerConfig s;
+    s.name = QStringLiteral("GsExp");
+    s.appid = 1;
+    s.dir = QStringLiteral("/srv/gsexp");
+    s.gracefulShutdownSeconds = 20;
+    mgr.servers() << s;
+    QVERIFY(mgr.exportServerConfig(QStringLiteral("GsExp"), exportPath));
+
+    ServerManager mgr2(tmp.filePath(QStringLiteral("servers2.json")));
+    QVERIFY(mgr2.importServerConfig(exportPath).isEmpty());
+    QCOMPARE(mgr2.servers().at(0).gracefulShutdownSeconds, 20);
+}
+
+// ---------------------------------------------------------------------------
+// Environment variables tests
+// ---------------------------------------------------------------------------
+
+void TestServerConfig::testEnvironmentVariablesDefault()
+{
+    ServerConfig s;
+    QVERIFY(s.environmentVariables.isEmpty());
+}
+
+void TestServerConfig::testEnvironmentVariablesPersistence()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+
+    ServerManager mgr(configPath);
+    ServerConfig s;
+    s.name = QStringLiteral("EnvTest");
+    s.appid = 1;
+    s.dir = QStringLiteral("/srv/env");
+    s.environmentVariables[QStringLiteral("GAME_MODE")] = QStringLiteral("survival");
+    s.environmentVariables[QStringLiteral("MAX_RATE")] = QStringLiteral("128000");
+    mgr.servers() << s;
+    QVERIFY(mgr.saveConfig());
+
+    ServerManager mgr2(configPath);
+    QVERIFY(mgr2.loadConfig());
+    QCOMPARE(mgr2.servers().at(0).environmentVariables.size(), 2);
+    QCOMPARE(mgr2.servers().at(0).environmentVariables.value(QStringLiteral("GAME_MODE")),
+             QStringLiteral("survival"));
+    QCOMPARE(mgr2.servers().at(0).environmentVariables.value(QStringLiteral("MAX_RATE")),
+             QStringLiteral("128000"));
+}
+
+void TestServerConfig::testEnvironmentVariablesExportImport()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+    QString exportPath = tmp.filePath(QStringLiteral("export.json"));
+
+    ServerManager mgr(configPath);
+    ServerConfig s;
+    s.name = QStringLiteral("EnvExp");
+    s.appid = 1;
+    s.dir = QStringLiteral("/srv/envexp");
+    s.environmentVariables[QStringLiteral("SRCDS_TOKEN")] = QStringLiteral("abc123");
+    mgr.servers() << s;
+    QVERIFY(mgr.exportServerConfig(QStringLiteral("EnvExp"), exportPath));
+
+    ServerManager mgr2(tmp.filePath(QStringLiteral("servers2.json")));
+    QVERIFY(mgr2.importServerConfig(exportPath).isEmpty());
+    QCOMPARE(mgr2.servers().at(0).environmentVariables.value(QStringLiteral("SRCDS_TOKEN")),
+             QStringLiteral("abc123"));
+}
+
+void TestServerConfig::testEnvironmentVariablesMultiple()
+{
+    QTemporaryDir tmp;
+    QVERIFY(tmp.isValid());
+    QString configPath = tmp.filePath(QStringLiteral("servers.json"));
+
+    ServerManager mgr(configPath);
+    ServerConfig s1;
+    s1.name = QStringLiteral("E1");
+    s1.appid = 1;
+    s1.dir = QStringLiteral("/srv/e1");
+    s1.environmentVariables[QStringLiteral("KEY1")] = QStringLiteral("val1");
+
+    ServerConfig s2;
+    s2.name = QStringLiteral("E2");
+    s2.appid = 2;
+    s2.dir = QStringLiteral("/srv/e2");
+    s2.environmentVariables[QStringLiteral("KEY2")] = QStringLiteral("val2");
+    s2.environmentVariables[QStringLiteral("KEY3")] = QStringLiteral("val3");
+
+    mgr.servers() << s1 << s2;
+    QVERIFY(mgr.saveConfig());
+
+    ServerManager mgr2(configPath);
+    QVERIFY(mgr2.loadConfig());
+    QCOMPARE(mgr2.servers().size(), 2);
+    QCOMPARE(mgr2.servers().at(0).environmentVariables.size(), 1);
+    QCOMPARE(mgr2.servers().at(1).environmentVariables.size(), 2);
 }
 
 #include "test_serverconfig.moc"

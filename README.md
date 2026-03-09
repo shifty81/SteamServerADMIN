@@ -61,6 +61,11 @@ A cross-platform Qt6 desktop application for managing SteamCMD-based game server
 | **Resource monitoring** | Track CPU and memory usage per server process with configurable alert thresholds (`cpuAlertThreshold`, `memAlertThresholdMB`); `resourceAlert` signal fires when a threshold is exceeded |
 | **Event hook scripts** | Run custom shell / script on server lifecycle events (`onStart`, `onStop`, `onCrash`, `onBackup`, `onUpdate`); scripts receive `SSA_SERVER_NAME`, `SSA_EVENT`, `SSA_SERVER_DIR` environment variables |
 | **Server tags** | Assign user-defined tags per server for categorisation and filtering; persisted in `servers.json` with full export/import support |
+| **Server groups** | Organize servers into named groups (e.g. "Production", "Testing", "ARK Cluster"); group label shown on dashboard badge cards |
+| **Startup priority** | Control auto-start order with a numeric priority per server (lower value starts first); ensures dependent servers launch in the correct sequence |
+| **Auto-backup before restart** | Optionally take a full snapshot before every scheduled restart (`backupBeforeRestart`), providing a safe restore point |
+| **Graceful shutdown timeout** | Configurable `gracefulShutdownSeconds` per server controls how long to wait after sending a terminate signal before force-killing the process |
+| **Custom environment variables** | Pass custom key=value environment variables to each server process on launch via `environmentVariables` map in the server config |
 
 ---
 
@@ -180,7 +185,12 @@ See `servers.json` in the repository root for an example configuration.
     "eventHooks": {
       "onCrash": "/srv/scripts/notify_crash.sh"
     },
-    "tags": ["production", "ark"]
+    "tags": ["production", "ark"],
+    "group": "ARK Cluster",
+    "startupPriority": 1,
+    "backupBeforeRestart": true,
+    "gracefulShutdownSeconds": 15,
+    "environmentVariables": {}
   }
 ]
 ```

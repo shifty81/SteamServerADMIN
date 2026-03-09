@@ -169,8 +169,12 @@ void SchedulerModule::startScheduler(const QString &serverName)
                 if (s.name == name) {
                     if (inMaintenanceWindow(s))
                         return;  // skip during maintenance
-                    if (m_manager->isServerRunning(s))
+                    if (m_manager->isServerRunning(s)) {
+                        // Take a pre-restart snapshot if enabled
+                        if (s.backupBeforeRestart)
+                            m_manager->takeSnapshot(s);
                         m_manager->restartServer(s);
+                    }
                     emit scheduledRestart(name);
                     break;
                 }

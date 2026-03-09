@@ -38,6 +38,7 @@ private:
     struct ServerBadge {
         QLabel *statusLight    = nullptr;
         QLabel *nameLabel      = nullptr;
+        QLabel *groupLabel     = nullptr;    // server group indicator
         QLabel *playersLabel   = nullptr;
         QLabel *uptimeLabel    = nullptr;
         QLabel *updateBadge    = nullptr;  // pending game update indicator

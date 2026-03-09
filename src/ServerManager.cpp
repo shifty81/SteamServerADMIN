@@ -140,6 +140,16 @@ bool ServerManager::loadConfig()
         for (const QJsonValue &v : obj[QStringLiteral("tags")].toArray())
             s.tags << v.toString();
 
+        // Group, startup priority, backup-before-restart, graceful shutdown, env vars
+        s.group = obj[QStringLiteral("group")].toString();
+        s.startupPriority = obj[QStringLiteral("startupPriority")].toInt(0);
+        s.backupBeforeRestart = obj[QStringLiteral("backupBeforeRestart")].toBool(false);
+        s.gracefulShutdownSeconds = obj[QStringLiteral("gracefulShutdownSeconds")].toInt(10);
+
+        QJsonObject envVars = obj[QStringLiteral("environmentVariables")].toObject();
+        for (auto eIt = envVars.begin(); eIt != envVars.end(); ++eIt)
+            s.environmentVariables[eIt.key()] = eIt.value().toString();
+
         for (const QJsonValue &v : obj[QStringLiteral("scheduledRconCommands")].toArray())
             s.scheduledRconCommands << v.toString();
 
@@ -233,6 +243,17 @@ bool ServerManager::saveConfig() const
         for (const QString &tag : s.tags) tagsArr << tag;
         obj[QStringLiteral("tags")] = tagsArr;
 
+        // Group, startup priority, backup-before-restart, graceful shutdown, env vars
+        obj[QStringLiteral("group")] = s.group;
+        obj[QStringLiteral("startupPriority")] = s.startupPriority;
+        obj[QStringLiteral("backupBeforeRestart")] = s.backupBeforeRestart;
+        obj[QStringLiteral("gracefulShutdownSeconds")] = s.gracefulShutdownSeconds;
+
+        QJsonObject envVarsObj;
+        for (auto eIt = s.environmentVariables.constBegin(); eIt != s.environmentVariables.constEnd(); ++eIt)
+            envVarsObj[eIt.key()] = eIt.value();
+        obj[QStringLiteral("environmentVariables")] = envVarsObj;
+
         QJsonObject rcon;
         rcon[QStringLiteral("host")]     = s.rcon.host;
         rcon[QStringLiteral("port")]     = s.rcon.port;
@@ -272,10 +293,17 @@ const QList<ServerConfig> &ServerManager::servers() const { return m_servers; }
 
 void ServerManager::autoStartServers()
 {
-    for (ServerConfig &s : m_servers) {
-        if (s.autoStartOnLaunch)
-            startServer(s);
+    // Build a list of indices sorted by startup priority (lower = earlier)
+    QList<int> indices;
+    for (int i = 0; i < m_servers.size(); ++i) {
+        if (m_servers[i].autoStartOnLaunch)
+            indices << i;
     }
+    std::sort(indices.begin(), indices.end(), [this](int a, int b) {
+        return m_servers[a].startupPriority < m_servers[b].startupPriority;
+    });
+    for (int idx : std::as_const(indices))
+        startServer(m_servers[idx]);
 }
 
 // ---------------------------------------------------------------------------
@@ -321,6 +349,15 @@ void ServerManager::startServer(ServerConfig &server)
     if (!server.launchArgs.isEmpty())
         args = server.launchArgs.split(QLatin1Char(' '), Qt::SkipEmptyParts);
 
+    // Apply custom environment variables if any are defined
+    if (!server.environmentVariables.isEmpty()) {
+        QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+        for (auto it = server.environmentVariables.constBegin();
+             it != server.environmentVariables.constEnd(); ++it)
+            env.insert(it.key(), it.value());
+        proc->setProcessEnvironment(env);
+    }
+
     proc->start(exe, args);
     if (proc->waitForStarted(5000)) {
         m_processes[server.name] = proc;
@@ -360,9 +397,15 @@ void ServerManager::stopServer(ServerConfig &server)
         QObject::disconnect(*connIt);
         m_crashConns.erase(connIt);
     }
-    proc->terminate();
-    if (!proc->waitForFinished(10000))
+    int timeoutMs = server.gracefulShutdownSeconds * 1000;
+    if (timeoutMs <= 0) {
+        // Immediate kill – no graceful shutdown requested
         proc->kill();
+    } else {
+        proc->terminate();
+        if (!proc->waitForFinished(timeoutMs))
+            proc->kill();
+    }
     m_processes.remove(server.name);
     m_startTimes.remove(server.name);
     m_crashCounts.remove(server.name);
@@ -707,6 +750,17 @@ bool ServerManager::exportServerConfig(const QString &serverName,
     for (const QString &tag : s.tags) tagsArr << tag;
     obj[QStringLiteral("tags")] = tagsArr;
 
+    // Group, startup priority, backup-before-restart, graceful shutdown, env vars
+    obj[QStringLiteral("group")] = s.group;
+    obj[QStringLiteral("startupPriority")] = s.startupPriority;
+    obj[QStringLiteral("backupBeforeRestart")] = s.backupBeforeRestart;
+    obj[QStringLiteral("gracefulShutdownSeconds")] = s.gracefulShutdownSeconds;
+
+    QJsonObject envVarsObj;
+    for (auto eIt = s.environmentVariables.constBegin(); eIt != s.environmentVariables.constEnd(); ++eIt)
+        envVarsObj[eIt.key()] = eIt.value();
+    obj[QStringLiteral("environmentVariables")] = envVarsObj;
+
     QJsonObject rcon;
     rcon[QStringLiteral("host")]     = s.rcon.host;
     rcon[QStringLiteral("port")]     = s.rcon.port;
@@ -782,6 +836,16 @@ QString ServerManager::importServerConfig(const QString &filePath)
     // Tags
     for (const QJsonValue &v : obj[QStringLiteral("tags")].toArray())
         s.tags << v.toString();
+
+    // Group, startup priority, backup-before-restart, graceful shutdown, env vars
+    s.group = obj[QStringLiteral("group")].toString();
+    s.startupPriority = obj[QStringLiteral("startupPriority")].toInt(0);
+    s.backupBeforeRestart = obj[QStringLiteral("backupBeforeRestart")].toBool(false);
+    s.gracefulShutdownSeconds = obj[QStringLiteral("gracefulShutdownSeconds")].toInt(10);
+
+    QJsonObject envVars = obj[QStringLiteral("environmentVariables")].toObject();
+    for (auto eIt = envVars.begin(); eIt != envVars.end(); ++eIt)
+        s.environmentVariables[eIt.key()] = eIt.value().toString();
 
     QJsonObject rcon = obj[QStringLiteral("rcon")].toObject();
     s.rcon.host     = rcon[QStringLiteral("host")].toString(QStringLiteral("127.0.0.1"));
