@@ -1,10 +1,9 @@
 #pragma once
 
 #include "ServerManager.hpp"
-
-#include <QWidget>
-#include <QLabel>
-#include <QList>
+#include <chrono>
+#include <string>
+#include <vector>
 
 /**
  * @brief Home dashboard showing all servers with rich badge cards and quick actions.
@@ -12,46 +11,36 @@
  * Each server is displayed as a badge card showing:
  *   - Health status light (🟢/🟡/🔴)
  *   - Uptime
- *   - Pending game update indicator
- *   - Pending mod update indicator
+ *   - Pending game / mod update indicators
  *   - Player count / max players
+ *   - Server statistics (total uptime, crash count)
  *
- * Right-click context menu on each badge offers Save and Restart (with
- * configurable in-game warning countdown).
+ * Right-click context menu on each card offers Save Config and Restart
+ * (with configurable in-game warning countdown).
  *
- * Automatically polls every 5 seconds to update status indicators.
+ * In ImGui immediate mode the UI is rebuilt every frame, so status
+ * refreshes automatically without a polling timer.
  */
-class HomeDashboard : public QWidget {
-    Q_OBJECT
+class HomeDashboard {
 public:
-    explicit HomeDashboard(ServerManager *manager, QWidget *parent = nullptr);
+    explicit HomeDashboard(ServerManager *manager);
 
-    /** Rebuild the server rows (call after adding/removing servers). */
+    /** Render the full dashboard.  Call once per frame. */
+    void render();
+
+    /** No-op in ImGui – the UI is rebuilt every frame. */
     void refresh();
 
-public slots:
-    void updateStatus();
-
 private:
+    void renderCard(ServerConfig &server, int index);
+    void renderContextMenu(ServerConfig &server);
+
     ServerManager *m_manager;
 
-    struct ServerBadge {
-        QLabel *statusLight    = nullptr;
-        QLabel *nameLabel      = nullptr;
-        QLabel *groupLabel     = nullptr;    // server group indicator
-        QLabel *playersLabel   = nullptr;
-        QLabel *uptimeLabel    = nullptr;
-        QLabel *updateBadge    = nullptr;  // pending game update indicator
-        QLabel *modUpdateBadge = nullptr;  // pending mod update indicator
-        QLabel *statsLabel     = nullptr;  // total uptime / crash stats
-        QWidget *card          = nullptr;  // the card widget for context menu
+    // Delayed restart after in-game warning
+    struct PendingWarningRestart {
+        std::string serverName;
+        std::chrono::steady_clock::time_point restartAt;
     };
-    QList<ServerBadge> m_badges;
-
-    QWidget *m_rowContainer = nullptr;
-
-    // Cluster summary labels
-    QLabel *m_totalLabel   = nullptr;
-    QLabel *m_onlineLabel  = nullptr;
-    QLabel *m_offlineLabel = nullptr;
+    std::vector<PendingWarningRestart> m_pendingRestarts;
 };
