@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # ──────────────────────────────────────────────────────────────
 # SSA – Steam Server ADMIN  ·  Automated build script (Linux / macOS / MSYS2)
+# Dependencies (GLFW, ImGui, nlohmann/json, GoogleTest) are fetched
+# automatically by CMake FetchContent.  Only OpenGL dev libraries
+# are required from the system.
 # ──────────────────────────────────────────────────────────────
 set -uo pipefail
 
@@ -39,184 +42,37 @@ if ! command -v cmake &>/dev/null; then
     return 1
 fi
 
-# ── 2. Install Qt6 if needed ─────────────────────────────────
-install_qt6_linux() {
+# ── 2. Install OpenGL / X11 dev libraries if needed ──────────
+install_system_deps_linux() {
     info "Detecting Linux package manager …"
     if command -v apt-get &>/dev/null; then
-        info "Installing Qt6 development packages via apt …"
+        info "Installing OpenGL / X11 development packages via apt …"
         sudo apt-get update -qq
-        sudo apt-get install -y qt6-base-dev libgl1-mesa-dev
+        sudo apt-get install -y libgl1-mesa-dev libx11-dev \
+            libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
     elif command -v dnf &>/dev/null; then
-        info "Installing Qt6 development packages via dnf …"
-        sudo dnf install -y qt6-qtbase-devel mesa-libGL-devel
+        info "Installing OpenGL / X11 development packages via dnf …"
+        sudo dnf install -y mesa-libGL-devel libX11-devel \
+            libXrandr-devel libXinerama-devel libXcursor-devel libXi-devel
     elif command -v pacman &>/dev/null; then
-        info "Installing Qt6 development packages via pacman …"
-        sudo pacman -S --noconfirm qt6-base
+        info "Installing OpenGL / X11 development packages via pacman …"
+        sudo pacman -S --noconfirm mesa libx11 libxrandr libxinerama libxcursor libxi
     else
-        err "Unsupported package manager. Please install Qt6 (Core, Widgets, Network) manually."
-        return 1
+        warn "Unsupported package manager. Please install OpenGL and X11 development libraries manually."
     fi
 }
 
-install_qt6_macos() {
-    if command -v brew &>/dev/null; then
-        info "Installing Qt6 via Homebrew …"
-        brew install qt@6
-        # Make sure CMake can find the Homebrew Qt
-        QT_PREFIX="$(brew --prefix qt@6)"
-        export CMAKE_PREFIX_PATH="${QT_PREFIX}${CMAKE_PREFIX_PATH:+;$CMAKE_PREFIX_PATH}"
-    else
-        err "Homebrew not found. Please install Homebrew (https://brew.sh) or install Qt6 manually."
-        return 1
-    fi
-}
-
-find_qt6_windows() {
-    # Search common Windows Qt6 installation paths
-    local search_dirs=(
-        "${QT_DIR:-}" "${Qt6_DIR:-}" "${QTDIR:-}"
-        "/c/Qt" "/d/Qt"
-        "${USERPROFILE:-}/Qt" "$HOME/Qt"
-    )
-    for base in "${search_dirs[@]}"; do
-        { [ -z "$base" ] || [ "$base" = "/Qt" ]; } && continue
-        [ -d "$base" ] || continue
-        # Look for versioned directories like 6.x.x/msvc*_64 or 6.x.x/mingw*_64
-        for ver_dir in "$base"/6*/msvc*_64 "$base"/6*/mingw*_64; do
-            if [ -f "$ver_dir/lib/cmake/Qt6/Qt6Config.cmake" ]; then
-                echo "$ver_dir"
-                return 0
-            fi
-        done
-    done
-    return 1
-}
-
-install_qt6_msys() {
-    # 1) MSYS2 with pacman
-    if command -v pacman &>/dev/null; then
-        info "Installing Qt6 development packages via MSYS2 pacman …"
-        if pacman -S --noconfirm "${MINGW_PACKAGE_PREFIX:-mingw-w64-x86_64}"-qt6-base; then
-            return 0
-        fi
-        warn "MSYS2 pacman failed to install Qt6."
-    fi
-
-    # 2) Check common Windows installation paths
-    local qt_path
-    qt_path="$(find_qt6_windows)" && {
-        info "Qt6 found at: $qt_path"
-        export CMAKE_PREFIX_PATH="${qt_path}${CMAKE_PREFIX_PATH:+;$CMAKE_PREFIX_PATH}"
-        return 0
-    }
-
-    # 3) Try aqtinstall (Python-based Qt installer – the standard CI tool)
-    local pip_cmd=""
-    pip_cmd="$(command -v pip3 2>/dev/null || command -v pip 2>/dev/null)" || true
-    if [ -n "$pip_cmd" ]; then
-        info "Attempting to install Qt via aqtinstall (pip) …"
-        if "$pip_cmd" install aqtinstall 2>&1; then
-            # Find aqt: check PATH first
-            local aqt_run=()
-            local _aqt_path=""
-            _aqt_path="$(command -v aqt 2>/dev/null || command -v aqt.exe 2>/dev/null)" || true
-            if [ -n "$_aqt_path" ]; then
-                aqt_run=("$_aqt_path")
-            else
-                # aqt not on PATH — look in Python user-scripts directory
-                local _py=""
-                _py="$(command -v python3 2>/dev/null || command -v python 2>/dev/null)" || true
-                if [ -n "$_py" ]; then
-                    local _user_scripts=""
-                    _user_scripts="$("$_py" -c \
-                        "import sysconfig,os;print(sysconfig.get_path('scripts',os.name+'_user'))" \
-                        2>/dev/null)" || true
-                    if [ -n "$_user_scripts" ]; then
-                        for _a in "$_user_scripts/aqt" "$_user_scripts/aqt.exe"; do
-                            if [ -f "$_a" ]; then
-                                aqt_run=("$_a")
-                                info "Found aqt at: $_a"
-                                break
-                            fi
-                        done
-                    fi
-                    # Last resort: python -m aqt
-                    if [ ${#aqt_run[@]} -eq 0 ] && "$_py" -m aqt version &>/dev/null; then
-                        aqt_run=("$_py" "-m" "aqt")
-                        info "Using 'python -m aqt' (aqt not found on PATH)"
-                    fi
-                fi
-            fi
-            if [ ${#aqt_run[@]} -gt 0 ]; then
-                local qt_ver="${SSA_QT_VERSION:-6.7.2}"
-                local qt_arch="${SSA_QT_ARCH:-win64_msvc2019_64}"
-                local qt_install_dir="${QT_BASEDIR:-$HOME/Qt}"
-                info "Installing Qt $qt_ver ($qt_arch) to $qt_install_dir …"
-                if "${aqt_run[@]}" install-qt windows desktop "$qt_ver" "$qt_arch" \
-                        --outputdir "$qt_install_dir" 2>&1; then
-                    qt_path="$(find_qt6_windows)" && {
-                        export CMAKE_PREFIX_PATH="${qt_path}${CMAKE_PREFIX_PATH:+;$CMAKE_PREFIX_PATH}"
-                        return 0
-                    }
-                fi
-            fi
-        fi
-        warn "aqtinstall did not succeed."
-    fi
-
-    err "Qt6 could not be found or installed automatically."
-    err "Please install Qt 6.4+ from https://www.qt.io/download or via:"
-    err "  • pip install aqtinstall && aqt install-qt windows desktop 6.7.2 win64_msvc2019_64 --outputdir \$HOME/Qt"
-    err "  • Set CMAKE_PREFIX_PATH to the Qt6 directory, or"
-    err "  • Use scripts/build.ps1 (PowerShell) which searches additional paths."
-    return 1
-}
-
-check_qt6() {
-    # Quick check: see if cmake can find Qt6
-    local tmp
-    tmp="$(mktemp -d)"
-    cat > "$tmp/CMakeLists.txt" <<'EOF'
-cmake_minimum_required(VERSION 3.22)
-project(_qt6check LANGUAGES CXX)
-find_package(Qt6 QUIET COMPONENTS Core)
-if(Qt6_FOUND)
-    message(STATUS "Qt6_FOUND=TRUE")
-else()
-    message(STATUS "Qt6_FOUND=FALSE")
-endif()
-EOF
-    local out
-    out="$(cmake -S "$tmp" -B "$tmp/b" 2>&1 || true)"
-    rm -rf "$tmp"
-    [[ "$out" == *"Qt6_FOUND=TRUE"* ]]
-}
-
-if ! check_qt6; then
-    warn "Qt6 not found — attempting automatic installation …"
-    _uname="$(uname -s)"
-    case "$_uname" in
-        Linux)  install_qt6_linux ;;
-        Darwin) install_qt6_macos ;;
-        MINGW*|MSYS*|CYGWIN*) install_qt6_msys ;;
-        *)
-            err "Unsupported OS ($_uname). Please install Qt6 manually."
-            return 1
-            ;;
-    esac
-    # Re-check
-    if ! check_qt6; then
-        err "Qt6 still not found after installation attempt. Please install Qt6 (Core, Widgets, Network) manually."
-        return 1
-    fi
-fi
-
-info "Qt6 found ✓"
+_uname="$(uname -s)"
+case "$_uname" in
+    Linux)  install_system_deps_linux ;;
+    Darwin) info "macOS detected — OpenGL is provided by the system frameworks." ;;
+    MINGW*|MSYS*|CYGWIN*) info "Windows detected — OpenGL is provided by the graphics driver." ;;
+    *) warn "Unknown OS ($_uname). Ensure OpenGL development libraries are installed." ;;
+esac
 
 # ── 3. Configure ─────────────────────────────────────────────
 info "Configuring ($BUILD_TYPE) …"
-cmake -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
-    ${CMAKE_PREFIX_PATH:+-DCMAKE_PREFIX_PATH="$CMAKE_PREFIX_PATH"} 2>&1 | tee -a "$CONFIGURE_LOG"
+cmake -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE="$BUILD_TYPE" 2>&1 | tee -a "$CONFIGURE_LOG"
 if [ "${PIPESTATUS[0]}" -ne 0 ]; then
     err "CMake configuration failed. See $CONFIGURE_LOG"
     return 1

@@ -28,21 +28,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Qt6 (Linux)
+      - name: Install system dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y qt6-base-dev libgl1-mesa-dev
-
-      - name: Install Qt6 (macOS)
-        if: runner.os == 'macOS'
-        run: brew install qt@6
-
-      - name: Install Qt6 (Windows)
-        if: runner.os == 'Windows'
-        uses: jurplel/install-qt-action@v4
-        with:
-          version: '6.7.*'
+          sudo apt-get install -y libgl1-mesa-dev libx11-dev \
+            libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
 
       - name: Create log directory
         run: mkdir -p logs
