@@ -300,7 +300,7 @@ void MainWindow::renderMenuBar()
 
 void MainWindow::renderSidebar()
 {
-    ImGui::BeginChild("Sidebar", ImVec2(220, 0), true);
+    ImGui::BeginChild("Sidebar", ImVec2(220, 0), ImGuiChildFlags_Borders);
 
     ImGui::TextUnformatted("Servers");
     ImGui::Separator();
@@ -492,7 +492,7 @@ void MainWindow::renderLogViewerTab()
         m_logFilterText = filterBuf;
 
     // Scrollable log area
-    ImGui::BeginChild("##LogEntries", ImVec2(0, 0), true);
+    ImGui::BeginChild("##LogEntries", ImVec2(0, 0), ImGuiChildFlags_Borders);
 
     const auto entries = m_logModule->entries();
     for (const auto &entry : entries) {
