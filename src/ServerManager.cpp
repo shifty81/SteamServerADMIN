@@ -856,7 +856,13 @@ void ServerManager::handleCrash(const std::string &serverName, int exitCode)
     auto now = std::chrono::system_clock::now();
     std::time_t nowT = std::chrono::system_clock::to_time_t(now);
     char timeBuf[64];
-    std::strftime(timeBuf, sizeof(timeBuf), "%Y-%m-%dT%H:%M:%S", std::gmtime(&nowT));
+    std::tm tmBuf{};
+#ifdef _WIN32
+    gmtime_s(&tmBuf, &nowT);
+#else
+    gmtime_r(&nowT, &tmBuf);
+#endif
+    std::strftime(timeBuf, sizeof(timeBuf), "%Y-%m-%dT%H:%M:%S", &tmBuf);
 
     for (ServerConfig &s : m_servers) {
         if (s.name == serverName) {

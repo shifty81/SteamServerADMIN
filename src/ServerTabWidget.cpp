@@ -33,6 +33,16 @@ static std::string readFileToString(const std::string &path)
                        std::istreambuf_iterator<char>()};
 }
 
+static std::vector<std::string> splitLines(const std::string &text)
+{
+    std::vector<std::string> lines;
+    std::istringstream stream(text);
+    std::string line;
+    while (std::getline(stream, line))
+        lines.push_back(line);
+    return lines;
+}
+
 static std::string formatUptime(int64_t secs)
 {
     if (secs < 0) return "\xe2\x80\x93"; // –
@@ -326,23 +336,15 @@ void ServerTabWidget::renderConfigTab()
 
         // Build a simple line-by-line diff
         std::string current = m_configBuf;
-        auto splitLines = [](const std::string &text) {
-            std::vector<std::string> lines;
-            std::istringstream stream(text);
-            std::string line;
-            while (std::getline(stream, line))
-                lines.push_back(line);
-            return lines;
-        };
-
         auto oldLines = splitLines(m_originalConfig);
         auto newLines = splitLines(current);
 
         ImGui::BeginChild("##DiffView", ImVec2(600, 300), ImGuiChildFlags_Borders);
         size_t maxLines = std::max(oldLines.size(), newLines.size());
+        static const std::string kEmpty;
         for (size_t i = 0; i < maxLines; ++i) {
-            std::string oldL = (i < oldLines.size()) ? oldLines[i] : "";
-            std::string newL = (i < newLines.size()) ? newLines[i] : "";
+            const std::string &oldL = (i < oldLines.size()) ? oldLines[i] : kEmpty;
+            const std::string &newL = (i < newLines.size()) ? newLines[i] : kEmpty;
 
             if (oldL != newL) {
                 if (i < oldLines.size() && !oldL.empty())
