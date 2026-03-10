@@ -28,3 +28,6 @@ Thumbs.db
 # Runtime files
 ssa.log
 logs/
+
+# Build issue logs
+buildissues.txt
