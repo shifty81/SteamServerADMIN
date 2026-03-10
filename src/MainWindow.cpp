@@ -5,6 +5,7 @@
 #include "LogModule.hpp"
 #include "TrayManager.hpp"
 #include "GameTemplates.hpp"
+#include "FileDialogHelper.hpp"
 
 #include "imgui.h"
 #include <GLFW/glfw3.h>
@@ -227,6 +228,12 @@ void MainWindow::renderMenuBar()
         static char syncPath[512] = {};
         ImGui::Text("Master Config Zip Path:");
         ImGui::InputText("##syncPath", syncPath, sizeof(syncPath));
+        ImGui::SameLine();
+        if (ImGui::Button("Browse##syncMenu")) {
+            FileDialogHelper::browseOpenFile("Select Config Zip",
+                syncPath, sizeof(syncPath),
+                {"Zip Files", "*.zip", "All Files", "*"});
+        }
         if (ImGui::Button("Sync") && syncPath[0] != '\0') {
             m_manager->syncConfigsCluster(syncPath);
             syncPath[0] = '\0';
@@ -329,6 +336,12 @@ void MainWindow::renderSidebar()
         static char cfgPath[512] = {};
         ImGui::Text("Master Config Zip Path:");
         ImGui::InputText("##cfgPath", cfgPath, sizeof(cfgPath));
+        ImGui::SameLine();
+        if (ImGui::Button("Browse##syncSidebar")) {
+            FileDialogHelper::browseOpenFile("Select Config Zip",
+                cfgPath, sizeof(cfgPath),
+                {"Zip Files", "*.zip", "All Files", "*"});
+        }
         if (ImGui::Button("Sync") && cfgPath[0] != '\0') {
             m_manager->syncConfigsCluster(cfgPath);
             cfgPath[0] = '\0';
@@ -548,7 +561,18 @@ void MainWindow::renderAddServerDialog()
     ImGui::InputText("Server Name",       m_addName, sizeof(m_addName));
     ImGui::InputInt("Steam AppID",        &m_addAppId);
     ImGui::InputText("Install Directory", m_addDir,  sizeof(m_addDir));
+    ImGui::SameLine();
+    if (ImGui::Button("Browse##addDir")) {
+        FileDialogHelper::browseFolder("Select Install Directory",
+            m_addDir, sizeof(m_addDir));
+    }
     ImGui::InputText("Executable",        m_addExe,  sizeof(m_addExe));
+    ImGui::SameLine();
+    if (ImGui::Button("Browse##addExe")) {
+        FileDialogHelper::browseOpenFile("Select Executable",
+            m_addExe, sizeof(m_addExe),
+            {"All Files", "*"});
+    }
     ImGui::InputText("Launch Arguments",  m_addArgs, sizeof(m_addArgs));
 
     ImGui::Separator();
@@ -782,6 +806,12 @@ void MainWindow::renderExportServerDialog()
     }
 
     ImGui::InputText("Export Path", m_exportPath, sizeof(m_exportPath));
+    ImGui::SameLine();
+    if (ImGui::Button("Browse##export")) {
+        FileDialogHelper::browseSaveFile("Export Server Config",
+            m_exportPath, sizeof(m_exportPath),
+            {"JSON Files", "*.json", "All Files", "*"});
+    }
 
     ImGui::Separator();
     static std::string exportStatus;
@@ -827,6 +857,12 @@ void MainWindow::renderImportServerDialog()
 
     ImGui::Text("Path to server config JSON:");
     ImGui::InputText("##importPath", importPath, sizeof(importPath));
+    ImGui::SameLine();
+    if (ImGui::Button("Browse##import")) {
+        FileDialogHelper::browseOpenFile("Select Server Config",
+            importPath, sizeof(importPath),
+            {"JSON Files", "*.json", "All Files", "*"});
+    }
 
     if (!importError.empty())
         ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s",
