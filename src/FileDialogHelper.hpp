@@ -40,7 +40,8 @@ inline void browseOpenFile(const char *title, char *buf, size_t bufSize,
 inline void browseSaveFile(const char *title, char *buf, size_t bufSize,
                            const std::vector<std::string> &filters = {"All Files", "*"})
 {
-    auto file = pfd::save_file(title, buf, filters).result();
+    std::string defaultPath = (buf && buf[0] != '\0') ? std::string(buf) : std::string();
+    auto file = pfd::save_file(title, defaultPath, filters).result();
     if (!file.empty()) {
         std::strncpy(buf, file.c_str(), bufSize - 1);
         buf[bufSize - 1] = '\0';
