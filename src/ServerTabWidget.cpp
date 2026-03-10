@@ -33,6 +33,16 @@ static std::string readFileToString(const std::string &path)
                        std::istreambuf_iterator<char>()};
 }
 
+static std::vector<std::string> splitLines(const std::string &text)
+{
+    std::vector<std::string> lines;
+    std::istringstream stream(text);
+    std::string line;
+    while (std::getline(stream, line))
+        lines.push_back(line);
+    return lines;
+}
+
 static std::string formatUptime(int64_t secs)
 {
     if (secs < 0) return "\xe2\x80\x93"; // –
@@ -304,19 +314,66 @@ void ServerTabWidget::renderConfigTab()
                               ImVec2(-1, -60), ImGuiInputTextFlags_AllowTabInput);
 
     if (ImGui::Button("Save")) {
-        std::ofstream f(m_configPath);
-        if (f.is_open()) {
-            f << m_configBuf;
-            m_originalConfig = m_configBuf;
-            m_consoleOutput += "[SSA] Config saved.\n";
+        // Show diff preview if there are changes
+        std::string current = m_configBuf;
+        if (current != m_originalConfig) {
+            ImGui::OpenPopup("Config Diff Preview");
         } else {
-            m_consoleOutput += "[ERROR] Could not write config file.\n";
+            m_consoleOutput += "[SSA] No changes to save.\n";
         }
     }
     ImGui::SameLine();
     if (ImGui::Button("Revert")) {
         copyStr(m_configBuf, sizeof(m_configBuf), m_originalConfig);
         m_consoleOutput += "[SSA] Config reverted.\n";
+    }
+
+    // Diff preview modal
+    if (ImGui::BeginPopupModal("Config Diff Preview", nullptr,
+                               ImGuiWindowFlags_AlwaysAutoResize)) {
+        ImGui::Text("Changes to %s:", m_configPath.c_str());
+        ImGui::Separator();
+
+        // Build a simple line-by-line diff
+        std::string current = m_configBuf;
+        auto oldLines = splitLines(m_originalConfig);
+        auto newLines = splitLines(current);
+
+        ImGui::BeginChild("##DiffView", ImVec2(600, 300), ImGuiChildFlags_Borders);
+        size_t maxLines = std::max(oldLines.size(), newLines.size());
+        static const std::string kEmpty;
+        for (size_t i = 0; i < maxLines; ++i) {
+            const std::string &oldL = (i < oldLines.size()) ? oldLines[i] : kEmpty;
+            const std::string &newL = (i < newLines.size()) ? newLines[i] : kEmpty;
+
+            if (oldL != newL) {
+                if (i < oldLines.size() && !oldL.empty())
+                    ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "- %s", oldL.c_str());
+                if (i < newLines.size() && !newL.empty())
+                    ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f), "+ %s", newL.c_str());
+            } else {
+                ImGui::Text("  %s", newL.c_str());
+            }
+        }
+        ImGui::EndChild();
+
+        ImGui::Spacing();
+        if (ImGui::Button("Confirm Save", ImVec2(140, 0))) {
+            std::ofstream f(m_configPath);
+            if (f.is_open()) {
+                f << m_configBuf;
+                m_originalConfig = m_configBuf;
+                m_consoleOutput += "[SSA] Config saved.\n";
+            } else {
+                m_consoleOutput += "[ERROR] Could not write config file.\n";
+            }
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel", ImVec2(140, 0)))
+            ImGui::CloseCurrentPopup();
+
+        ImGui::EndPopup();
     }
 }
 
@@ -433,6 +490,30 @@ void ServerTabWidget::renderBackupsTab()
 // Console
 // ---------------------------------------------------------------------------
 
+static int consoleHistoryCallback(ImGuiInputTextCallbackData *data)
+{
+    ServerTabWidget *self = static_cast<ServerTabWidget *>(data->UserData);
+    if (self->m_commandHistory.empty())
+        return 0;
+
+    if (data->EventKey == ImGuiKey_UpArrow) {
+        if (self->m_historyIndex > 0)
+            --self->m_historyIndex;
+    } else if (data->EventKey == ImGuiKey_DownArrow) {
+        if (self->m_historyIndex < static_cast<int>(self->m_commandHistory.size()))
+            ++self->m_historyIndex;
+    }
+
+    const char *replacement = "";
+    if (self->m_historyIndex >= 0 &&
+        self->m_historyIndex < static_cast<int>(self->m_commandHistory.size()))
+        replacement = self->m_commandHistory[self->m_historyIndex].c_str();
+
+    data->DeleteChars(0, data->BufTextLen);
+    data->InsertChars(0, replacement);
+    return 0;
+}
+
 void ServerTabWidget::renderConsoleTab()
 {
     ImGui::SeparatorText("RCON Console");
@@ -444,9 +525,11 @@ void ServerTabWidget::renderConsoleTab()
         ImGui::SetScrollHereY(1.0f);
     ImGui::EndChild();
 
-    // Input line
+    // Input line with Up/Down arrow history navigation
     bool send = ImGui::InputText("##CmdInput", m_consoleCmdBuf, sizeof(m_consoleCmdBuf),
-                                 ImGuiInputTextFlags_EnterReturnsTrue);
+                                 ImGuiInputTextFlags_EnterReturnsTrue |
+                                 ImGuiInputTextFlags_CallbackHistory,
+                                 consoleHistoryCallback, this);
     ImGui::SameLine();
     send |= ImGui::Button("Send");
 

@@ -146,8 +146,8 @@ void HomeDashboard::renderCard(ServerConfig &server, int index)
     if (cardWidth < 200.0f) cardWidth = 200.0f;
 
     ImGui::BeginChild(("card_" + std::to_string(index)).c_str(),
-                       ImVec2(cardWidth, 0), true,
-                       ImGuiWindowFlags_AlwaysAutoResize);
+                       ImVec2(cardWidth, 0),
+                       ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY);
 
     bool online  = m_manager->isServerRunning(server);
     int  players = online ? m_manager->getPlayerCount(server) : -1;

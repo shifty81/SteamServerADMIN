@@ -83,11 +83,13 @@ private:
     // Mods
     char m_newModId[32]      = {};
 
-    // Console
+    // Console (public for history callback access)
+public:
     char m_consoleCmdBuf[512] = {};
     std::string m_consoleOutput;
     std::vector<std::string> m_commandHistory;
     int  m_historyIndex      = -1;
+private:
 
     // Log viewer
     std::string m_logContent;

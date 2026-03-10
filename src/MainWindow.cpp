@@ -13,6 +13,8 @@
 #include <algorithm>
 #include <cctype>
 #include <cstring>
+#include <fstream>
+#include <nlohmann/json.hpp>
 
 static constexpr int    kSidebarButtonCount       = 11;
 static constexpr float  kNotificationTimeoutSec   = 5.0f;
@@ -52,6 +54,9 @@ MainWindow::MainWindow(GLFWwindow *window)
     : m_window(window)
     , m_lastTick(std::chrono::steady_clock::now())
 {
+    loadPreferences();
+    applyTheme();
+
     m_manager = new ServerManager("servers.json");
     m_manager->loadConfig();
 
@@ -71,6 +76,24 @@ MainWindow::MainWindow(GLFWwindow *window)
     m_dashboard = new HomeDashboard(m_manager);
 
     m_scheduler = new SchedulerModule(m_manager);
+
+    // Wire up scheduled RCON commands
+    m_scheduler->onScheduledRconCommand = [this](const std::string &serverName) {
+        for (auto &s : m_manager->servers()) {
+            if (s.name == serverName) {
+                for (const auto &cmd : s.scheduledRconCommands)
+                    m_manager->sendRconCommand(s, cmd);
+                break;
+            }
+        }
+    };
+
+    // Wire up auto-update checks to set pending update indicators
+    m_scheduler->onScheduledUpdateCheck = [this](const std::string &serverName) {
+        m_manager->setPendingUpdate(serverName, true);
+        m_logModule->log(serverName, "Periodic update check: marked as pending.");
+    };
+
     m_scheduler->startAll();
 
     m_manager->autoStartServers();
@@ -159,6 +182,10 @@ void MainWindow::render()
         ImGui::OpenPopup("Broadcast Command");
         m_showBroadcast = false;
     }
+    if (m_showAbout) {
+        ImGui::OpenPopup("About SSA");
+        m_showAbout = false;
+    }
 
     // ---------- Render modal popups ----------
     renderAddServerDialog();
@@ -167,6 +194,7 @@ void MainWindow::render()
     renderExportServerDialog();
     renderImportServerDialog();
     renderBroadcastDialog();
+    renderAboutDialog();
 
     ImGui::End();
 
@@ -216,6 +244,26 @@ void MainWindow::renderMenuBar()
             ImGui::EndMenu();
         }
 
+        if (ImGui::BeginMenu("View")) {
+            if (ImGui::MenuItem("Dark Theme", nullptr, m_darkMode)) {
+                m_darkMode = true;
+                applyTheme();
+                savePreferences();
+            }
+            if (ImGui::MenuItem("Light Theme", nullptr, !m_darkMode)) {
+                m_darkMode = false;
+                applyTheme();
+                savePreferences();
+            }
+            ImGui::EndMenu();
+        }
+
+        if (ImGui::BeginMenu("Help")) {
+            if (ImGui::MenuItem("About SSA..."))
+                m_showAbout = true;
+            ImGui::EndMenu();
+        }
+
         ImGui::EndMenuBar();
     }
 
@@ -252,7 +300,7 @@ void MainWindow::renderMenuBar()
 
 void MainWindow::renderSidebar()
 {
-    ImGui::BeginChild("Sidebar", ImVec2(220, 0), true);
+    ImGui::BeginChild("Sidebar", ImVec2(220, 0), ImGuiChildFlags_Borders);
 
     ImGui::TextUnformatted("Servers");
     ImGui::Separator();
@@ -444,7 +492,7 @@ void MainWindow::renderLogViewerTab()
         m_logFilterText = filterBuf;
 
     // Scrollable log area
-    ImGui::BeginChild("##LogEntries", ImVec2(0, 0), true);
+    ImGui::BeginChild("##LogEntries", ImVec2(0, 0), ImGuiChildFlags_Borders);
 
     const auto entries = m_logModule->entries();
     for (const auto &entry : entries) {
@@ -963,4 +1011,70 @@ void MainWindow::rebuildServerTabs()
         addServerTab(s);
 
     m_selectedTab = 0; // Reset to Home after rebuild
+}
+
+// ---------------------------------------------------------------------------
+// About dialog
+// ---------------------------------------------------------------------------
+
+void MainWindow::renderAboutDialog()
+{
+    if (!ImGui::BeginPopupModal("About SSA", nullptr,
+                                ImGuiWindowFlags_AlwaysAutoResize))
+        return;
+
+    ImGui::Text("SSA \xe2\x80\x93 Steam Server ADMIN");
+    ImGui::Separator();
+    ImGui::Text("A cross-platform Dear ImGui / GLFW desktop application");
+    ImGui::Text("for managing SteamCMD-based game servers.");
+    ImGui::Spacing();
+    ImGui::Text("Built with Dear ImGui, GLFW, nlohmann/json");
+    ImGui::Text("License: see LICENSE file");
+    ImGui::Spacing();
+    ImGui::Text("https://github.com/shifty81/SteamServerADMIN");
+    ImGui::Spacing();
+    if (ImGui::Button("OK", ImVec2(120, 0)))
+        ImGui::CloseCurrentPopup();
+
+    ImGui::EndPopup();
+}
+
+// ---------------------------------------------------------------------------
+// Preferences (theme persistence)
+// ---------------------------------------------------------------------------
+
+static const char *kPreferencesFile = "ssa_preferences.json";
+
+void MainWindow::loadPreferences()
+{
+    std::ifstream f(kPreferencesFile);
+    if (!f.is_open())
+        return;
+
+    try {
+        nlohmann::json j;
+        f >> j;
+        if (j.contains("darkMode") && j["darkMode"].is_boolean())
+            m_darkMode = j["darkMode"].get<bool>();
+    } catch (...) {
+        // Ignore malformed preferences
+    }
+}
+
+void MainWindow::savePreferences() const
+{
+    nlohmann::json j;
+    j["darkMode"] = m_darkMode;
+
+    std::ofstream f(kPreferencesFile);
+    if (f.is_open())
+        f << j.dump(2) << "\n";
+}
+
+void MainWindow::applyTheme()
+{
+    if (m_darkMode)
+        ImGui::StyleColorsDark();
+    else
+        ImGui::StyleColorsLight();
 }

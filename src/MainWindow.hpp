@@ -46,6 +46,11 @@ private:
     void renderExportServerDialog();
     void renderImportServerDialog();
     void renderBroadcastDialog();
+    void renderAboutDialog();
+
+    void loadPreferences();
+    void savePreferences() const;
+    void applyTheme();
 
     GLFWwindow *m_window = nullptr;
     ServerManager *m_manager = nullptr;
@@ -69,6 +74,10 @@ private:
     bool m_showExportServer = false;
     bool m_showImportServer = false;
     bool m_showBroadcast = false;
+    bool m_showAbout = false;
+
+    // Theme / preferences
+    bool m_darkMode = true;  // true = dark theme (default)
 
     // Add server dialog fields
     int m_addTemplateIdx = 0;
