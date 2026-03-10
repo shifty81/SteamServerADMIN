@@ -107,6 +107,10 @@ add_executable(SSA ${APP_SOURCES})
 
 target_include_directories(SSA PRIVATE src)
 
+if(WIN32)
+    target_compile_definitions(SSA PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+endif()
+
 target_link_libraries(SSA PRIVATE
     imgui
     glfw
@@ -149,6 +153,10 @@ set(TEST_SOURCES
 add_executable(SSA_Tests ${TEST_SOURCES})
 
 target_include_directories(SSA_Tests PRIVATE src)
+
+if(WIN32)
+    target_compile_definitions(SSA_Tests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
+endif()
 
 target_link_libraries(SSA_Tests PRIVATE
     nlohmann_json::nlohmann_json
