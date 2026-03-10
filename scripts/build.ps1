@@ -1,5 +1,8 @@
 # ──────────────────────────────────────────────────────────────
 # SSA – Steam Server ADMIN  ·  Automated build script (Windows)
+# Dependencies (GLFW, ImGui, nlohmann/json, GoogleTest) are fetched
+# automatically by CMake FetchContent.  No external UI framework
+# installation is required.
 # ──────────────────────────────────────────────────────────────
 #Requires -Version 5.1
 param(
@@ -66,129 +69,16 @@ if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) {
     throw $msg
 }
 
-# ── 2. Locate or install Qt6 ─────────────────────────────────
-function Find-Qt6 {
-    # Check common installation paths on Windows
-    $searchPaths = @(
-        "$env:QT_DIR",
-        "$env:Qt6_DIR",
-        "$env:QTDIR",
-        "C:\Qt",
-        "$env:USERPROFILE\Qt",
-        "C:\Qt\6*\msvc*_64",
-        "C:\Qt\6*\mingw*_64",
-        "$env:USERPROFILE\Qt\6*\msvc*_64",
-        "$env:USERPROFILE\Qt\6*\mingw*_64"
-    ) | Where-Object { $_ -and $_ -ne "" }
-
-    foreach ($base in $searchPaths) {
-        $resolved = Resolve-Path -Path $base -ErrorAction SilentlyContinue
-        foreach ($p in $resolved) {
-            $configFile = Join-Path $p.Path "lib\cmake\Qt6\Qt6Config.cmake"
-            if (Test-Path $configFile) {
-                return $p.Path
-            }
-        }
-    }
-    return $null
-}
-
-function Install-Qt6 {
-    # Try aqtinstall (Python-based Qt installer – the standard CI tool)
-    $pipCmd = Get-Command pip3 -ErrorAction SilentlyContinue
-    if (-not $pipCmd) { $pipCmd = Get-Command pip -ErrorAction SilentlyContinue }
-
-    if ($pipCmd) {
-        Info "Attempting to install Qt via aqtinstall (pip) …"
-        $pipOutput = & $pipCmd.Source install aqtinstall 2>&1
-        if ($LASTEXITCODE -ne 0) {
-            Warn "pip install aqtinstall failed: $pipOutput"
-            return $false
-        }
-        # Find aqt: check PATH, then Python user-scripts dir, then python -m aqt
-        $aqtExe = $null
-        $usePythonModule = $false
-        $aqtCmd = Get-Command aqt -ErrorAction SilentlyContinue
-        if ($aqtCmd) {
-            $aqtExe = $aqtCmd.Source
-        } else {
-            # aqt not on PATH — look in Python user-scripts directory
-            $pyCmd2 = Get-Command python3 -ErrorAction SilentlyContinue
-            if (-not $pyCmd2) { $pyCmd2 = Get-Command python -ErrorAction SilentlyContinue }
-            if ($pyCmd2) {
-                $userScripts = & $pyCmd2.Source -c "import sysconfig,os;print(sysconfig.get_path('scripts',os.name+'_user'))" 2>$null
-                if ($userScripts) {
-                    $aqtPath = Join-Path $userScripts "aqt.exe"
-                    if (Test-Path $aqtPath) {
-                        $aqtExe = $aqtPath
-                        Info "Found aqt at: $aqtExe"
-                    }
-                }
-                # Last resort: python -m aqt (verify it works first)
-                if (-not $aqtExe) {
-                    & $pyCmd2.Source -m aqt version 2>$null | Out-Null
-                    if ($LASTEXITCODE -eq 0) {
-                        $aqtExe = $pyCmd2.Source
-                        $usePythonModule = $true
-                        Info "Using 'python -m aqt' (aqt not found on PATH)"
-                    }
-                }
-            }
-        }
-
-        if ($aqtExe) {
-            $qtVer  = if ($env:SSA_QT_VERSION) { $env:SSA_QT_VERSION } else { "6.7.2" }
-            $qtArch = if ($env:SSA_QT_ARCH)    { $env:SSA_QT_ARCH }    else { "win64_msvc2019_64" }
-            $qtInstallDir = if ($env:QT_BASEDIR) { $env:QT_BASEDIR } else { Join-Path $env:USERPROFILE "Qt" }
-            Info "Installing Qt $qtVer ($qtArch) to $qtInstallDir …"
-            if ($usePythonModule) {
-                & $aqtExe -m aqt install-qt windows desktop $qtVer $qtArch --outputdir $qtInstallDir 2>&1
-            } else {
-                & $aqtExe install-qt windows desktop $qtVer $qtArch --outputdir $qtInstallDir 2>&1
-            }
-            if ($LASTEXITCODE -eq 0) { return $true }
-        }
-        Warn "aqtinstall did not succeed."
-    }
-
-    return $false
-}
-
-$qt6Path = Find-Qt6
-if (-not $qt6Path) {
-    Warn "Qt6 not found in common locations — attempting automatic installation …"
-    $installed = Install-Qt6
-    $qt6Path = Find-Qt6
-
-    if (-not $qt6Path) {
-        $msg = "Qt6 could not be found or installed automatically. Please install Qt 6.4+ from https://www.qt.io/download or via: pip install aqtinstall && aqt install-qt windows desktop 6.7.2 win64_msvc2019_64 --outputdir `$env:USERPROFILE\Qt"
-        Write-Host ""
-        Write-Host "=== $msg ===" -ForegroundColor Yellow
-        Write-Host '  Set: $env:CMAKE_PREFIX_PATH = "C:\Qt\6.x.x\msvc20xx_64"' -ForegroundColor Yellow
-        Write-Host '  Or:  cmake -B build -DCMAKE_PREFIX_PATH="C:\Qt\6.x.x\..."' -ForegroundColor Yellow
-        Fatal $msg $ConfigureLog
-        $ExitCode = 1
-        throw $msg
-    }
-}
-
-Info "Qt6 found at: $qt6Path"
-
-# ── 3. Configure ─────────────────────────────────────────────
-$cmakeArgs = @("-B", $BuildDir, "-DCMAKE_BUILD_TYPE=$BuildType")
-if ($qt6Path) {
-    $cmakeArgs += "-DCMAKE_PREFIX_PATH=$qt6Path"
-}
-
+# ── 2. Configure ─────────────────────────────────────────────
 Info "Configuring ($BuildType) …"
-cmake @cmakeArgs 2>&1 | Tee-Object -FilePath $ConfigureLog -Append
+cmake -B $BuildDir -DCMAKE_BUILD_TYPE=$BuildType 2>&1 | Tee-Object -FilePath $ConfigureLog -Append
 if ($LASTEXITCODE -ne 0) {
     Fatal "CMake configuration failed. See $ConfigureLog" $ConfigureLog
     $ExitCode = 1
     throw "CMake configuration failed."
 }
 
-# ── 4. Build ─────────────────────────────────────────────────
+# ── 3. Build ─────────────────────────────────────────────────
 $cpuCount = 2
 try { $cpuCount = (Get-CimInstance Win32_Processor -ErrorAction SilentlyContinue).NumberOfLogicalProcessors } catch {}
 if (-not $cpuCount -or $cpuCount -lt 1) { $cpuCount = 2 }
@@ -201,7 +91,7 @@ if ($LASTEXITCODE -ne 0) {
     throw "Build failed."
 }
 
-# ── 5. Run tests ─────────────────────────────────────────────
+# ── 4. Run tests ─────────────────────────────────────────────
 $testBin = Join-Path $BuildDir "$BuildType\SSA_Tests.exe"
 if (-not (Test-Path $testBin)) {
     $testBin = Join-Path $BuildDir "SSA_Tests.exe"

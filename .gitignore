@@ -5,12 +5,6 @@ out/
 _codeql_build_dir/
 _codeql_detected_source_root
 
-# Qt generated files
-*.moc
-moc_*.cpp
-qrc_*.cpp
-ui_*.h
-
 # CMake generated
 CMakeCache.txt
 CMakeFiles/
