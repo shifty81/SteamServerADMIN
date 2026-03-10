@@ -27,5 +27,6 @@ Thumbs.db
 
 # Runtime files
 ssa.log
+ssa_preferences.json
 logs/
 

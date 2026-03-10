@@ -64,12 +64,14 @@ void SchedulerModule::startScheduler(const std::string &serverName)
     int restartHours  = 0;
     int rconMinutes   = 0;
     int warningMinutes = 0;
+    int updateCheckMinutes = 0;
     for (const ServerConfig &s : m_manager->servers()) {
         if (s.name == serverName) {
             backupMinutes  = s.backupIntervalMinutes;
             restartHours   = s.restartIntervalHours;
             rconMinutes    = s.rconCommandIntervalMinutes;
             warningMinutes = s.restartWarningMinutes;
+            updateCheckMinutes = s.autoUpdateCheckIntervalMinutes;
             break;
         }
     }
@@ -91,6 +93,11 @@ void SchedulerModule::startScheduler(const std::string &serverName)
     if (rconMinutes > 0) {
         t.rconIntervalMs = static_cast<int64_t>(rconMinutes) * 60 * 1000;
         t.lastRcon = now;
+    }
+
+    if (updateCheckMinutes > 0) {
+        t.updateCheckIntervalMs = static_cast<int64_t>(updateCheckMinutes) * 60 * 1000;
+        t.lastUpdateCheck = now;
     }
 
     m_timers[serverName] = t;
@@ -194,6 +201,16 @@ void SchedulerModule::tick()
                 t.lastRcon = now;
                 if (onScheduledRconCommand)
                     onScheduledRconCommand(serverName);
+            }
+        }
+
+        // --- Auto-update check ---
+        if (t.updateCheckIntervalMs > 0) {
+            auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - t.lastUpdateCheck).count();
+            if (elapsed >= t.updateCheckIntervalMs) {
+                t.lastUpdateCheck = now;
+                if (onScheduledUpdateCheck)
+                    onScheduledUpdateCheck(serverName);
             }
         }
     }

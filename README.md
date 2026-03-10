@@ -69,6 +69,7 @@ A cross-platform Dear ImGui / GLFW desktop application for managing SteamCMD-bas
 | **Batch start / stop / restart** | Start, stop, or restart all servers at once, or limit to a specific group; startup priority ordering is respected |
 | **Auto-update checking** | Periodic SteamCMD update checks per server (`autoUpdateCheckIntervalMinutes`); pending update badges shown on dashboard |
 | **Server statistics** | Track cumulative uptime, total crash count, and last crash time across sessions; stats displayed on dashboard cards and settings tab |
+| **About dialog** | Help → About SSA shows version and project information |
 
 ---
 
@@ -219,7 +220,9 @@ SSA/
 │   ├── TrayManager.*         # System tray icon & notifications
 │   ├── WebhookModule.*       # Discord webhook event notifications
 │   ├── ResourceMonitor.*     # Per-process CPU/memory usage monitoring
-│   └── EventHookManager.*    # Custom script execution on server events
+│   ├── EventHookManager.*    # Custom script execution on server events
+│   ├── FileDialogHelper.hpp  # Native OS file/folder browse dialogs
+│   └── ConsoleLogWriter.hpp  # RCON console session logging
 ├── tests/
 │   └── test_serverconfig.cpp # Google Test unit tests
 ├── CMakeLists.txt

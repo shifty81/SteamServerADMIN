@@ -761,6 +761,16 @@ void ServerManager::stopServer(ServerConfig &server)
         return;
     }
 
+    // Accumulate uptime before stopping
+    auto stIt = m_startTimes.find(server.name);
+    if (stIt != m_startTimes.end()) {
+        auto now = std::chrono::system_clock::now();
+        auto uptime = std::chrono::duration_cast<std::chrono::seconds>(
+            now - stIt->second).count();
+        server.totalUptimeSeconds += uptime;
+        saveConfig();
+    }
+
     ProcessInfo &proc = it->second;
     int timeoutMs = server.gracefulShutdownSeconds * 1000;
 
@@ -842,10 +852,25 @@ void ServerManager::handleCrash(const std::string &serverName, int exitCode)
         crashes = 1;
     m_crashCounts[serverName] = crashes;
 
-    if (onServerCrashed) onServerCrashed(serverName);
+    // Update persistent crash statistics
+    auto now = std::chrono::system_clock::now();
+    std::time_t nowT = std::chrono::system_clock::to_time_t(now);
+    char timeBuf[64];
+    std::strftime(timeBuf, sizeof(timeBuf), "%Y-%m-%dT%H:%M:%S", std::gmtime(&nowT));
 
-    for (const ServerConfig &s : m_servers) {
+    for (ServerConfig &s : m_servers) {
         if (s.name == serverName) {
+            // Accumulate uptime before clearing the start time
+            auto stIt = m_startTimes.find(serverName);
+            if (stIt != m_startTimes.end()) {
+                auto uptime = std::chrono::duration_cast<std::chrono::seconds>(
+                    now - stIt->second).count();
+                s.totalUptimeSeconds += uptime;
+            }
+
+            s.totalCrashes++;
+            s.lastCrashTime = timeBuf;
+
             auto hookIt = s.eventHooks.find("onCrash");
             if (hookIt != s.eventHooks.end())
                 m_eventHookManager.fireHook(s.name, s.dir, "onCrash", hookIt->second);
@@ -855,6 +880,9 @@ void ServerManager::handleCrash(const std::string &serverName, int exitCode)
             break;
         }
     }
+    saveConfig();
+
+    if (onServerCrashed) onServerCrashed(serverName);
 
     if (crashes > kMaxCrashRestarts) {
         emitLog(serverName,
@@ -902,6 +930,7 @@ void ServerManager::deployServer(ServerConfig &server)
         emitLog(server.name, line);
     };
     steamCmd.deployServer(server);
+    setPendingUpdate(server.name, false);
 }
 
 bool ServerManager::updateMods(ServerConfig &server)
@@ -918,6 +947,7 @@ bool ServerManager::updateMods(ServerConfig &server)
     bool ok = steamCmd.updateMods(server);
 
     if (ok) {
+        setPendingModUpdate(server.name, false);
         auto hookIt = server.eventHooks.find("onUpdate");
         if (hookIt != server.eventHooks.end())
             m_eventHookManager.fireHook(server.name, server.dir, "onUpdate", hookIt->second);

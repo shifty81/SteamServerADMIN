@@ -44,6 +44,7 @@ public:
     std::function<void(const std::string &serverName)> onScheduledBackup;
     std::function<void(const std::string &serverName)> onScheduledRestart;
     std::function<void(const std::string &serverName)> onScheduledRconCommand;
+    std::function<void(const std::string &serverName)> onScheduledUpdateCheck;
 
 private:
     struct TimerState {
@@ -51,11 +52,13 @@ private:
         int64_t backupIntervalMs  = 0;
         int64_t restartIntervalMs = 0;
         int64_t rconIntervalMs    = 0;
+        int64_t updateCheckIntervalMs = 0;
 
         // Time points of last execution
         std::chrono::steady_clock::time_point lastBackup;
         std::chrono::steady_clock::time_point lastRestart;
         std::chrono::steady_clock::time_point lastRcon;
+        std::chrono::steady_clock::time_point lastUpdateCheck;
 
         // Restart warning state
         int     restartWarningMinutes = 0;     // configured warning lead time

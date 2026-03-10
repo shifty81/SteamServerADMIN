@@ -3315,3 +3315,179 @@ TEST(ServerConfig, StatsValidation)
 }
 
 
+// ===========================================================================
+// Pending update indicator tests
+// ===========================================================================
+
+TEST(ServerConfig, PendingUpdateSetAndClear)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
+
+    ServerManager mgr(configPath);
+    ServerConfig s;
+    s.name = "PendUpd";
+    s.appid = 1;
+    s.dir = tmp.filePath("srv");
+    mgr.servers().push_back(s);
+    mgr.saveConfig();
+
+    EXPECT_FALSE(mgr.hasPendingUpdate("PendUpd"));
+    mgr.setPendingUpdate("PendUpd", true);
+    EXPECT_TRUE(mgr.hasPendingUpdate("PendUpd"));
+    mgr.setPendingUpdate("PendUpd", false);
+    EXPECT_FALSE(mgr.hasPendingUpdate("PendUpd"));
+}
+
+TEST(ServerConfig, PendingModUpdateSetAndClear)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
+
+    ServerManager mgr(configPath);
+    ServerConfig s;
+    s.name = "PendMod";
+    s.appid = 1;
+    s.dir = tmp.filePath("srv");
+    mgr.servers().push_back(s);
+    mgr.saveConfig();
+
+    EXPECT_FALSE(mgr.hasPendingModUpdate("PendMod"));
+    mgr.setPendingModUpdate("PendMod", true);
+    EXPECT_TRUE(mgr.hasPendingModUpdate("PendMod"));
+    mgr.setPendingModUpdate("PendMod", false);
+    EXPECT_FALSE(mgr.hasPendingModUpdate("PendMod"));
+}
+
+TEST(ServerConfig, PendingUpdateNonexistentServer)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
+
+    ServerManager mgr(configPath);
+    EXPECT_FALSE(mgr.hasPendingUpdate("DoesNotExist"));
+    EXPECT_FALSE(mgr.hasPendingModUpdate("DoesNotExist"));
+}
+
+// ===========================================================================
+// Scheduler auto-update check timer tests
+// ===========================================================================
+
+TEST(ServerConfig, SchedulerUpdateCheckCallback)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
+
+    ServerManager mgr(configPath);
+    ServerConfig s;
+    s.name = "TimerTest";
+    s.appid = 1;
+    s.dir = tmp.filePath("srv");
+    s.autoUpdateCheckIntervalMinutes = 1; // 1 minute
+    mgr.servers().push_back(s);
+    mgr.saveConfig();
+
+    SchedulerModule scheduler(&mgr);
+
+    std::string calledFor;
+    scheduler.onScheduledUpdateCheck = [&calledFor](const std::string &name) {
+        calledFor = name;
+    };
+
+    scheduler.startScheduler("TimerTest");
+
+    // Tick should NOT fire immediately (interval has not elapsed)
+    scheduler.tick();
+    EXPECT_TRUE(calledFor.empty());
+}
+
+TEST(ServerConfig, SchedulerUpdateCheckDisabledWhenZero)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
+
+    ServerManager mgr(configPath);
+    ServerConfig s;
+    s.name = "NoCheck";
+    s.appid = 1;
+    s.dir = tmp.filePath("srv");
+    s.autoUpdateCheckIntervalMinutes = 0; // disabled
+    mgr.servers().push_back(s);
+    mgr.saveConfig();
+
+    SchedulerModule scheduler(&mgr);
+
+    bool called = false;
+    scheduler.onScheduledUpdateCheck = [&called](const std::string &) {
+        called = true;
+    };
+
+    scheduler.startScheduler("NoCheck");
+    scheduler.tick();
+    EXPECT_FALSE(called);
+}
+
+// ===========================================================================
+// Crash statistics accumulation
+// ===========================================================================
+
+TEST(ServerConfig, CrashStatsInitialValues)
+{
+    ServerConfig s;
+    EXPECT_EQ(s.totalCrashes, 0);
+    EXPECT_EQ(s.totalUptimeSeconds, 0);
+    EXPECT_TRUE(s.lastCrashTime.empty());
+}
+
+// ===========================================================================
+// Preferences file round-trip (tests JSON format)
+// ===========================================================================
+
+TEST(ServerConfig, PreferencesJsonFormat)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string prefPath = tmp.filePath("ssa_preferences.json");
+
+    // Write preferences
+    {
+        nlohmann::json j;
+        j["darkMode"] = false;
+        std::ofstream f(prefPath);
+        ASSERT_TRUE(f.is_open());
+        f << j.dump(2) << "\n";
+    }
+
+    // Read back
+    {
+        std::ifstream f(prefPath);
+        ASSERT_TRUE(f.is_open());
+        nlohmann::json j;
+        f >> j;
+        ASSERT_TRUE(j.contains("darkMode"));
+        EXPECT_FALSE(j["darkMode"].get<bool>());
+    }
+
+    // Write dark mode true
+    {
+        nlohmann::json j;
+        j["darkMode"] = true;
+        std::ofstream f(prefPath);
+        ASSERT_TRUE(f.is_open());
+        f << j.dump(2) << "\n";
+    }
+
+    // Read back
+    {
+        std::ifstream f(prefPath);
+        ASSERT_TRUE(f.is_open());
+        nlohmann::json j;
+        f >> j;
+        EXPECT_TRUE(j["darkMode"].get<bool>());
+    }
+}
