@@ -1,6 +1,7 @@
 #include "ServerTabWidget.hpp"
 #include "BackupModule.hpp"
 #include "ConsoleLogWriter.hpp"
+#include "FileDialogHelper.hpp"
 
 #include "imgui.h"
 
@@ -174,7 +175,18 @@ void ServerTabWidget::renderSettingsTab()
     ImGui::InputText("Name",           m_settName,     sizeof(m_settName));
     ImGui::InputInt("AppID",           &m_settAppid);
     ImGui::InputText("Directory",      m_settDir,      sizeof(m_settDir));
+    ImGui::SameLine();
+    if (ImGui::Button("Browse##settDir")) {
+        FileDialogHelper::browseFolder("Select Server Directory",
+            m_settDir, sizeof(m_settDir));
+    }
     ImGui::InputText("Executable",     m_settExe,      sizeof(m_settExe));
+    ImGui::SameLine();
+    if (ImGui::Button("Browse##settExe")) {
+        FileDialogHelper::browseOpenFile("Select Server Executable",
+            m_settExe, sizeof(m_settExe),
+            {"All Files", "*"});
+    }
     ImGui::InputText("Launch Args",    m_settArgs,     sizeof(m_settArgs));
 
     ImGui::SeparatorText("RCON");
@@ -185,6 +197,11 @@ void ServerTabWidget::renderSettingsTab()
 
     ImGui::SeparatorText("Paths");
     ImGui::InputText("Backup Folder",  m_settBackupDir, sizeof(m_settBackupDir));
+    ImGui::SameLine();
+    if (ImGui::Button("Browse##settBackup")) {
+        FileDialogHelper::browseFolder("Select Backup Folder",
+            m_settBackupDir, sizeof(m_settBackupDir));
+    }
 
     ImGui::SeparatorText("Players");
     ImGui::InputInt("Max Players (0 = unlimited)", &m_settMaxPlayers);

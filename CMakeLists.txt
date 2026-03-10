@@ -38,7 +38,14 @@ FetchContent_Declare(
     GIT_TAG        v1.15.2
 )
 
-FetchContent_MakeAvailable(glfw imgui nlohmann_json googletest)
+# -------- Portable File Dialogs (header-only) --------
+FetchContent_Declare(
+    portable_file_dialogs
+    GIT_REPOSITORY https://github.com/samhocevar/portable-file-dialogs.git
+    GIT_TAG        0.1.0
+)
+
+FetchContent_MakeAvailable(glfw imgui nlohmann_json googletest portable_file_dialogs)
 
 # -------- OpenGL --------
 find_package(OpenGL REQUIRED)
@@ -117,6 +124,7 @@ target_link_libraries(SSA PRIVATE
     glfw
     OpenGL::GL
     nlohmann_json::nlohmann_json
+    portable_file_dialogs
 )
 
 if(UNIX AND NOT APPLE)
