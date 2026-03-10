@@ -2326,10 +2326,15 @@ TEST(ServerConfig, EventHookFireScript)
     TempDir tmp;
     ASSERT_TRUE(tmp.isValid());
 
-    // Create a simple test script
+    // Create a simple test script (platform-specific)
+#ifdef _WIN32
+    std::string scriptPath = tmp.filePath("hook.bat");
+    { std::ofstream f(scriptPath); ASSERT_TRUE(f.is_open()); f << "@echo off\necho hook ran: %SSA_SERVER_NAME% %SSA_EVENT%\n"; }
+#else
     std::string scriptPath = tmp.filePath("hook.sh");
     { std::ofstream f(scriptPath); ASSERT_TRUE(f.is_open()); f << "#!/bin/sh\necho \"hook ran: $SSA_SERVER_NAME $SSA_EVENT\"\n"; }
     std::filesystem::permissions(scriptPath, std::filesystem::perms::owner_all);
+#endif
 
     EventHookManager ehm;
     std::string cbServerName, cbEvent, cbOutput;

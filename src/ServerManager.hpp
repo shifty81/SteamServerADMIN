@@ -14,6 +14,7 @@
 #include <cstdint>
 
 #ifdef _WIN32
+#include <winsock2.h>
 #include <windows.h>
 #else
 #include <sys/types.h>
