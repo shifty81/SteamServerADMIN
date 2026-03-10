@@ -58,7 +58,8 @@ install_system_deps_linux() {
         info "Installing OpenGL / X11 development packages via pacman …"
         sudo pacman -S --noconfirm mesa libx11 libxrandr libxinerama libxcursor libxi
     else
-        warn "Unsupported package manager. Please install OpenGL and X11 development libraries manually."
+        err "Unsupported package manager. Please install OpenGL and X11 development libraries manually."
+        return 1
     fi
 }
 
