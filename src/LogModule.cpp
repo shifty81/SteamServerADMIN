@@ -22,7 +22,11 @@ static std::string currentTimestampISO()
 LogModule::LogModule(const std::string &logFilePath)
     : m_logFilePath(logFilePath)
 {
-    fs::create_directories(fs::path(logFilePath).parent_path());
+    auto parent = fs::path(logFilePath).parent_path();
+    if (!parent.empty()) {
+        std::error_code ec;
+        fs::create_directories(parent, ec);
+    }
     m_file.open(logFilePath, std::ios::app);
 }
 

@@ -49,7 +49,8 @@ install_system_deps_linux() {
         info "Installing OpenGL / X11 development packages via apt …"
         sudo apt-get update -qq
         sudo apt-get install -y libgl1-mesa-dev libx11-dev \
-            libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev
+            libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+            libwayland-dev libxkbcommon-dev
     elif command -v dnf &>/dev/null; then
         info "Installing OpenGL / X11 development packages via dnf …"
         sudo dnf install -y mesa-libGL-devel libX11-devel \
