@@ -60,6 +60,10 @@ MainWindow::MainWindow(GLFWwindow *window)
     m_manager = new ServerManager("servers.json");
     m_manager->loadConfig();
 
+    // Apply persisted SteamCMD path
+    if (m_steamCmdPath[0] != '\0')
+        m_manager->setSteamCmdPath(m_steamCmdPath);
+
     m_logModule = new LogModule("ssa.log");
     m_manager->onLogMessage = [this](const std::string &server, const std::string &msg) {
         m_logModule->log(server, msg);
@@ -630,6 +634,23 @@ void MainWindow::renderAddServerDialog()
     ImGui::InputText("Password", m_addRconPass, sizeof(m_addRconPass),
                      ImGuiInputTextFlags_Password);
 
+    // SteamCMD install option
+    ImGui::Separator();
+    ImGui::Text("SteamCMD Installation");
+    ImGui::Checkbox("Install server via SteamCMD", &m_addInstallViaSteamCmd);
+    if (m_addInstallViaSteamCmd) {
+        ImGui::InputText("SteamCMD Path", m_steamCmdPath, sizeof(m_steamCmdPath));
+        ImGui::SameLine();
+        if (ImGui::Button("Browse##steamcmd")) {
+            FileDialogHelper::browseOpenFile("Select SteamCMD Executable",
+                m_steamCmdPath, sizeof(m_steamCmdPath),
+                {"All Files", "*"});
+        }
+        if (m_steamCmdPath[0] == '\0')
+            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f),
+                "SteamCMD path is empty – using default from PATH.");
+    }
+
     // Validation error display
     if (!validationError.empty())
         ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "%s",
@@ -662,6 +683,16 @@ void MainWindow::renderAddServerDialog()
             m_dashboard->refresh();
             m_scheduler->startScheduler(s.name);
             m_logModule->log(s.name, "Server added.");
+
+            // Install via SteamCMD if requested
+            if (m_addInstallViaSteamCmd) {
+                if (m_steamCmdPath[0] != '\0')
+                    m_manager->setSteamCmdPath(m_steamCmdPath);
+                m_logModule->log(s.name, "Starting SteamCMD installation...");
+                m_manager->deployServer(m_manager->servers().back());
+                savePreferences();
+            }
+
             m_trayManager->notify("Server Added",
                                   "'" + s.name + "' has been added.");
             ImGui::CloseCurrentPopup();
@@ -1056,6 +1087,11 @@ void MainWindow::loadPreferences()
         f >> j;
         if (j.contains("darkMode") && j["darkMode"].is_boolean())
             m_darkMode = j["darkMode"].get<bool>();
+        if (j.contains("steamCmdPath") && j["steamCmdPath"].is_string()) {
+            std::string path = j["steamCmdPath"].get<std::string>();
+            std::strncpy(m_steamCmdPath, path.c_str(), sizeof(m_steamCmdPath) - 1);
+            m_steamCmdPath[sizeof(m_steamCmdPath) - 1] = '\0';
+        }
     } catch (...) {
         // Ignore malformed preferences
     }
@@ -1065,6 +1101,7 @@ void MainWindow::savePreferences() const
 {
     nlohmann::json j;
     j["darkMode"] = m_darkMode;
+    j["steamCmdPath"] = std::string(m_steamCmdPath);
 
     std::ofstream f(kPreferencesFile);
     if (f.is_open())

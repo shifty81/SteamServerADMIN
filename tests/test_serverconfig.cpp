@@ -3491,3 +3491,106 @@ TEST(ServerConfig, PreferencesJsonFormat)
         EXPECT_TRUE(j["darkMode"].get<bool>());
     }
 }
+
+// ===========================================================================
+// SteamCMD path preferences persistence
+// ===========================================================================
+
+TEST(ServerConfig, SteamCmdPathPreferencePersistence)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string prefPath = tmp.filePath("ssa_preferences.json");
+
+    // Write preferences with steamCmdPath
+    {
+        nlohmann::json j;
+        j["darkMode"] = true;
+        j["steamCmdPath"] = "/usr/bin/steamcmd";
+        std::ofstream f(prefPath);
+        ASSERT_TRUE(f.is_open());
+        f << j.dump(2) << "\n";
+    }
+
+    // Read back and verify
+    {
+        std::ifstream f(prefPath);
+        ASSERT_TRUE(f.is_open());
+        nlohmann::json j;
+        f >> j;
+        ASSERT_TRUE(j.contains("steamCmdPath"));
+        EXPECT_EQ(j["steamCmdPath"].get<std::string>(), "/usr/bin/steamcmd");
+    }
+}
+
+TEST(ServerConfig, SteamCmdPathPreferenceDefaultEmpty)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string prefPath = tmp.filePath("ssa_preferences.json");
+
+    // Write preferences without steamCmdPath
+    {
+        nlohmann::json j;
+        j["darkMode"] = true;
+        std::ofstream f(prefPath);
+        ASSERT_TRUE(f.is_open());
+        f << j.dump(2) << "\n";
+    }
+
+    // Read back – steamCmdPath should not be present
+    {
+        std::ifstream f(prefPath);
+        ASSERT_TRUE(f.is_open());
+        nlohmann::json j;
+        f >> j;
+        EXPECT_FALSE(j.contains("steamCmdPath"));
+    }
+}
+
+TEST(ServerConfig, SteamCmdPathAppliedToManager)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    ServerManager mgr(tmp.filePath("servers.json"));
+
+    // Default path should be steamcmd (or steamcmd.exe on Windows)
+    std::string defaultPath = mgr.steamCmdPath();
+#ifdef _WIN32
+    EXPECT_EQ(defaultPath, "steamcmd.exe");
+#else
+    EXPECT_EQ(defaultPath, "steamcmd");
+#endif
+
+    // Set a custom path
+    mgr.setSteamCmdPath("/opt/steamcmd/steamcmd.sh");
+    EXPECT_EQ(mgr.steamCmdPath(), "/opt/steamcmd/steamcmd.sh");
+}
+
+TEST(ServerConfig, DeployServerCallsEmitLog)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    ServerManager mgr(tmp.filePath("servers.json"));
+
+    // Track log messages
+    std::vector<std::string> logMessages;
+    mgr.onLogMessage = [&](const std::string &, const std::string &msg) {
+        logMessages.push_back(msg);
+    };
+
+    ServerConfig s;
+    s.name  = "DeployTest";
+    s.appid = 730;
+    s.dir   = tmp.filePath("serverdir");
+    mgr.servers().push_back(s);
+
+    // deployServer should log the deployment start. SteamCMD is not available
+    // in the test environment, so it will fail, but should still log messages.
+    mgr.deployServer(mgr.servers()[0]);
+
+    ASSERT_FALSE(logMessages.empty());
+    EXPECT_NE(logMessages[0].find("SteamCMD"), std::string::npos);
+}
