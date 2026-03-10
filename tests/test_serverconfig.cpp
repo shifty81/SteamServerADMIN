@@ -3587,8 +3587,8 @@ TEST(ServerConfig, DeployServerCallsEmitLog)
     s.dir   = tmp.filePath("serverdir");
     mgr.servers().push_back(s);
 
-    // deployServer should log the deployment start (SteamCMD is not available
-    // in test environment, so it will fail, but should log messages)
+    // deployServer should log the deployment start. SteamCMD is not available
+    // in the test environment, so it will fail, but should still log messages.
     mgr.deployServer(mgr.servers()[0]);
 
     ASSERT_FALSE(logMessages.empty());
