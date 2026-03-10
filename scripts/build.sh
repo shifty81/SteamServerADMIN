@@ -8,11 +8,11 @@
 set -uo pipefail
 
 BUILD_TYPE="${1:-Release}"
-BUILD_DIR="build"
 
 # ── 0. Set up logging ────────────────────────────────────────
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+BUILD_DIR="$PROJECT_ROOT/build"
 LOG_DIR="$PROJECT_ROOT/logs"
 mkdir -p "$LOG_DIR"
 
@@ -73,7 +73,7 @@ esac
 
 # ── 3. Configure ─────────────────────────────────────────────
 info "Configuring ($BUILD_TYPE) …"
-cmake -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE="$BUILD_TYPE" 2>&1 | tee -a "$CONFIGURE_LOG"
+cmake -S "$PROJECT_ROOT" -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE="$BUILD_TYPE" 2>&1 | tee -a "$CONFIGURE_LOG"
 if [ "${PIPESTATUS[0]}" -ne 0 ]; then
     err "CMake configuration failed. See $CONFIGURE_LOG"
     return 1

@@ -11,7 +11,6 @@ param(
 )
 
 $ErrorActionPreference = 'Continue'
-$BuildDir = "build"
 $ExitCode = 0
 
 function Info  { param([string]$msg) Write-Host ">> $msg" -ForegroundColor Cyan }
@@ -36,6 +35,7 @@ if ($PSScriptRoot) {
 }
 if (-not $ProjectRoot -or $ProjectRoot -eq "") { $ProjectRoot = (Get-Location).Path }
 
+$BuildDir    = Join-Path $ProjectRoot "build"
 $LogDir      = Join-Path $ProjectRoot "logs"
 if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir -Force | Out-Null }
 
@@ -71,7 +71,7 @@ if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) {
 
 # ── 2. Configure ─────────────────────────────────────────────
 Info "Configuring ($BuildType) …"
-cmake -B $BuildDir -DCMAKE_BUILD_TYPE=$BuildType 2>&1 | Tee-Object -FilePath $ConfigureLog -Append
+cmake -S $ProjectRoot -B $BuildDir -DCMAKE_BUILD_TYPE=$BuildType 2>&1 | Tee-Object -FilePath $ConfigureLog -Append
 if ($LASTEXITCODE -ne 0) {
     Fatal "CMake configuration failed. See $ConfigureLog" $ConfigureLog
     $ExitCode = 1
