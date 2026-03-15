@@ -6,6 +6,7 @@
 #include "TrayManager.hpp"
 #include "GameTemplates.hpp"
 #include "FileDialogHelper.hpp"
+#include "SteamLibraryDetector.hpp"
 
 #include "imgui.h"
 #include <GLFW/glfw3.h>
@@ -607,6 +608,34 @@ void MainWindow::renderAddServerDialog()
             }
         }
         ImGui::EndCombo();
+    }
+
+    // --- Steam Library Detection ---
+    ImGui::Separator();
+    ImGui::Text("Detect Installed Steam Games");
+    if (ImGui::Button("Scan Steam Library")) {
+        m_steamLibraryApps = m_manager->steamLibraryDetector()->detect();
+    }
+    if (!m_steamLibraryApps.empty()) {
+        ImGui::SameLine();
+        ImGui::Text("(%d apps found)", static_cast<int>(m_steamLibraryApps.size()));
+
+        ImGui::BeginChild("##SteamLibList", ImVec2(0, 150), ImGuiChildFlags_Borders);
+        for (int i = 0; i < static_cast<int>(m_steamLibraryApps.size()); ++i) {
+            const auto &app = m_steamLibraryApps[i];
+            char label[512];
+            std::snprintf(label, sizeof(label), "%s (AppID: %d)", app.name.c_str(), app.appid);
+            if (ImGui::Selectable(label, m_steamLibSelectedIdx == i)) {
+                m_steamLibSelectedIdx = i;
+                // Auto-fill form from detected app
+                m_addAppId = app.appid;
+                std::strncpy(m_addName, app.name.c_str(), sizeof(m_addName) - 1);
+                m_addName[sizeof(m_addName) - 1] = '\0';
+                std::strncpy(m_addDir, app.installDir.c_str(), sizeof(m_addDir) - 1);
+                m_addDir[sizeof(m_addDir) - 1] = '\0';
+            }
+        }
+        ImGui::EndChild();
     }
 
     ImGui::Separator();

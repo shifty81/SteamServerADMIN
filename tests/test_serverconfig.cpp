@@ -22,6 +22,10 @@
 #include "ConsoleLogWriter.hpp"
 #include "ResourceMonitor.hpp"
 #include "EventHookManager.hpp"
+#include "IniEditor.hpp"
+#include "ConfigBackupManager.hpp"
+#include "GracefulRestartManager.hpp"
+#include "SteamLibraryDetector.hpp"
 
 namespace fs = std::filesystem;
 
@@ -3593,4 +3597,593 @@ TEST(ServerConfig, DeployServerCallsEmitLog)
 
     ASSERT_FALSE(logMessages.empty());
     EXPECT_NE(logMessages[0].find("SteamCMD"), std::string::npos);
+}
+
+// ===========================================================================
+// INI Editor Tests
+// ===========================================================================
+
+TEST(IniEditor, ParseBasicIni)
+{
+    std::string content =
+        "[ServerSettings]\n"
+        "MaxPlayers=70\n"
+        "ServerPassword=secret\n"
+        "\n"
+        "[SessionSettings]\n"
+        "SessionName=MyServer\n";
+
+    IniEditor editor;
+    editor.loadFromString(content);
+
+    auto sections = editor.sections();
+    ASSERT_EQ(sections.size(), 2u);
+    EXPECT_EQ(sections[0], "ServerSettings");
+    EXPECT_EQ(sections[1], "SessionSettings");
+
+    EXPECT_EQ(editor.getValue("ServerSettings", "MaxPlayers"), "70");
+    EXPECT_EQ(editor.getValue("ServerSettings", "ServerPassword"), "secret");
+    EXPECT_EQ(editor.getValue("SessionSettings", "SessionName"), "MyServer");
+}
+
+TEST(IniEditor, SetValueExistingKey)
+{
+    std::string content =
+        "[Server]\n"
+        "Port=7777\n";
+
+    IniEditor editor;
+    editor.loadFromString(content);
+
+    editor.setValue("Server", "Port", "8888");
+    EXPECT_EQ(editor.getValue("Server", "Port"), "8888");
+}
+
+TEST(IniEditor, SetValueNewKey)
+{
+    std::string content =
+        "[Server]\n"
+        "Port=7777\n";
+
+    IniEditor editor;
+    editor.loadFromString(content);
+
+    editor.setValue("Server", "MaxPlayers", "100");
+    EXPECT_EQ(editor.getValue("Server", "MaxPlayers"), "100");
+    EXPECT_TRUE(editor.hasKey("Server", "MaxPlayers"));
+}
+
+TEST(IniEditor, SetValueNewSection)
+{
+    std::string content =
+        "[Server]\n"
+        "Port=7777\n";
+
+    IniEditor editor;
+    editor.loadFromString(content);
+
+    editor.setValue("NewSection", "Key1", "Value1");
+    EXPECT_TRUE(editor.hasSection("NewSection"));
+    EXPECT_EQ(editor.getValue("NewSection", "Key1"), "Value1");
+}
+
+TEST(IniEditor, RemoveKey)
+{
+    std::string content =
+        "[Server]\n"
+        "Port=7777\n"
+        "Name=Test\n";
+
+    IniEditor editor;
+    editor.loadFromString(content);
+
+    EXPECT_TRUE(editor.removeKey("Server", "Port"));
+    EXPECT_FALSE(editor.hasKey("Server", "Port"));
+    EXPECT_TRUE(editor.hasKey("Server", "Name"));
+}
+
+TEST(IniEditor, PreserveComments)
+{
+    std::string content =
+        "; This is a comment\n"
+        "[Server]\n"
+        "# Another comment\n"
+        "Port=7777\n";
+
+    IniEditor editor;
+    editor.loadFromString(content);
+
+    std::string output = editor.toString();
+    EXPECT_NE(output.find("; This is a comment"), std::string::npos);
+    EXPECT_NE(output.find("# Another comment"), std::string::npos);
+}
+
+TEST(IniEditor, RoundTrip)
+{
+    std::string content =
+        "[ServerSettings]\n"
+        "MaxPlayers=70\n"
+        "Difficulty=Hard\n"
+        "\n"
+        "[World]\n"
+        "MapName=TheIsland\n";
+
+    IniEditor editor;
+    editor.loadFromString(content);
+
+    std::string output = editor.toString();
+    EXPECT_EQ(output, content);
+}
+
+TEST(IniEditor, FileLoadSave)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    std::string iniPath = tmp.filePath("test.ini");
+    {
+        std::ofstream f(iniPath);
+        f << "[Section1]\nKey1=Value1\nKey2=Value2\n";
+    }
+
+    IniEditor editor;
+    EXPECT_TRUE(editor.loadFile(iniPath));
+    EXPECT_EQ(editor.getValue("Section1", "Key1"), "Value1");
+
+    editor.setValue("Section1", "Key1", "ModifiedValue");
+    EXPECT_TRUE(editor.saveFile(iniPath));
+
+    IniEditor editor2;
+    EXPECT_TRUE(editor2.loadFile(iniPath));
+    EXPECT_EQ(editor2.getValue("Section1", "Key1"), "ModifiedValue");
+}
+
+TEST(IniEditor, EmptyFile)
+{
+    IniEditor editor;
+    editor.loadFromString("");
+
+    EXPECT_TRUE(editor.sections().empty());
+    EXPECT_TRUE(editor.lines().empty());
+}
+
+TEST(IniEditor, KeysInSection)
+{
+    std::string content =
+        "[Server]\n"
+        "Port=7777\n"
+        "Name=Test\n"
+        "Max=100\n";
+
+    IniEditor editor;
+    editor.loadFromString(content);
+
+    auto keys = editor.keysInSection("Server");
+    ASSERT_EQ(keys.size(), 3u);
+    EXPECT_EQ(keys[0].first, "Port");
+    EXPECT_EQ(keys[0].second, "7777");
+    EXPECT_EQ(keys[1].first, "Name");
+    EXPECT_EQ(keys[1].second, "Test");
+    EXPECT_EQ(keys[2].first, "Max");
+    EXPECT_EQ(keys[2].second, "100");
+}
+
+// ===========================================================================
+// Config Backup Manager Tests
+// ===========================================================================
+
+TEST(ConfigBackup, CreateBackup)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    std::string configPath = tmp.filePath("GameUserSettings.ini");
+    {
+        std::ofstream f(configPath);
+        f << "[Server]\nPort=7777\n";
+    }
+
+    std::string backupPath = ConfigBackupManager::createBackup(configPath);
+    EXPECT_FALSE(backupPath.empty());
+    EXPECT_TRUE(fs::exists(backupPath));
+
+    // Verify backup content matches original
+    std::ifstream orig(configPath);
+    std::string origContent{std::istreambuf_iterator<char>(orig),
+                            std::istreambuf_iterator<char>()};
+
+    std::ifstream bak(backupPath);
+    std::string bakContent{std::istreambuf_iterator<char>(bak),
+                           std::istreambuf_iterator<char>()};
+
+    EXPECT_EQ(origContent, bakContent);
+}
+
+TEST(ConfigBackup, ListBackups)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    std::string configPath = tmp.filePath("GameUserSettings.ini");
+    {
+        std::ofstream f(configPath);
+        f << "[Server]\nPort=7777\n";
+    }
+
+    // Create multiple backups
+    ConfigBackupManager::createBackup(configPath);
+    // Sleep > 1 second to ensure different timestamp
+    std::this_thread::sleep_for(std::chrono::milliseconds(1100));
+
+    // Modify the original and backup again
+    {
+        std::ofstream f(configPath);
+        f << "[Server]\nPort=8888\n";
+    }
+    ConfigBackupManager::createBackup(configPath);
+
+    auto backups = ConfigBackupManager::listBackups(configPath);
+    ASSERT_GE(static_cast<int>(backups.size()), 2);
+    // First entry should be newest
+    EXPECT_GE(backups[0].timestamp, backups[1].timestamp);
+}
+
+TEST(ConfigBackup, RestoreBackup)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    std::string configPath = tmp.filePath("GameUserSettings.ini");
+    std::string originalContent = "[Server]\nPort=7777\n";
+    {
+        std::ofstream f(configPath);
+        f << originalContent;
+    }
+
+    // Backup
+    std::string backupPath = ConfigBackupManager::createBackup(configPath);
+    ASSERT_FALSE(backupPath.empty());
+
+    // Modify original
+    {
+        std::ofstream f(configPath);
+        f << "[Server]\nPort=9999\n";
+    }
+
+    // Restore
+    EXPECT_TRUE(ConfigBackupManager::restoreBackup(backupPath, configPath));
+
+    // Verify restored content
+    std::ifstream f(configPath);
+    std::string restoredContent{std::istreambuf_iterator<char>(f),
+                                std::istreambuf_iterator<char>()};
+    EXPECT_EQ(restoredContent, originalContent);
+}
+
+TEST(ConfigBackup, BackupDir)
+{
+    std::string path = "/some/path/to/GameUserSettings.ini";
+    std::string dir = ConfigBackupManager::backupDir(path);
+    EXPECT_NE(dir.find(".ssa_config_backups"), std::string::npos);
+}
+
+TEST(ConfigBackup, RotateBackups)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    std::string configPath = tmp.filePath("test.ini");
+    {
+        std::ofstream f(configPath);
+        f << "content\n";
+    }
+
+    // Create several backups
+    for (int i = 0; i < 5; ++i) {
+        ConfigBackupManager::createBackup(configPath);
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+
+    // Rotate to keep only 2
+    ConfigBackupManager::rotateBackups(configPath, 2);
+
+    auto backups = ConfigBackupManager::listBackups(configPath);
+    EXPECT_LE(static_cast<int>(backups.size()), 2);
+}
+
+TEST(ConfigBackup, CreateBackupNonexistentFile)
+{
+    std::string result = ConfigBackupManager::createBackup("/nonexistent/file.ini");
+    EXPECT_TRUE(result.empty());
+}
+
+// ===========================================================================
+// Steam Library Detector Tests
+// ===========================================================================
+
+TEST(SteamLibrary, ParseAppManifest)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    // Create a mock library structure
+    std::string libPath = tmp.path();
+    fs::create_directories(fs::path(libPath) / "steamapps" / "common" / "TestGame");
+
+    std::string acfPath = tmp.filePath("test.acf");
+    {
+        std::ofstream f(acfPath);
+        f << "\"AppState\"\n"
+          << "{\n"
+          << "  \"appid\"  \"730\"\n"
+          << "  \"name\"   \"Counter-Strike 2\"\n"
+          << "  \"installdir\"  \"TestGame\"\n"
+          << "  \"SizeOnDisk\"  \"1234567890\"\n"
+          << "}\n";
+    }
+
+    auto app = SteamLibraryDetector::parseAppManifest(acfPath, libPath);
+    EXPECT_EQ(app.appid, 730);
+    EXPECT_EQ(app.name, "Counter-Strike 2");
+    EXPECT_NE(app.installDir.find("TestGame"), std::string::npos);
+    EXPECT_EQ(app.sizeOnDisk, "1234567890");
+}
+
+TEST(SteamLibrary, ParseLibraryFolders)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    // Create another temp dir to serve as a valid path in VDF
+    TempDir libDir;
+    ASSERT_TRUE(libDir.isValid());
+
+    std::string vdfPath = tmp.filePath("libraryfolders.vdf");
+    {
+        std::ofstream f(vdfPath);
+        f << "\"libraryfolders\"\n"
+          << "{\n"
+          << "  \"0\"\n"
+          << "  {\n"
+          << "    \"path\"  \"" << libDir.path() << "\"\n"
+          << "  }\n"
+          << "}\n";
+    }
+
+    auto folders = SteamLibraryDetector::parseLibraryFolders(vdfPath);
+    ASSERT_EQ(folders.size(), 1u);
+    EXPECT_EQ(folders[0], libDir.path());
+}
+
+TEST(SteamLibrary, DetectWithCustomRoot)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    // Create mock Steam structure
+    fs::create_directories(fs::path(tmp.path()) / "steamapps" / "common" / "MyGame");
+
+    // Create VDF with self-reference
+    {
+        std::ofstream f((fs::path(tmp.path()) / "steamapps" / "libraryfolders.vdf").string());
+        f << "\"libraryfolders\"\n{\n  \"0\"\n  {\n    \"path\"  \"" << tmp.path() << "\"\n  }\n}\n";
+    }
+
+    // Create appmanifest
+    {
+        std::ofstream f((fs::path(tmp.path()) / "steamapps" / "appmanifest_730.acf").string());
+        f << "\"AppState\"\n{\n  \"appid\"  \"730\"\n  \"name\"  \"CS2\"\n"
+          << "  \"installdir\"  \"MyGame\"\n}\n";
+    }
+
+    SteamLibraryDetector detector;
+    detector.setSteamRoot(tmp.path());
+
+    auto apps = detector.detect();
+    ASSERT_EQ(apps.size(), 1u);
+    EXPECT_EQ(apps[0].appid, 730);
+    EXPECT_EQ(apps[0].name, "CS2");
+}
+
+TEST(SteamLibrary, DetectEmptyRoot)
+{
+    SteamLibraryDetector detector;
+    detector.setSteamRoot("/nonexistent/steam/path");
+
+    auto apps = detector.detect();
+    EXPECT_TRUE(apps.empty());
+}
+
+TEST(SteamLibrary, DefaultSteamRoot)
+{
+    // Just ensure it doesn't crash
+    std::string root = SteamLibraryDetector::detectSteamRoot();
+    // May or may not find Steam in CI; just ensure no exception
+    (void)root;
+}
+
+TEST(SteamLibrary, AccessorMethods)
+{
+    SteamLibraryDetector detector;
+    EXPECT_TRUE(detector.steamRoot().empty());
+
+    detector.setSteamRoot("/some/path");
+    EXPECT_EQ(detector.steamRoot(), "/some/path");
+}
+
+TEST(SteamLibrary, ServerManagerIntegration)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    ServerManager mgr(tmp.filePath("servers.json"));
+
+    // The detector should be accessible and configurable
+    auto *det = mgr.steamLibraryDetector();
+    ASSERT_NE(det, nullptr);
+
+    det->setSteamRoot("/nonexistent");
+    EXPECT_EQ(det->steamRoot(), "/nonexistent");
+}
+
+// ===========================================================================
+// Graceful Restart Manager Tests
+// ===========================================================================
+
+TEST(GracefulRestart, CountdownAlertMinutes)
+{
+    auto minutes = GracefulRestartManager::countdownAlertMinutes();
+    ASSERT_FALSE(minutes.empty());
+    // Should include 10, 5, 4, 3, 2, 1
+    EXPECT_EQ(minutes[0], 10);
+    EXPECT_EQ(minutes[1], 5);
+    EXPECT_EQ(minutes[2], 4);
+    EXPECT_EQ(minutes[3], 3);
+    EXPECT_EQ(minutes[4], 2);
+    EXPECT_EQ(minutes[5], 1);
+}
+
+TEST(GracefulRestart, BeginRestart)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    ServerManager mgr(tmp.filePath("servers.json"));
+    auto *grm = mgr.gracefulRestartManager();
+    ASSERT_NE(grm, nullptr);
+
+    // Track log messages
+    std::vector<std::string> logMsgs;
+    grm->onLogMessage = [&](const std::string &, const std::string &msg) {
+        logMsgs.push_back(msg);
+    };
+
+    // Add a server
+    ServerConfig s;
+    s.name  = "TestServer";
+    s.appid = 730;
+    s.dir   = tmp.filePath("serverdir");
+    mgr.servers().push_back(s);
+
+    // Begin graceful restart
+    grm->beginGracefulRestart("TestServer", 10, "saveworld");
+
+    // Should be restarting
+    EXPECT_TRUE(grm->isRestarting("TestServer"));
+    EXPECT_FALSE(logMsgs.empty());
+}
+
+TEST(GracefulRestart, CancelRestart)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    ServerManager mgr(tmp.filePath("servers.json"));
+    auto *grm = mgr.gracefulRestartManager();
+
+    ServerConfig s;
+    s.name  = "TestServer";
+    s.appid = 730;
+    s.dir   = tmp.filePath("serverdir");
+    mgr.servers().push_back(s);
+
+    grm->beginGracefulRestart("TestServer", 10);
+    EXPECT_TRUE(grm->isRestarting("TestServer"));
+
+    grm->cancelGracefulRestart("TestServer");
+    EXPECT_FALSE(grm->isRestarting("TestServer"));
+}
+
+TEST(GracefulRestart, ZeroCountdown)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    ServerManager mgr(tmp.filePath("servers.json"));
+    auto *grm = mgr.gracefulRestartManager();
+
+    std::vector<std::string> logMsgs;
+    grm->onLogMessage = [&](const std::string &, const std::string &msg) {
+        logMsgs.push_back(msg);
+    };
+
+    ServerConfig s;
+    s.name  = "TestServer";
+    s.appid = 730;
+    s.dir   = tmp.filePath("serverdir");
+    s.backupFolder = tmp.filePath("backups");
+    fs::create_directories(s.dir);
+    mgr.servers().push_back(s);
+
+    // With 0 countdown, should go directly to save/restart
+    grm->beginGracefulRestart("TestServer", 0, "saveworld");
+
+    // After 0 countdown, it goes through save/backup/restart immediately
+    bool foundSaveMsg = false;
+    for (const auto &msg : logMsgs) {
+        if (msg.find("save") != std::string::npos || msg.find("Save") != std::string::npos ||
+            msg.find("restart") != std::string::npos || msg.find("Restart") != std::string::npos)
+            foundSaveMsg = true;
+    }
+    EXPECT_TRUE(foundSaveMsg);
+}
+
+TEST(GracefulRestart, PhaseQuery)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    ServerManager mgr(tmp.filePath("servers.json"));
+    auto *grm = mgr.gracefulRestartManager();
+
+    // No restart active
+    EXPECT_EQ(grm->currentPhase("NoServer"), GracefulRestartManager::Phase::Idle);
+    EXPECT_EQ(grm->minutesRemaining("NoServer"), -1);
+}
+
+TEST(GracefulRestart, PhaseChangedCallback)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    ServerManager mgr(tmp.filePath("servers.json"));
+    auto *grm = mgr.gracefulRestartManager();
+
+    std::vector<GracefulRestartManager::Phase> phases;
+    grm->onPhaseChanged = [&](const std::string &, GracefulRestartManager::Phase phase) {
+        phases.push_back(phase);
+    };
+
+    ServerConfig s;
+    s.name  = "TestServer";
+    s.appid = 730;
+    s.dir   = tmp.filePath("serverdir");
+    s.backupFolder = tmp.filePath("backups");
+    fs::create_directories(s.dir);
+    mgr.servers().push_back(s);
+
+    grm->beginGracefulRestart("TestServer", 0, "saveworld");
+
+    // Should have gone through: Countdown, Saving, BackingUp, Restarting, Idle
+    EXPECT_GE(phases.size(), 3u);
+}
+
+TEST(GracefulRestart, MinutesRemaining)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    ServerManager mgr(tmp.filePath("servers.json"));
+    auto *grm = mgr.gracefulRestartManager();
+
+    ServerConfig s;
+    s.name  = "TestServer";
+    s.appid = 730;
+    s.dir   = tmp.filePath("serverdir");
+    mgr.servers().push_back(s);
+
+    grm->beginGracefulRestart("TestServer", 10);
+    int mins = grm->minutesRemaining("TestServer");
+    EXPECT_GE(mins, 9);
+    EXPECT_LE(mins, 10);
 }
