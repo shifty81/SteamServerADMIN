@@ -76,6 +76,23 @@ private:
     int  m_settRconCmdInterval = 0;
     int  m_settAutoUpdateCheck = 0;
 
+    // Tags (comma-separated editing buffer)
+    char m_settTags[1024]    = {};
+
+    // Environment variables (key=value pair editing buffers)
+    char m_envKey[256]       = {};
+    char m_envValue[512]     = {};
+
+    // Scheduled RCON commands (new command editing buffer)
+    char m_newRconCmd[512]   = {};
+
+    // Event hook scripts (per-event path buffers)
+    char m_hookOnStart[512]  = {};
+    char m_hookOnStop[512]   = {};
+    char m_hookOnCrash[512]  = {};
+    char m_hookOnBackup[512] = {};
+    char m_hookOnUpdate[512] = {};
+
     // Config editor
     char m_configBuf[65536]  = {};
     std::string m_configPath;

@@ -209,6 +209,28 @@ void ServerTabWidget::renderSettingsTab()
         copyStr(m_settGroup,      sizeof(m_settGroup),      m_server.group);
         m_settRconCmdInterval     = m_server.rconCommandIntervalMinutes;
         m_settAutoUpdateCheck     = m_server.autoUpdateCheckIntervalMinutes;
+
+        // Tags: join as comma-separated string
+        {
+            std::string joined;
+            for (size_t i = 0; i < m_server.tags.size(); ++i) {
+                if (i > 0) joined += ", ";
+                joined += m_server.tags[i];
+            }
+            copyStr(m_settTags, sizeof(m_settTags), joined);
+        }
+
+        // Event hooks
+        auto hookStr = [&](const std::string &event) -> std::string {
+            auto it = m_server.eventHooks.find(event);
+            return (it != m_server.eventHooks.end()) ? it->second : "";
+        };
+        copyStr(m_hookOnStart,  sizeof(m_hookOnStart),  hookStr("onStart"));
+        copyStr(m_hookOnStop,   sizeof(m_hookOnStop),   hookStr("onStop"));
+        copyStr(m_hookOnCrash,  sizeof(m_hookOnCrash),  hookStr("onCrash"));
+        copyStr(m_hookOnBackup, sizeof(m_hookOnBackup), hookStr("onBackup"));
+        copyStr(m_hookOnUpdate, sizeof(m_hookOnUpdate), hookStr("onUpdate"));
+
         m_settingsInitialized = true;
     }
 
@@ -278,8 +300,119 @@ void ServerTabWidget::renderSettingsTab()
 
     ImGui::SeparatorText("Organization");
     ImGui::InputText("Group",          m_settGroup,     sizeof(m_settGroup));
+    ImGui::InputText("Tags (comma-separated)", m_settTags, sizeof(m_settTags));
     ImGui::InputInt("RCON Cmd Interval (min)", &m_settRconCmdInterval);
     ImGui::InputInt("Update Check Interval (min)", &m_settAutoUpdateCheck);
+
+    ImGui::SeparatorText("Event Hook Scripts");
+    ImGui::InputText("onStart Script",  m_hookOnStart,  sizeof(m_hookOnStart));
+    ImGui::SameLine();
+    if (ImGui::Button("Browse##hookStart")) {
+        FileDialogHelper::browseOpenFile("Select onStart Script",
+            m_hookOnStart, sizeof(m_hookOnStart), {"All Files", "*"});
+    }
+    ImGui::InputText("onStop Script",   m_hookOnStop,   sizeof(m_hookOnStop));
+    ImGui::SameLine();
+    if (ImGui::Button("Browse##hookStop")) {
+        FileDialogHelper::browseOpenFile("Select onStop Script",
+            m_hookOnStop, sizeof(m_hookOnStop), {"All Files", "*"});
+    }
+    ImGui::InputText("onCrash Script",  m_hookOnCrash,  sizeof(m_hookOnCrash));
+    ImGui::SameLine();
+    if (ImGui::Button("Browse##hookCrash")) {
+        FileDialogHelper::browseOpenFile("Select onCrash Script",
+            m_hookOnCrash, sizeof(m_hookOnCrash), {"All Files", "*"});
+    }
+    ImGui::InputText("onBackup Script", m_hookOnBackup, sizeof(m_hookOnBackup));
+    ImGui::SameLine();
+    if (ImGui::Button("Browse##hookBackup")) {
+        FileDialogHelper::browseOpenFile("Select onBackup Script",
+            m_hookOnBackup, sizeof(m_hookOnBackup), {"All Files", "*"});
+    }
+    ImGui::InputText("onUpdate Script", m_hookOnUpdate, sizeof(m_hookOnUpdate));
+    ImGui::SameLine();
+    if (ImGui::Button("Browse##hookUpdate")) {
+        FileDialogHelper::browseOpenFile("Select onUpdate Script",
+            m_hookOnUpdate, sizeof(m_hookOnUpdate), {"All Files", "*"});
+    }
+
+    ImGui::SeparatorText("Environment Variables");
+    ImGui::InputText("Key##envKey",   m_envKey,   sizeof(m_envKey));
+    ImGui::SameLine();
+    ImGui::InputText("Value##envVal", m_envValue, sizeof(m_envValue));
+    ImGui::SameLine();
+    if (ImGui::Button("Add##env")) {
+        std::string k = trimString(m_envKey);
+        if (!k.empty()) {
+            m_server.environmentVariables[k] = m_envValue;
+            m_envKey[0] = '\0';
+            m_envValue[0] = '\0';
+        }
+    }
+    if (!m_server.environmentVariables.empty()) {
+        if (ImGui::BeginTable("##EnvVars", 3,
+                ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+            ImGui::TableSetupColumn("Key", ImGuiTableColumnFlags_WidthFixed, 200);
+            ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("##del", ImGuiTableColumnFlags_WidthFixed, 60);
+            ImGui::TableHeadersRow();
+
+            std::string envRemoveKey;
+            int envIdx = 0;
+            for (const auto &[ek, ev] : m_server.environmentVariables) {
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::Text("%s", ek.c_str());
+                ImGui::TableNextColumn();
+                ImGui::Text("%s", ev.c_str());
+                ImGui::TableNextColumn();
+                ImGui::PushID(envIdx++);
+                if (ImGui::SmallButton("Remove"))
+                    envRemoveKey = ek;
+                ImGui::PopID();
+            }
+            if (!envRemoveKey.empty())
+                m_server.environmentVariables.erase(envRemoveKey);
+
+            ImGui::EndTable();
+        }
+    }
+
+    ImGui::SeparatorText("Scheduled RCON Commands");
+    ImGui::InputText("Command##rconCmd", m_newRconCmd, sizeof(m_newRconCmd));
+    ImGui::SameLine();
+    if (ImGui::Button("Add##rconCmd")) {
+        std::string cmd = trimString(m_newRconCmd);
+        if (!cmd.empty()) {
+            m_server.scheduledRconCommands.push_back(cmd);
+            m_newRconCmd[0] = '\0';
+        }
+    }
+    if (!m_server.scheduledRconCommands.empty()) {
+        if (ImGui::BeginTable("##RconCmds", 2,
+                ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+            ImGui::TableSetupColumn("Command", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("##del", ImGuiTableColumnFlags_WidthFixed, 60);
+            ImGui::TableHeadersRow();
+
+            int rconRemoveIdx = -1;
+            for (int i = 0; i < static_cast<int>(m_server.scheduledRconCommands.size()); ++i) {
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::Text("%s", m_server.scheduledRconCommands[i].c_str());
+                ImGui::TableNextColumn();
+                ImGui::PushID(i);
+                if (ImGui::SmallButton("Remove"))
+                    rconRemoveIdx = i;
+                ImGui::PopID();
+            }
+            if (rconRemoveIdx >= 0)
+                m_server.scheduledRconCommands.erase(
+                    m_server.scheduledRconCommands.begin() + rconRemoveIdx);
+
+            ImGui::EndTable();
+        }
+    }
 
     ImGui::Spacing();
     if (ImGui::Button("Save Settings")) {
@@ -315,6 +448,33 @@ void ServerTabWidget::renderSettingsTab()
         m_server.group                       = m_settGroup;
         m_server.rconCommandIntervalMinutes  = m_settRconCmdInterval;
         m_server.autoUpdateCheckIntervalMinutes = m_settAutoUpdateCheck;
+
+        // Parse comma-separated tags
+        {
+            m_server.tags.clear();
+            std::istringstream ss(m_settTags);
+            std::string tag;
+            while (std::getline(ss, tag, ',')) {
+                tag = trimString(tag);
+                if (!tag.empty())
+                    m_server.tags.push_back(tag);
+            }
+        }
+
+        // Event hooks
+        {
+            m_server.eventHooks.clear();
+            auto setHook = [&](const std::string &event, const char *buf) {
+                std::string path = trimString(buf);
+                if (!path.empty())
+                    m_server.eventHooks[event] = path;
+            };
+            setHook("onStart",  m_hookOnStart);
+            setHook("onStop",   m_hookOnStop);
+            setHook("onCrash",  m_hookOnCrash);
+            setHook("onBackup", m_hookOnBackup);
+            setHook("onUpdate", m_hookOnUpdate);
+        }
 
         auto errors = m_server.validate();
         if (errors.empty()) {
@@ -592,6 +752,8 @@ void ServerTabWidget::renderModsTab()
 
         int removeIdx = -1;
         int toggleIdx = -1;
+        int moveUpIdx = -1;
+        int moveDownIdx = -1;
         for (int i = 0; i < static_cast<int>(m_server.mods.size()); ++i) {
             int mid = m_server.mods[i];
             bool disabled = std::find(m_server.disabledMods.begin(),
@@ -612,6 +774,24 @@ void ServerTabWidget::renderModsTab()
             ImGui::SameLine();
             if (ImGui::SmallButton(disabled ? "Enable" : "Disable"))
                 toggleIdx = i;
+            ImGui::SameLine();
+            if (i > 0) {
+                if (ImGui::SmallButton("Up"))
+                    moveUpIdx = i;
+            } else {
+                ImGui::BeginDisabled();
+                ImGui::SmallButton("Up");
+                ImGui::EndDisabled();
+            }
+            ImGui::SameLine();
+            if (i < static_cast<int>(m_server.mods.size()) - 1) {
+                if (ImGui::SmallButton("Down"))
+                    moveDownIdx = i;
+            } else {
+                ImGui::BeginDisabled();
+                ImGui::SmallButton("Down");
+                ImGui::EndDisabled();
+            }
             ImGui::PopID();
         }
 
@@ -627,6 +807,14 @@ void ServerTabWidget::renderModsTab()
                 m_server.disabledMods.erase(it);
             else
                 m_server.disabledMods.push_back(mid);
+            m_manager->saveConfig();
+        }
+        if (moveUpIdx > 0) {
+            std::swap(m_server.mods[moveUpIdx], m_server.mods[moveUpIdx - 1]);
+            m_manager->saveConfig();
+        }
+        if (moveDownIdx >= 0 && moveDownIdx < static_cast<int>(m_server.mods.size()) - 1) {
+            std::swap(m_server.mods[moveDownIdx], m_server.mods[moveDownIdx + 1]);
             m_manager->saveConfig();
         }
 

@@ -259,6 +259,32 @@ void MainWindow::renderMenuBar()
             if (ImGui::MenuItem("Start All"))   m_manager->startAllServers();
             if (ImGui::MenuItem("Stop All"))    m_manager->stopAllServers();
             if (ImGui::MenuItem("Restart All")) m_manager->restartAllServers();
+
+            auto groups = m_manager->serverGroups();
+            if (!groups.empty()) {
+                ImGui::Separator();
+                if (ImGui::BeginMenu("Start Group")) {
+                    for (const auto &g : groups) {
+                        if (ImGui::MenuItem(g.c_str()))
+                            m_manager->startGroup(g);
+                    }
+                    ImGui::EndMenu();
+                }
+                if (ImGui::BeginMenu("Stop Group")) {
+                    for (const auto &g : groups) {
+                        if (ImGui::MenuItem(g.c_str()))
+                            m_manager->stopGroup(g);
+                    }
+                    ImGui::EndMenu();
+                }
+                if (ImGui::BeginMenu("Restart Group")) {
+                    for (const auto &g : groups) {
+                        if (ImGui::MenuItem(g.c_str()))
+                            m_manager->restartGroup(g);
+                    }
+                    ImGui::EndMenu();
+                }
+            }
             ImGui::EndMenu();
         }
 
