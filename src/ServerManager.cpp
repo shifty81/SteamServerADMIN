@@ -1078,6 +1078,28 @@ void ServerManager::syncConfigsCluster(const std::string &masterConfigZip)
 void ServerManager::setSteamCmdPath(const std::string &path) { m_steamCmdPath = path; }
 std::string ServerManager::steamCmdPath() const               { return m_steamCmdPath; }
 
+bool ServerManager::installSteamCmd(const std::string &installDir)
+{
+    emitLog("SSA", "Installing SteamCMD to " + installDir + " ...");
+    SteamCmdModule steamCmd;
+    steamCmd.onOutputLine = [this](const std::string &line) {
+        emitLog("SSA", line);
+    };
+    bool ok = steamCmd.installSteamCmd(installDir);
+    if (ok) {
+        m_steamCmdPath = steamCmd.steamCmdPath();
+        emitLog("SSA", "SteamCMD path set to " + m_steamCmdPath);
+    }
+    return ok;
+}
+
+bool ServerManager::isSteamCmdInstalled() const
+{
+    SteamCmdModule steamCmd;
+    steamCmd.setSteamCmdPath(m_steamCmdPath);
+    return steamCmd.isSteamCmdInstalled();
+}
+
 // ---------------------------------------------------------------------------
 // Server removal
 // ---------------------------------------------------------------------------

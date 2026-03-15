@@ -233,6 +233,9 @@ void MainWindow::renderMenuBar()
         }
 
         if (ImGui::BeginMenu("Tools")) {
+            if (ImGui::MenuItem("Install SteamCMD..."))
+                m_showInstallSteamCmd = true;
+            ImGui::Separator();
             if (ImGui::MenuItem("Sync Mods (All)"))
                 m_manager->syncModsCluster();
             if (ImGui::MenuItem("Sync Configs (All)..."))

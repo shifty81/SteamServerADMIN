@@ -121,6 +121,12 @@ public:
     void setSteamCmdPath(const std::string &path);
     std::string steamCmdPath() const;
 
+    // ---- SteamCMD installation ----
+    /** Download and install SteamCMD into @p installDir. */
+    bool installSteamCmd(const std::string &installDir);
+    /** Check whether the configured SteamCMD binary exists on disk. */
+    bool isSteamCmdInstalled() const;
+
     // ---- Uptime tracking ----
     std::chrono::system_clock::time_point serverStartTime(const std::string &serverName) const;
     int64_t serverUptimeSeconds(const std::string &serverName) const;
