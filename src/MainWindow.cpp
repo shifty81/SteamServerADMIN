@@ -7,6 +7,7 @@
 #include "GameTemplates.hpp"
 #include "FileDialogHelper.hpp"
 #include "SteamLibraryDetector.hpp"
+#include "SteamCmdModule.hpp"
 
 #include "imgui.h"
 #include <GLFW/glfw3.h>
@@ -187,6 +188,14 @@ void MainWindow::render()
         ImGui::OpenPopup("Broadcast Command");
         m_showBroadcast = false;
     }
+    if (m_showInstallSteamCmd) {
+        std::string defaultDir = SteamCmdModule::defaultInstallDir();
+        std::strncpy(m_installSteamCmdDir, defaultDir.c_str(),
+                     sizeof(m_installSteamCmdDir) - 1);
+        m_installSteamCmdDir[sizeof(m_installSteamCmdDir) - 1] = '\0';
+        ImGui::OpenPopup("Install SteamCMD");
+        m_showInstallSteamCmd = false;
+    }
     if (m_showAbout) {
         ImGui::OpenPopup("About SSA");
         m_showAbout = false;
@@ -199,6 +208,7 @@ void MainWindow::render()
     renderExportServerDialog();
     renderImportServerDialog();
     renderBroadcastDialog();
+    renderInstallSteamCmdDialog();
     renderAboutDialog();
 
     ImGui::End();
@@ -1049,6 +1059,67 @@ void MainWindow::renderBroadcastDialog()
     ImGui::SameLine();
     if (ImGui::Button("Close", ImVec2(120, 0))) {
         resultText.clear();
+        ImGui::CloseCurrentPopup();
+    }
+
+    ImGui::EndPopup();
+}
+
+// ---------------------------------------------------------------------------
+// Install SteamCMD dialog
+// ---------------------------------------------------------------------------
+
+void MainWindow::renderInstallSteamCmdDialog()
+{
+    if (!ImGui::BeginPopupModal("Install SteamCMD", nullptr,
+                                ImGuiWindowFlags_AlwaysAutoResize))
+        return;
+
+    static std::string statusText;
+    static bool installRunning = false;
+
+    bool alreadyInstalled = m_manager->isSteamCmdInstalled();
+    if (alreadyInstalled) {
+        ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.2f, 1.0f),
+                           "SteamCMD is already installed at:");
+        ImGui::TextWrapped("%s", m_manager->steamCmdPath().c_str());
+        ImGui::Separator();
+    }
+
+    ImGui::Text("Install Directory:");
+    ImGui::InputText("##installDir", m_installSteamCmdDir, sizeof(m_installSteamCmdDir));
+    ImGui::SameLine();
+    if (ImGui::Button("Browse##installDir")) {
+        FileDialogHelper::browseFolder("Select Install Directory",
+            m_installSteamCmdDir, sizeof(m_installSteamCmdDir));
+    }
+
+    if (!statusText.empty()) {
+        ImGui::Separator();
+        ImGui::TextWrapped("%s", statusText.c_str());
+    }
+
+    ImGui::Separator();
+
+    if (installRunning) {
+        ImGui::TextDisabled("Installing...");
+    } else {
+        if (ImGui::Button("Install", ImVec2(120, 0)) && m_installSteamCmdDir[0] != '\0') {
+            installRunning = true;
+            statusText = "Installing SteamCMD...";
+            bool ok = m_manager->installSteamCmd(m_installSteamCmdDir);
+            if (ok) {
+                statusText = "SteamCMD installed successfully at " +
+                             m_manager->steamCmdPath();
+            } else {
+                statusText = "Failed to install SteamCMD. Check logs for details.";
+            }
+            installRunning = false;
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Close", ImVec2(120, 0))) {
+        statusText.clear();
         ImGui::CloseCurrentPopup();
     }
 

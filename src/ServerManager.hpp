@@ -37,7 +37,8 @@ struct ProcessInfo {
 
 // Portable process helpers
 bool launchProcess(const std::string &exe, const std::vector<std::string> &args,
-                   const std::map<std::string, std::string> &env, ProcessInfo &out);
+                   const std::map<std::string, std::string> &env, ProcessInfo &out,
+                   const std::string &workingDir = "");
 bool isProcessRunning(const ProcessInfo &info);
 void terminateProcess(ProcessInfo &info);
 void killProcess(ProcessInfo &info);
