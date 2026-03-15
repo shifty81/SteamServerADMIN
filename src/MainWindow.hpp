@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ServerManager.hpp"
+#include "SteamLibraryDetector.hpp"
 #include <string>
 #include <vector>
 #include <chrono>
@@ -102,6 +103,10 @@ private:
 
     // Broadcast dialog
     char m_broadcastCmd[512] = {};
+
+    // Steam Library detection (for Add Server dialog)
+    std::vector<SteamLibraryDetector::InstalledApp> m_steamLibraryApps;
+    int m_steamLibSelectedIdx = -1;
 
     // Tick timing
     std::chrono::steady_clock::time_point m_lastTick;

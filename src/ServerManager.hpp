@@ -4,6 +4,8 @@
 #include "WebhookModule.hpp"
 #include "ResourceMonitor.hpp"
 #include "EventHookManager.hpp"
+#include "GracefulRestartManager.hpp"
+#include "SteamLibraryDetector.hpp"
 
 #include <string>
 #include <vector>
@@ -138,6 +140,12 @@ public:
     // ---- Restart warning ----
     void sendRestartWarning(ServerConfig &server, int minutesRemaining);
 
+    // ---- Graceful restart with countdown ----
+    GracefulRestartManager *gracefulRestartManager();
+
+    // ---- Steam library detection ----
+    SteamLibraryDetector *steamLibraryDetector();
+
     // ---- Resource monitoring ----
     ResourceMonitor *resourceMonitor();
 
@@ -181,6 +189,8 @@ private:
     WebhookModule    m_webhook;
     ResourceMonitor  m_resourceMonitor;
     EventHookManager m_eventHookManager;
+    GracefulRestartManager m_gracefulRestartManager;
+    SteamLibraryDetector   m_steamLibraryDetector;
 
     void emitLog(const std::string &serverName, const std::string &msg);
     std::string lookupEventHook(const std::string &serverName, const std::string &event) const;

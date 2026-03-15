@@ -117,6 +117,14 @@ set(APP_SOURCES
     src/ResourceMonitor.hpp
     src/EventHookManager.cpp
     src/EventHookManager.hpp
+    src/SteamLibraryDetector.cpp
+    src/SteamLibraryDetector.hpp
+    src/IniEditor.cpp
+    src/IniEditor.hpp
+    src/ConfigBackupManager.cpp
+    src/ConfigBackupManager.hpp
+    src/GracefulRestartManager.cpp
+    src/GracefulRestartManager.hpp
 )
 
 add_executable(SSA ${APP_SOURCES})
@@ -166,6 +174,14 @@ set(TEST_SOURCES
     src/ResourceMonitor.hpp
     src/EventHookManager.cpp
     src/EventHookManager.hpp
+    src/SteamLibraryDetector.cpp
+    src/SteamLibraryDetector.hpp
+    src/IniEditor.cpp
+    src/IniEditor.hpp
+    src/ConfigBackupManager.cpp
+    src/ConfigBackupManager.hpp
+    src/GracefulRestartManager.cpp
+    src/GracefulRestartManager.hpp
 )
 
 add_executable(SSA_Tests ${TEST_SOURCES})

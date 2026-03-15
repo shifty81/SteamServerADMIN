@@ -314,7 +314,8 @@ std::string ServerManager::lookupEventHook(const std::string &serverName,
 // ---------------------------------------------------------------------------
 
 ServerManager::ServerManager(const std::string &configFile)
-    : m_configFile(configFile)
+    : m_configFile(configFile),
+      m_gracefulRestartManager(this)
 {
 #ifdef _WIN32
     m_steamCmdPath = "steamcmd.exe";
@@ -821,6 +822,7 @@ void ServerManager::tick()
     checkProcesses();
     processPendingRestarts();
     m_resourceMonitor.tick();
+    m_gracefulRestartManager.tick();
 }
 
 void ServerManager::checkProcesses()
@@ -1284,8 +1286,10 @@ void ServerManager::sendRestartWarning(ServerConfig &server, int minutesRemainin
 }
 
 // ---------------------------------------------------------------------------
-// Resource monitor / Event hooks accessors
+// Resource monitor / Event hooks / Graceful restart / Steam library accessors
 // ---------------------------------------------------------------------------
 
 ResourceMonitor *ServerManager::resourceMonitor() { return &m_resourceMonitor; }
 EventHookManager *ServerManager::eventHookManager() { return &m_eventHookManager; }
+GracefulRestartManager *ServerManager::gracefulRestartManager() { return &m_gracefulRestartManager; }
+SteamLibraryDetector *ServerManager::steamLibraryDetector() { return &m_steamLibraryDetector; }

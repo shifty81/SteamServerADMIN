@@ -1,6 +1,8 @@
 #pragma once
 
 #include "ServerManager.hpp"
+#include "IniEditor.hpp"
+#include "ConfigBackupManager.hpp"
 #include <string>
 #include <vector>
 #include <chrono>
@@ -79,6 +81,19 @@ private:
     std::string m_configPath;
     std::string m_originalConfig;
     bool m_configLoaded      = false;
+    int  m_configViewMode    = 0;          // 0 = raw text, 1 = INI editor
+
+    // INI editor state
+    IniEditor m_iniEditor;
+    std::vector<std::string> m_iniSections;
+    int  m_iniSelectedSection = 0;
+
+    // Config backup state
+    std::vector<ConfigBackupManager::BackupEntry> m_configBackups;
+
+    // Graceful restart state
+    int  m_gracefulCountdown = 10;
+    char m_gracefulSaveCmd[256] = "saveworld";
 
     // Mods
     char m_newModId[32]      = {};

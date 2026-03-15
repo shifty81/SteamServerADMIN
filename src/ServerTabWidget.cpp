@@ -2,6 +2,9 @@
 #include "BackupModule.hpp"
 #include "ConsoleLogWriter.hpp"
 #include "FileDialogHelper.hpp"
+#include "IniEditor.hpp"
+#include "ConfigBackupManager.hpp"
+#include "GracefulRestartManager.hpp"
 
 #include "imgui.h"
 
@@ -113,6 +116,34 @@ void ServerTabWidget::renderOverviewTab()
     if (ImGui::Button("Restart")) m_manager->restartServer(m_server);
     ImGui::SameLine();
     if (ImGui::Button("Deploy / Update")) m_manager->deployServer(m_server);
+
+    // Graceful restart with countdown
+    ImGui::SeparatorText("Graceful Restart");
+    auto *grm = m_manager->gracefulRestartManager();
+    if (grm->isRestarting(m_server.name)) {
+        int minsLeft = grm->minutesRemaining(m_server.name);
+        auto phase = grm->currentPhase(m_server.name);
+        const char *phaseStr = "Unknown";
+        switch (phase) {
+            case GracefulRestartManager::Phase::Countdown:  phaseStr = "Countdown"; break;
+            case GracefulRestartManager::Phase::Saving:     phaseStr = "Saving world"; break;
+            case GracefulRestartManager::Phase::BackingUp:  phaseStr = "Backing up"; break;
+            case GracefulRestartManager::Phase::Restarting: phaseStr = "Restarting"; break;
+            default: phaseStr = "Idle"; break;
+        }
+        ImGui::Text("Phase: %s  |  %d min remaining", phaseStr, minsLeft);
+        if (ImGui::Button("Cancel Graceful Restart"))
+            grm->cancelGracefulRestart(m_server.name);
+    } else {
+        ImGui::InputInt("Countdown (min)", &m_gracefulCountdown);
+        if (m_gracefulCountdown < 0) m_gracefulCountdown = 0;
+        ImGui::InputText("Save Command", m_gracefulSaveCmd, sizeof(m_gracefulSaveCmd));
+        if (ImGui::Button("Start Graceful Restart")) {
+            grm->beginGracefulRestart(m_server.name, m_gracefulCountdown, m_gracefulSaveCmd);
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("(?) Broadcasts countdown, saves world, backs up, then restarts");
+    }
 
     // Notes
     ImGui::SeparatorText("Notes");
@@ -297,7 +328,7 @@ void ServerTabWidget::renderSettingsTab()
 }
 
 // ---------------------------------------------------------------------------
-// Config editor
+// Config editor (INI-aware with backup/revert)
 // ---------------------------------------------------------------------------
 
 void ServerTabWidget::renderConfigTab()
@@ -306,15 +337,104 @@ void ServerTabWidget::renderConfigTab()
         m_configPath = m_server.dir + "/GameUserSettings.ini";
         m_originalConfig = readFileToString(m_configPath);
         copyStr(m_configBuf, sizeof(m_configBuf), m_originalConfig);
+
+        // Parse INI structure
+        m_iniEditor.loadFromString(m_originalConfig);
+        m_iniSections = m_iniEditor.sections();
+        m_iniSelectedSection = 0;
+
+        // Refresh backup list
+        m_configBackups = ConfigBackupManager::listBackups(m_configPath);
+
         m_configLoaded = true;
     }
 
+    // ---- INI file selector ----
     ImGui::Text("File: %s", m_configPath.c_str());
-    ImGui::InputTextMultiline("##ConfigEdit", m_configBuf, sizeof(m_configBuf),
-                              ImVec2(-1, -60), ImGuiInputTextFlags_AllowTabInput);
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Browse...")) {
+        char pathBuf[1024];
+        copyStr(pathBuf, sizeof(pathBuf), m_configPath);
+        FileDialogHelper::browseOpenFile("Select INI File", pathBuf, sizeof(pathBuf),
+            {"INI Files", "*.ini", "All Files", "*"});
+        std::string chosen = pathBuf;
+        if (!chosen.empty() && chosen != m_configPath) {
+            m_configPath = chosen;
+            m_originalConfig = readFileToString(m_configPath);
+            copyStr(m_configBuf, sizeof(m_configBuf), m_originalConfig);
+            m_iniEditor.loadFromString(m_originalConfig);
+            m_iniSections = m_iniEditor.sections();
+            m_iniSelectedSection = 0;
+            m_configBackups = ConfigBackupManager::listBackups(m_configPath);
+        }
+    }
 
+    // ---- View mode toggle ----
+    ImGui::Spacing();
+    ImGui::RadioButton("Raw Text", &m_configViewMode, 0);
+    ImGui::SameLine();
+    ImGui::RadioButton("INI Editor", &m_configViewMode, 1);
+    ImGui::Separator();
+
+    if (m_configViewMode == 0) {
+        // ---- Raw text editor (original behavior) ----
+        ImGui::InputTextMultiline("##ConfigEdit", m_configBuf, sizeof(m_configBuf),
+                                  ImVec2(-1, -100), ImGuiInputTextFlags_AllowTabInput);
+    } else {
+        // ---- Structured INI editor ----
+        // Left panel: section list
+        ImGui::BeginChild("##IniSections", ImVec2(200, -100), ImGuiChildFlags_Borders);
+        ImGui::SeparatorText("Sections");
+        for (int i = 0; i < static_cast<int>(m_iniSections.size()); ++i) {
+            bool selected = (m_iniSelectedSection == i);
+            if (ImGui::Selectable(m_iniSections[i].c_str(), selected))
+                m_iniSelectedSection = i;
+        }
+        ImGui::EndChild();
+
+        ImGui::SameLine();
+
+        // Right panel: key-value pairs for selected section
+        ImGui::BeginChild("##IniKeyValues", ImVec2(0, -100), ImGuiChildFlags_Borders);
+        if (m_iniSelectedSection >= 0 &&
+            m_iniSelectedSection < static_cast<int>(m_iniSections.size())) {
+            const std::string &section = m_iniSections[m_iniSelectedSection];
+            ImGui::SeparatorText(("[" + section + "]").c_str());
+
+            auto keys = m_iniEditor.keysInSection(section);
+            if (ImGui::BeginTable("##IniKV", 2,
+                                  ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                                  ImGuiTableFlags_Resizable)) {
+                ImGui::TableSetupColumn("Key", ImGuiTableColumnFlags_WidthFixed, 250);
+                ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableHeadersRow();
+
+                for (size_t k = 0; k < keys.size(); ++k) {
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    ImGui::Text("%s", keys[k].first.c_str());
+
+                    ImGui::TableNextColumn();
+                    std::string label = "##kv_" + section + "_" + std::to_string(k);
+                    // Use a buffer for inline editing
+                    char buf[1024];
+                    copyStr(buf, sizeof(buf), keys[k].second);
+                    ImGui::SetNextItemWidth(-1);
+                    if (ImGui::InputText(label.c_str(), buf, sizeof(buf))) {
+                        m_iniEditor.setValue(section, keys[k].first, buf);
+                        // Sync back to text buffer
+                        std::string updated = m_iniEditor.toString();
+                        copyStr(m_configBuf, sizeof(m_configBuf), updated);
+                    }
+                }
+                ImGui::EndTable();
+            }
+        }
+        ImGui::EndChild();
+    }
+
+    // ---- Action buttons ----
     if (ImGui::Button("Save")) {
-        // Show diff preview if there are changes
         std::string current = m_configBuf;
         if (current != m_originalConfig) {
             ImGui::OpenPopup("Config Diff Preview");
@@ -323,18 +443,73 @@ void ServerTabWidget::renderConfigTab()
         }
     }
     ImGui::SameLine();
-    if (ImGui::Button("Revert")) {
+    if (ImGui::Button("Revert to Original")) {
         copyStr(m_configBuf, sizeof(m_configBuf), m_originalConfig);
-        m_consoleOutput += "[SSA] Config reverted.\n";
+        m_iniEditor.loadFromString(m_originalConfig);
+        m_iniSections = m_iniEditor.sections();
+        m_consoleOutput += "[SSA] Config reverted to original.\n";
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Reload from Disk")) {
+        m_originalConfig = readFileToString(m_configPath);
+        copyStr(m_configBuf, sizeof(m_configBuf), m_originalConfig);
+        m_iniEditor.loadFromString(m_originalConfig);
+        m_iniSections = m_iniEditor.sections();
+        m_configBackups = ConfigBackupManager::listBackups(m_configPath);
+        m_consoleOutput += "[SSA] Config reloaded from disk.\n";
     }
 
-    // Diff preview modal
+    // ---- Backup history ----
+    ImGui::Spacing();
+    ImGui::SeparatorText("Config Backups (auto-created before each save)");
+    if (m_configBackups.empty()) {
+        ImGui::TextDisabled("No backups available.");
+    } else {
+        if (ImGui::BeginTable("##ConfigBackups", 3,
+                              ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+            ImGui::TableSetupColumn("Timestamp", ImGuiTableColumnFlags_WidthFixed, 200);
+            ImGui::TableSetupColumn("File", ImGuiTableColumnFlags_WidthStretch);
+            ImGui::TableSetupColumn("Action", ImGuiTableColumnFlags_WidthFixed, 100);
+            ImGui::TableHeadersRow();
+
+            int restoreIdx = -1;
+            for (int i = 0; i < static_cast<int>(m_configBackups.size()); ++i) {
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::Text("%s", m_configBackups[i].timestamp.c_str());
+                ImGui::TableNextColumn();
+                ImGui::Text("%s", m_configBackups[i].originalName.c_str());
+                ImGui::TableNextColumn();
+                ImGui::PushID(i);
+                if (ImGui::SmallButton("Restore"))
+                    restoreIdx = i;
+                ImGui::PopID();
+            }
+
+            if (restoreIdx >= 0) {
+                bool ok = ConfigBackupManager::restoreBackup(
+                    m_configBackups[restoreIdx].filePath, m_configPath);
+                if (ok) {
+                    m_originalConfig = readFileToString(m_configPath);
+                    copyStr(m_configBuf, sizeof(m_configBuf), m_originalConfig);
+                    m_iniEditor.loadFromString(m_originalConfig);
+                    m_iniSections = m_iniEditor.sections();
+                    m_consoleOutput += "[SSA] Config restored from backup: " +
+                                       m_configBackups[restoreIdx].timestamp + "\n";
+                } else {
+                    m_consoleOutput += "[ERROR] Failed to restore backup.\n";
+                }
+            }
+            ImGui::EndTable();
+        }
+    }
+
+    // ---- Diff preview modal ----
     if (ImGui::BeginPopupModal("Config Diff Preview", nullptr,
                                ImGuiWindowFlags_AlwaysAutoResize)) {
         ImGui::Text("Changes to %s:", m_configPath.c_str());
         ImGui::Separator();
 
-        // Build a simple line-by-line diff
         std::string current = m_configBuf;
         auto oldLines = splitLines(m_originalConfig);
         auto newLines = splitLines(current);
@@ -359,10 +534,16 @@ void ServerTabWidget::renderConfigTab()
 
         ImGui::Spacing();
         if (ImGui::Button("Confirm Save", ImVec2(140, 0))) {
+            // Create a backup before saving
+            std::string backupPath = ConfigBackupManager::createBackup(m_configPath);
+            if (!backupPath.empty())
+                m_consoleOutput += "[SSA] Backup created before save.\n";
+
             std::ofstream f(m_configPath);
             if (f.is_open()) {
                 f << m_configBuf;
                 m_originalConfig = m_configBuf;
+                m_configBackups = ConfigBackupManager::listBackups(m_configPath);
                 m_consoleOutput += "[SSA] Config saved.\n";
             } else {
                 m_consoleOutput += "[ERROR] Could not write config file.\n";
