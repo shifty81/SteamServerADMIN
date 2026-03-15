@@ -105,8 +105,8 @@ std::string IniEditor::toString() const
                 result += il.rawLine;
                 break;
         }
-        if (i + 1 < m_lines.size())
-            result += "\n";
+        // Always add newline after each line (consistent with standard INI files)
+        result += "\n";
     }
     return result;
 }
