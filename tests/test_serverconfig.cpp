@@ -4335,3 +4335,385 @@ TEST(ServerConfig, SteamCmdInstallRejectsUnsafePath)
     EXPECT_FALSE(mod.installSteamCmd("/tmp/test|pipe"));
     EXPECT_FALSE(mod.installSteamCmd("/tmp/test&bg"));
 }
+
+// ===========================================================================
+// Mod reordering (swap-based)
+// ===========================================================================
+
+TEST(ServerConfig, ModSwapUp)
+{
+    ServerConfig s;
+    s.mods = {100, 200, 300};
+
+    // Swap index 1 with index 0 (move 200 up)
+    std::swap(s.mods[1], s.mods[0]);
+    EXPECT_EQ(s.mods, std::vector<int>({200, 100, 300}));
+}
+
+TEST(ServerConfig, ModSwapDown)
+{
+    ServerConfig s;
+    s.mods = {100, 200, 300};
+
+    // Swap index 0 with index 1 (move 100 down)
+    std::swap(s.mods[0], s.mods[1]);
+    EXPECT_EQ(s.mods, std::vector<int>({200, 100, 300}));
+}
+
+TEST(ServerConfig, ModSwapPersistence)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
+
+    ServerManager mgr(configPath);
+    ServerConfig s;
+    s.name = "SwapTest";
+    s.appid = 1;
+    s.dir = "/srv/swap";
+    s.mods = {100, 200, 300};
+    mgr.servers().push_back(s);
+
+    // Swap mods 0 and 2 (100 <-> 300)
+    std::swap(mgr.servers()[0].mods[0], mgr.servers()[0].mods[2]);
+    ASSERT_TRUE(mgr.saveConfig());
+
+    ServerManager mgr2(configPath);
+    ASSERT_TRUE(mgr2.loadConfig());
+    EXPECT_EQ(mgr2.servers()[0].mods, std::vector<int>({300, 200, 100}));
+}
+
+// ===========================================================================
+// Tags comma-separated parsing (mirrors UI logic)
+// ===========================================================================
+
+static std::vector<std::string> parseCommaSeparatedTags(const std::string &input)
+{
+    std::vector<std::string> tags;
+    std::istringstream ss(input);
+    std::string tag;
+    while (std::getline(ss, tag, ',')) {
+        tag = trimString(tag);
+        if (!tag.empty())
+            tags.push_back(tag);
+    }
+    return tags;
+}
+
+static std::string joinTags(const std::vector<std::string> &tags)
+{
+    std::string result;
+    for (size_t i = 0; i < tags.size(); ++i) {
+        if (i > 0) result += ", ";
+        result += tags[i];
+    }
+    return result;
+}
+
+TEST(ServerConfig, TagsCommaSeparatedParse)
+{
+    auto tags = parseCommaSeparatedTags("production, ark, cluster");
+    ASSERT_EQ(tags.size(), 3);
+    EXPECT_EQ(tags[0], "production");
+    EXPECT_EQ(tags[1], "ark");
+    EXPECT_EQ(tags[2], "cluster");
+}
+
+TEST(ServerConfig, TagsCommaSeparatedEmpty)
+{
+    auto tags = parseCommaSeparatedTags("");
+    EXPECT_TRUE(tags.empty());
+}
+
+TEST(ServerConfig, TagsCommaSeparatedTrailingComma)
+{
+    auto tags = parseCommaSeparatedTags("alpha, beta, ");
+    ASSERT_EQ(tags.size(), 2);
+    EXPECT_EQ(tags[0], "alpha");
+    EXPECT_EQ(tags[1], "beta");
+}
+
+TEST(ServerConfig, TagsCommaSeparatedWhitespace)
+{
+    auto tags = parseCommaSeparatedTags("  foo  ,  bar  ,  baz  ");
+    ASSERT_EQ(tags.size(), 3);
+    EXPECT_EQ(tags[0], "foo");
+    EXPECT_EQ(tags[1], "bar");
+    EXPECT_EQ(tags[2], "baz");
+}
+
+TEST(ServerConfig, TagsJoinRoundTrip)
+{
+    std::vector<std::string> original = {"production", "ark", "cluster"};
+    std::string joined = joinTags(original);
+    auto parsed = parseCommaSeparatedTags(joined);
+    EXPECT_EQ(parsed, original);
+}
+
+// ===========================================================================
+// Server group batch operations
+// ===========================================================================
+
+TEST(ServerConfig, ServerGroupsListing)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
+
+    ServerManager mgr(configPath);
+
+    ServerConfig s1;
+    s1.name = "S1"; s1.appid = 1; s1.dir = "/srv/s1";
+    s1.group = "Production";
+
+    ServerConfig s2;
+    s2.name = "S2"; s2.appid = 2; s2.dir = "/srv/s2";
+    s2.group = "Testing";
+
+    ServerConfig s3;
+    s3.name = "S3"; s3.appid = 3; s3.dir = "/srv/s3";
+    s3.group = "Production";
+
+    ServerConfig s4;
+    s4.name = "S4"; s4.appid = 4; s4.dir = "/srv/s4";
+    // no group
+
+    mgr.servers().push_back(s1);
+    mgr.servers().push_back(s2);
+    mgr.servers().push_back(s3);
+    mgr.servers().push_back(s4);
+
+    auto groups = mgr.serverGroups();
+    EXPECT_EQ(groups.size(), 2);
+    // Should be sorted (case-insensitive)
+    EXPECT_EQ(groups[0], "Production");
+    EXPECT_EQ(groups[1], "Testing");
+}
+
+TEST(ServerConfig, ServerGroupsEmptyNoGroup)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
+
+    ServerManager mgr(configPath);
+    ServerConfig s;
+    s.name = "S1"; s.appid = 1; s.dir = "/srv/s1";
+    mgr.servers().push_back(s);
+
+    auto groups = mgr.serverGroups();
+    EXPECT_TRUE(groups.empty());
+}
+
+// ===========================================================================
+// Event hooks per-event configuration round-trip
+// ===========================================================================
+
+TEST(ServerConfig, EventHooksPerEventPersistence)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
+
+    ServerManager mgr(configPath);
+    ServerConfig s;
+    s.name = "HookTest";
+    s.appid = 1;
+    s.dir = "/srv/hooks";
+    s.eventHooks["onStart"]  = "/scripts/on_start.sh";
+    s.eventHooks["onStop"]   = "/scripts/on_stop.sh";
+    s.eventHooks["onCrash"]  = "/scripts/on_crash.sh";
+    s.eventHooks["onBackup"] = "/scripts/on_backup.sh";
+    s.eventHooks["onUpdate"] = "/scripts/on_update.sh";
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.saveConfig());
+
+    ServerManager mgr2(configPath);
+    ASSERT_TRUE(mgr2.loadConfig());
+    const auto &hooks = mgr2.servers()[0].eventHooks;
+    EXPECT_EQ(hooks.size(), 5);
+    EXPECT_EQ(hooks.at("onStart"),  "/scripts/on_start.sh");
+    EXPECT_EQ(hooks.at("onStop"),   "/scripts/on_stop.sh");
+    EXPECT_EQ(hooks.at("onCrash"),  "/scripts/on_crash.sh");
+    EXPECT_EQ(hooks.at("onBackup"), "/scripts/on_backup.sh");
+    EXPECT_EQ(hooks.at("onUpdate"), "/scripts/on_update.sh");
+}
+
+// ===========================================================================
+// Scheduled RCON commands add/remove
+// ===========================================================================
+
+TEST(ServerConfig, ScheduledRconCommandsAddRemove)
+{
+    ServerConfig s;
+    EXPECT_TRUE(s.scheduledRconCommands.empty());
+
+    s.scheduledRconCommands.push_back("saveworld");
+    s.scheduledRconCommands.push_back("listplayers");
+    s.scheduledRconCommands.push_back("broadcast hello");
+    EXPECT_EQ(s.scheduledRconCommands.size(), 3);
+
+    // Remove the middle command
+    s.scheduledRconCommands.erase(s.scheduledRconCommands.begin() + 1);
+    ASSERT_EQ(s.scheduledRconCommands.size(), 2);
+    EXPECT_EQ(s.scheduledRconCommands[0], "saveworld");
+    EXPECT_EQ(s.scheduledRconCommands[1], "broadcast hello");
+}
+
+TEST(ServerConfig, ScheduledRconCommandsPersistenceRoundTrip)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
+
+    ServerManager mgr(configPath);
+    ServerConfig s;
+    s.name = "RconTest";
+    s.appid = 1;
+    s.dir = "/srv/rcon";
+    s.scheduledRconCommands.push_back("saveworld");
+    s.scheduledRconCommands.push_back("listplayers");
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.saveConfig());
+
+    ServerManager mgr2(configPath);
+    ASSERT_TRUE(mgr2.loadConfig());
+    ASSERT_EQ(mgr2.servers()[0].scheduledRconCommands.size(), 2);
+    EXPECT_EQ(mgr2.servers()[0].scheduledRconCommands[0], "saveworld");
+    EXPECT_EQ(mgr2.servers()[0].scheduledRconCommands[1], "listplayers");
+}
+
+// ===========================================================================
+// Environment variables add/remove
+// ===========================================================================
+
+TEST(ServerConfig, EnvironmentVariablesAddRemove)
+{
+    ServerConfig s;
+    EXPECT_TRUE(s.environmentVariables.empty());
+
+    s.environmentVariables["SRCDS_TOKEN"] = "abc123";
+    s.environmentVariables["MY_VAR"] = "hello";
+    EXPECT_EQ(s.environmentVariables.size(), 2);
+
+    s.environmentVariables.erase("SRCDS_TOKEN");
+    ASSERT_EQ(s.environmentVariables.size(), 1);
+    EXPECT_EQ(s.environmentVariables.at("MY_VAR"), "hello");
+}
+
+// ===========================================================================
+// Complete servers.json loads correctly with all documented fields
+// ===========================================================================
+
+TEST(ServerConfig, CompleteServersJsonLoadsAllFields)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
+
+    {
+        std::ofstream f(configPath);
+        f << R"([
+  {
+    "name": "FullTest",
+    "appid": 999,
+    "dir": "/srv/full",
+    "executable": "server.exe",
+    "launchArgs": "-dedicated",
+    "rcon": {"host":"10.0.0.1","port":27020,"password":"secret"},
+    "mods": [100, 200],
+    "disabledMods": [200],
+    "backupFolder": "/backups/full",
+    "notes": "Test notes",
+    "discordWebhookUrl": "https://discord.com/api/webhooks/123",
+    "webhookTemplate": "Server {server} event {event}",
+    "autoUpdate": false,
+    "autoStartOnLaunch": true,
+    "favorite": true,
+    "keepBackups": 5,
+    "backupIntervalMinutes": 45,
+    "restartIntervalHours": 12,
+    "scheduledRconCommands": ["saveworld", "listplayers"],
+    "rconCommandIntervalMinutes": 30,
+    "backupCompressionLevel": 9,
+    "maintenanceStartHour": 2,
+    "maintenanceEndHour": 6,
+    "consoleLogging": true,
+    "maxPlayers": 64,
+    "restartWarningMinutes": 10,
+    "restartWarningMessage": "Restarting in {minutes} min!",
+    "cpuAlertThreshold": 80.0,
+    "memAlertThresholdMB": 4096.0,
+    "eventHooks": {
+      "onStart": "/hooks/start.sh",
+      "onCrash": "/hooks/crash.sh"
+    },
+    "tags": ["production", "ark"],
+    "group": "TestGroup",
+    "startupPriority": 2,
+    "backupBeforeRestart": true,
+    "gracefulShutdownSeconds": 30,
+    "autoUpdateCheckIntervalMinutes": 60,
+    "totalUptimeSeconds": 86400,
+    "totalCrashes": 3,
+    "lastCrashTime": "2025-01-15T10:30:00Z",
+    "environmentVariables": {"KEY1":"val1","KEY2":"val2"}
+  }
+])";
+    }
+
+    ServerManager mgr(configPath);
+    ASSERT_TRUE(mgr.loadConfig());
+    ASSERT_EQ(mgr.servers().size(), 1);
+    const ServerConfig &s = mgr.servers()[0];
+
+    EXPECT_EQ(s.name, "FullTest");
+    EXPECT_EQ(s.appid, 999);
+    EXPECT_EQ(s.dir, "/srv/full");
+    EXPECT_EQ(s.executable, "server.exe");
+    EXPECT_EQ(s.launchArgs, "-dedicated");
+    EXPECT_EQ(s.rcon.host, "10.0.0.1");
+    EXPECT_EQ(s.rcon.port, 27020);
+    EXPECT_EQ(s.mods.size(), 2);
+    EXPECT_EQ(s.disabledMods.size(), 1);
+    EXPECT_EQ(s.backupFolder, "/backups/full");
+    EXPECT_EQ(s.notes, "Test notes");
+    EXPECT_EQ(s.discordWebhookUrl, "https://discord.com/api/webhooks/123");
+    EXPECT_EQ(s.webhookTemplate, "Server {server} event {event}");
+    EXPECT_FALSE(s.autoUpdate);
+    EXPECT_TRUE(s.autoStartOnLaunch);
+    EXPECT_TRUE(s.favorite);
+    EXPECT_EQ(s.keepBackups, 5);
+    EXPECT_EQ(s.backupIntervalMinutes, 45);
+    EXPECT_EQ(s.restartIntervalHours, 12);
+    ASSERT_EQ(s.scheduledRconCommands.size(), 2);
+    EXPECT_EQ(s.scheduledRconCommands[0], "saveworld");
+    EXPECT_EQ(s.scheduledRconCommands[1], "listplayers");
+    EXPECT_EQ(s.rconCommandIntervalMinutes, 30);
+    EXPECT_EQ(s.backupCompressionLevel, 9);
+    EXPECT_EQ(s.maintenanceStartHour, 2);
+    EXPECT_EQ(s.maintenanceEndHour, 6);
+    EXPECT_TRUE(s.consoleLogging);
+    EXPECT_EQ(s.maxPlayers, 64);
+    EXPECT_EQ(s.restartWarningMinutes, 10);
+    EXPECT_EQ(s.restartWarningMessage, "Restarting in {minutes} min!");
+    EXPECT_DOUBLE_EQ(s.cpuAlertThreshold, 80.0);
+    EXPECT_DOUBLE_EQ(s.memAlertThresholdMB, 4096.0);
+    ASSERT_EQ(s.eventHooks.size(), 2);
+    EXPECT_EQ(s.eventHooks.at("onStart"), "/hooks/start.sh");
+    EXPECT_EQ(s.eventHooks.at("onCrash"), "/hooks/crash.sh");
+    ASSERT_EQ(s.tags.size(), 2);
+    EXPECT_EQ(s.tags[0], "production");
+    EXPECT_EQ(s.tags[1], "ark");
+    EXPECT_EQ(s.group, "TestGroup");
+    EXPECT_EQ(s.startupPriority, 2);
+    EXPECT_TRUE(s.backupBeforeRestart);
+    EXPECT_EQ(s.gracefulShutdownSeconds, 30);
+    EXPECT_EQ(s.autoUpdateCheckIntervalMinutes, 60);
+    EXPECT_EQ(s.totalUptimeSeconds, 86400);
+    EXPECT_EQ(s.totalCrashes, 3);
+    EXPECT_EQ(s.lastCrashTime, "2025-01-15T10:30:00Z");
+    ASSERT_EQ(s.environmentVariables.size(), 2);
+    EXPECT_EQ(s.environmentVariables.at("KEY1"), "val1");
+    EXPECT_EQ(s.environmentVariables.at("KEY2"), "val2");
+}
