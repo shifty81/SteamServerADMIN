@@ -111,7 +111,7 @@ std::vector<std::string> SteamLibraryDetector::parseLibraryFolders(const std::st
 
     for (auto it = begin; it != end; ++it) {
         std::string p = (*it)[1].str();
-        // Normalise Windows double-backslash escaping
+        // Normalize Windows double-backslash escaping
         std::string normalized;
         for (size_t i = 0; i < p.size(); ++i) {
             if (p[i] == '\\' && i + 1 < p.size() && p[i + 1] == '\\') {

@@ -53,7 +53,7 @@ void IniEditor::loadFromString(const std::string &content)
             il.type = IniLine::Blank;
         } else if (trimmed[0] == ';' || trimmed[0] == '#') {
             il.type = IniLine::Comment;
-        } else if (trimmed.front() == '[' && trimmed.back() == ']') {
+        } else if (trimmed.size() >= 2 && trimmed.front() == '[' && trimmed.back() == ']') {
             il.type = IniLine::Section;
             il.section = trimmed.substr(1, trimmed.size() - 2);
             currentSection = il.section;

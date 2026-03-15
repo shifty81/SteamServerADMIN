@@ -116,7 +116,9 @@ int GracefulRestartManager::minutesRemaining(const std::string &serverName) cons
     int64_t totalMs = static_cast<int64_t>(state.totalCountdownMinutes) * 60 * 1000;
     int64_t remainingMs = totalMs - elapsedMs;
     if (remainingMs <= 0) return 0;
-    return static_cast<int>((remainingMs + 59999) / 60000);  // ceiling division
+    // Ceiling division: (ms + 59999) / 60000 rounds up to the next minute
+    static constexpr int64_t kMsPerMinute = 60000;
+    return static_cast<int>((remainingMs + kMsPerMinute - 1) / kMsPerMinute);
 }
 
 // ---------------------------------------------------------------------------
@@ -149,8 +151,9 @@ void GracefulRestartManager::tick()
             continue;
         }
 
-        // Calculate current minute remaining (ceiling)
-        int currentMinute = static_cast<int>((remainingMs + 59999) / 60000);
+        // Calculate current minute remaining (ceiling division)
+        static constexpr int64_t kMsPerMin = 60000;
+        int currentMinute = static_cast<int>((remainingMs + kMsPerMin - 1) / kMsPerMin);
 
         // Check if we should broadcast at this minute
         auto alertMinutes = countdownAlertMinutes();

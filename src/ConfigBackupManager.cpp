@@ -78,8 +78,8 @@ ConfigBackupManager::listBackups(const std::string &configPath)
             continue;
         std::string fname = entry.path().filename().string();
 
-        // Expect: <originalName>.<timestamp>.bak
-        if (fname.size() <= origName.size() + 5)  // ".XXXXXXXX_XXXXXX.bak" = min 20 chars
+        // Expect: <originalName>.<YYYYMMDD_HHMMSS>.bak (at least 20 extra chars)
+        if (fname.size() <= origName.size() + 5)
             continue;
         if (fname.substr(0, origName.size()) != origName)
             continue;
