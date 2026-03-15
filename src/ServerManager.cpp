@@ -101,10 +101,23 @@ static std::string deobfuscatePassword(const std::string &stored)
 // ---------------------------------------------------------------------------
 
 bool launchProcess(const std::string &exe, const std::vector<std::string> &args,
-                   const std::map<std::string, std::string> &env, ProcessInfo &out)
+                   const std::map<std::string, std::string> &env, ProcessInfo &out,
+                   const std::string &workingDir)
 {
 #ifdef _WIN32
-    std::string cmdLine = "\"" + exe + "\"";
+    // Detect batch files (.bat / .cmd) and wrap with cmd.exe /c
+    std::string lowerExe = exe;
+    std::transform(lowerExe.begin(), lowerExe.end(), lowerExe.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+    bool isBatch = (lowerExe.size() >= 4 &&
+                    (lowerExe.substr(lowerExe.size() - 4) == ".bat" ||
+                     lowerExe.substr(lowerExe.size() - 4) == ".cmd"));
+
+    std::string cmdLine;
+    if (isBatch)
+        cmdLine = "cmd.exe /c \"" + exe + "\"";
+    else
+        cmdLine = "\"" + exe + "\"";
     for (const auto &a : args)
         cmdLine += " " + a;
 
@@ -129,11 +142,13 @@ bool launchProcess(const std::string &exe, const std::vector<std::string> &args,
     si.cb = sizeof(si);
     PROCESS_INFORMATION pi{};
 
+    const char *cwd = workingDir.empty() ? nullptr : workingDir.c_str();
+
     BOOL ok = CreateProcessA(
         nullptr, const_cast<char*>(cmdLine.c_str()),
         nullptr, nullptr, FALSE, 0,
         env.empty() ? nullptr : const_cast<char*>(envBlock.c_str()),
-        nullptr, &si, &pi);
+        cwd, &si, &pi);
 
     if (!ok) return false;
 
@@ -147,10 +162,23 @@ bool launchProcess(const std::string &exe, const std::vector<std::string> &args,
     if (pid < 0) return false;
 
     if (pid == 0) {
+        // Set working directory for the child process
+        if (!workingDir.empty())
+            if (chdir(workingDir.c_str()) != 0)
+                _exit(127);
+
         for (const auto &[k, v] : env)
             setenv(k.c_str(), v.c_str(), 1);
 
+        // Detect shell scripts (.sh) and use /bin/sh as interpreter
+        bool isShellScript = (exe.size() >= 3 &&
+                              exe.substr(exe.size() - 3) == ".sh");
+
         std::vector<char*> argv;
+        std::string shPath = "/bin/sh";
+        if (isShellScript) {
+            argv.push_back(const_cast<char*>(shPath.c_str()));
+        }
         std::string exeCopy = exe;
         argv.push_back(const_cast<char*>(exeCopy.c_str()));
         std::vector<std::string> argCopies(args.begin(), args.end());
@@ -158,7 +186,10 @@ bool launchProcess(const std::string &exe, const std::vector<std::string> &args,
             argv.push_back(const_cast<char*>(a.c_str()));
         argv.push_back(nullptr);
 
-        execv(exe.c_str(), argv.data());
+        if (isShellScript)
+            execv("/bin/sh", argv.data());
+        else
+            execv(exe.c_str(), argv.data());
         _exit(127);
     }
 
@@ -735,7 +766,7 @@ void ServerManager::startServer(ServerConfig &server)
         args = splitString(server.launchArgs, ' ');
 
     ProcessInfo proc;
-    bool ok = launchProcess(exe, args, server.environmentVariables, proc);
+    bool ok = launchProcess(exe, args, server.environmentVariables, proc, server.dir);
 
     if (ok) {
         m_processes[server.name] = proc;
@@ -1077,6 +1108,28 @@ void ServerManager::syncConfigsCluster(const std::string &masterConfigZip)
 
 void ServerManager::setSteamCmdPath(const std::string &path) { m_steamCmdPath = path; }
 std::string ServerManager::steamCmdPath() const               { return m_steamCmdPath; }
+
+bool ServerManager::installSteamCmd(const std::string &installDir)
+{
+    emitLog("SSA", "Installing SteamCMD to " + installDir + " ...");
+    SteamCmdModule steamCmd;
+    steamCmd.onOutputLine = [this](const std::string &line) {
+        emitLog("SSA", line);
+    };
+    bool ok = steamCmd.installSteamCmd(installDir);
+    if (ok) {
+        m_steamCmdPath = steamCmd.steamCmdPath();
+        emitLog("SSA", "SteamCMD path set to " + m_steamCmdPath);
+    }
+    return ok;
+}
+
+bool ServerManager::isSteamCmdInstalled() const
+{
+    SteamCmdModule steamCmd;
+    steamCmd.setSteamCmdPath(m_steamCmdPath);
+    return steamCmd.isSteamCmdInstalled();
+}
 
 // ---------------------------------------------------------------------------
 // Server removal

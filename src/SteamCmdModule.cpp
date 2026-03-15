@@ -66,6 +66,114 @@ bool SteamCmdModule::downloadMod(int appid, int modId)
     return runSteamCmd(args);
 }
 
+// ---------------------------------------------------------------------------
+// installSteamCmd – download & extract the official SteamCMD package
+// ---------------------------------------------------------------------------
+
+/// Reject directory paths that contain characters dangerous in shell commands.
+static bool isPathSafeForShell(const std::string &path)
+{
+    for (char c : path) {
+        if (c == '\'' || c == '`' || c == '$' || c == '!' ||
+            c == '|' || c == ';' || c == '&' || c == '"' ||
+            c == '\n' || c == '\r')
+            return false;
+    }
+    return true;
+}
+
+bool SteamCmdModule::installSteamCmd(const std::string &installDir)
+{
+    if (installDir.empty()) {
+        if (onOutputLine) onOutputLine("Install directory is empty");
+        if (onFinished) onFinished(false);
+        return false;
+    }
+
+    if (!isPathSafeForShell(installDir)) {
+        if (onOutputLine) onOutputLine("Install directory contains invalid characters");
+        if (onFinished) onFinished(false);
+        return false;
+    }
+
+    fs::create_directories(installDir);
+
+#ifdef _WIN32
+    // Windows: download zip and extract with PowerShell
+    std::string zip = (fs::path(installDir) / "steamcmd.zip").string();
+    std::string cmd =
+        "powershell -NoProfile -Command \""
+        "Invoke-WebRequest -Uri 'https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip'"
+        " -OutFile '" + zip + "';"
+        " Expand-Archive -Path '" + zip + "' -DestinationPath '" + installDir + "' -Force"
+        "\" 2>&1";
+#else
+    // Linux / macOS: download tarball and extract with curl + tar
+    std::string cmd =
+        "curl -sqL 'https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz'"
+        " | tar xzf - -C '" + installDir + "' 2>&1";
+#endif
+
+    if (onOutputLine) onOutputLine("Downloading SteamCMD to " + installDir + " ...");
+
+    FILE *pipe = popen(cmd.c_str(), "r");
+    if (!pipe) {
+        if (onOutputLine) onOutputLine("Failed to launch download command");
+        if (onFinished) onFinished(false);
+        return false;
+    }
+
+    char buffer[512];
+    while (fgets(buffer, sizeof(buffer), pipe)) {
+        std::string line(buffer);
+        while (!line.empty() && (line.back() == '\n' || line.back() == '\r'))
+            line.pop_back();
+        if (!line.empty() && onOutputLine)
+            onOutputLine(line);
+    }
+
+    int status = pclose(pipe);
+    if (status != 0) {
+        if (onOutputLine) onOutputLine("SteamCMD download/extract failed");
+        if (onFinished) onFinished(false);
+        return false;
+    }
+
+    // Verify the binary was extracted
+#ifdef _WIN32
+    std::string binary = (fs::path(installDir) / "steamcmd.exe").string();
+#else
+    std::string binary = (fs::path(installDir) / "steamcmd.sh").string();
+#endif
+
+    if (!fs::exists(binary)) {
+        if (onOutputLine) onOutputLine("SteamCMD binary not found after extraction");
+        if (onFinished) onFinished(false);
+        return false;
+    }
+
+    // Update path to point to the freshly installed binary
+    m_steamCmdPath = binary;
+
+    if (onOutputLine) onOutputLine("SteamCMD installed successfully at " + binary);
+    if (onFinished) onFinished(true);
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+
+bool SteamCmdModule::isSteamCmdInstalled() const
+{
+    return fs::exists(m_steamCmdPath);
+}
+
+std::string SteamCmdModule::defaultInstallDir()
+{
+    return (fs::current_path() / "steamcmd").string();
+}
+
+// ---------------------------------------------------------------------------
+
 bool SteamCmdModule::runSteamCmd(const std::vector<std::string> &args)
 {
     // Build command line

@@ -26,6 +26,7 @@
 #include "ConfigBackupManager.hpp"
 #include "GracefulRestartManager.hpp"
 #include "SteamLibraryDetector.hpp"
+#include "SteamCmdModule.hpp"
 
 namespace fs = std::filesystem;
 
@@ -4186,4 +4187,151 @@ TEST(GracefulRestart, MinutesRemaining)
     int mins = grm->minutesRemaining("TestServer");
     EXPECT_GE(mins, 9);
     EXPECT_LE(mins, 10);
+}
+
+// ===========================================================================
+// SteamCMD installation helpers
+// ===========================================================================
+
+TEST(ServerConfig, SteamCmdDefaultInstallDir)
+{
+    std::string dir = SteamCmdModule::defaultInstallDir();
+    EXPECT_FALSE(dir.empty());
+    // Should end with "steamcmd"
+    EXPECT_NE(dir.find("steamcmd"), std::string::npos);
+}
+
+TEST(ServerConfig, SteamCmdIsSteamCmdInstalledFalse)
+{
+    SteamCmdModule mod;
+    mod.setSteamCmdPath("/nonexistent/path/to/steamcmd");
+    EXPECT_FALSE(mod.isSteamCmdInstalled());
+}
+
+TEST(ServerConfig, SteamCmdIsSteamCmdInstalledTrue)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    // Create a fake steamcmd binary
+    std::string fakeBin = tmp.filePath("steamcmd");
+    { std::ofstream f(fakeBin); f << "#!/bin/sh\necho ok\n"; }
+
+    SteamCmdModule mod;
+    mod.setSteamCmdPath(fakeBin);
+    EXPECT_TRUE(mod.isSteamCmdInstalled());
+}
+
+TEST(ServerConfig, SteamCmdInstallEmptyDir)
+{
+    SteamCmdModule mod;
+    bool result = mod.installSteamCmd("");
+    EXPECT_FALSE(result);
+}
+
+TEST(ServerConfig, ServerManagerIsSteamCmdInstalledFalse)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    ServerManager mgr(tmp.filePath("servers.json"));
+    mgr.setSteamCmdPath("/nonexistent/path/to/steamcmd");
+    EXPECT_FALSE(mgr.isSteamCmdInstalled());
+}
+
+TEST(ServerConfig, ServerManagerIsSteamCmdInstalledTrue)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    std::string fakeBin = tmp.filePath("steamcmd");
+    { std::ofstream f(fakeBin); f << "#!/bin/sh\necho ok\n"; }
+
+    ServerManager mgr(tmp.filePath("servers.json"));
+    mgr.setSteamCmdPath(fakeBin);
+    EXPECT_TRUE(mgr.isSteamCmdInstalled());
+}
+
+// ===========================================================================
+// launchProcess working directory and script handling
+// ===========================================================================
+
+// Helper: wait for a child process to exit with a timeout
+static void waitForChildProcess(ProcessInfo &proc, int maxIterations = 40, int intervalMs = 50)
+{
+    for (int i = 0; i < maxIterations; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(intervalMs));
+        if (!isProcessRunning(proc)) break;
+    }
+}
+
+TEST(ServerConfig, LaunchProcessWithWorkingDir)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    // Create a shell script that writes the cwd to a file
+    std::string script = tmp.filePath("checkdir.sh");
+    std::string outFile = tmp.filePath("cwd_output.txt");
+    {
+        std::ofstream f(script);
+        f << "#!/bin/sh\npwd > '" << outFile << "'\n";
+    }
+    fs::permissions(script, fs::perms::owner_all);
+
+    std::string workDir = tmp.path();
+    ProcessInfo proc;
+    std::map<std::string, std::string> env;
+    bool ok = launchProcess(script, {}, env, proc, workDir);
+    EXPECT_TRUE(ok);
+
+    waitForChildProcess(proc);
+
+    // Verify the working directory was set correctly
+    std::string output = readFile(outFile);
+    // Trim whitespace
+    while (!output.empty() && (output.back() == '\n' || output.back() == '\r'))
+        output.pop_back();
+    // Resolve both paths to handle symlinks (e.g. /tmp -> /private/tmp on macOS)
+    fs::path expectedPath = fs::canonical(workDir);
+    fs::path actualPath = output.empty() ? fs::path() : fs::canonical(output);
+    EXPECT_EQ(actualPath, expectedPath);
+}
+
+TEST(ServerConfig, LaunchProcessShellScript)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    // Create a .sh script that writes a marker file
+    std::string script = tmp.filePath("marker.sh");
+    std::string markerFile = tmp.filePath("marker.txt");
+    {
+        std::ofstream f(script);
+        f << "#!/bin/sh\necho 'executed' > '" << markerFile << "'\n";
+    }
+    fs::permissions(script, fs::perms::owner_all);
+
+    ProcessInfo proc;
+    std::map<std::string, std::string> env;
+    bool ok = launchProcess(script, {}, env, proc, tmp.path());
+    EXPECT_TRUE(ok);
+
+    waitForChildProcess(proc);
+
+    EXPECT_TRUE(fs::exists(markerFile));
+    std::string content = readFile(markerFile);
+    EXPECT_TRUE(strContains(content, "executed"));
+}
+
+TEST(ServerConfig, SteamCmdInstallRejectsUnsafePath)
+{
+    SteamCmdModule mod;
+
+    // Paths with shell metacharacters should be rejected
+    EXPECT_FALSE(mod.installSteamCmd("/tmp/test; rm -rf /"));
+    EXPECT_FALSE(mod.installSteamCmd("/tmp/test'$(whoami)"));
+    EXPECT_FALSE(mod.installSteamCmd("/tmp/test`cmd`"));
+    EXPECT_FALSE(mod.installSteamCmd("/tmp/test|pipe"));
+    EXPECT_FALSE(mod.installSteamCmd("/tmp/test&bg"));
 }

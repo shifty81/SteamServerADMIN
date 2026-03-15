@@ -47,6 +47,7 @@ private:
     void renderExportServerDialog();
     void renderImportServerDialog();
     void renderBroadcastDialog();
+    void renderInstallSteamCmdDialog();
     void renderAboutDialog();
 
     void loadPreferences();
@@ -76,6 +77,7 @@ private:
     bool m_showImportServer = false;
     bool m_showBroadcast = false;
     bool m_showAbout = false;
+    bool m_showInstallSteamCmd = false;
 
     // Theme / preferences
     bool m_darkMode = true;  // true = dark theme (default)
@@ -103,6 +105,9 @@ private:
 
     // Broadcast dialog
     char m_broadcastCmd[512] = {};
+
+    // Install SteamCMD dialog
+    char m_installSteamCmdDir[512] = {};
 
     // Steam Library detection (for Add Server dialog)
     std::vector<SteamLibraryDetector::InstalledApp> m_steamLibraryApps;

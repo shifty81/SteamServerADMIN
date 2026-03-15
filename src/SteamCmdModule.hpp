@@ -38,6 +38,29 @@ public:
      */
     bool downloadMod(int appid, int modId);
 
+    /**
+     * @brief Download and install SteamCMD into @p installDir.
+     *
+     * On Linux this downloads the official tarball and extracts it.
+     * On Windows this downloads the zip and extracts it.
+     * After a successful install the steamcmd path is updated automatically.
+     *
+     * @return true on success.
+     */
+    bool installSteamCmd(const std::string &installDir);
+
+    /**
+     * @brief Check whether the configured SteamCMD binary exists on disk.
+     */
+    bool isSteamCmdInstalled() const;
+
+    /**
+     * @brief Return the default installation directory used by installSteamCmd().
+     *
+     * This is a subfolder called "steamcmd" next to the running executable.
+     */
+    static std::string defaultInstallDir();
+
     /** Callback invoked for each line of SteamCMD output. */
     std::function<void(const std::string &line)> onOutputLine;
 

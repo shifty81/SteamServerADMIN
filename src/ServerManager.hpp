@@ -37,7 +37,8 @@ struct ProcessInfo {
 
 // Portable process helpers
 bool launchProcess(const std::string &exe, const std::vector<std::string> &args,
-                   const std::map<std::string, std::string> &env, ProcessInfo &out);
+                   const std::map<std::string, std::string> &env, ProcessInfo &out,
+                   const std::string &workingDir = "");
 bool isProcessRunning(const ProcessInfo &info);
 void terminateProcess(ProcessInfo &info);
 void killProcess(ProcessInfo &info);
@@ -120,6 +121,12 @@ public:
     // ---- SteamCMD path ----
     void setSteamCmdPath(const std::string &path);
     std::string steamCmdPath() const;
+
+    // ---- SteamCMD installation ----
+    /** Download and install SteamCMD into @p installDir. */
+    bool installSteamCmd(const std::string &installDir);
+    /** Check whether the configured SteamCMD binary exists on disk. */
+    bool isSteamCmdInstalled() const;
 
     // ---- Uptime tracking ----
     std::chrono::system_clock::time_point serverStartTime(const std::string &serverName) const;
