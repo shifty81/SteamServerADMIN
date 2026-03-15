@@ -28,6 +28,10 @@ std::string ConfigBackupManager::createBackup(const std::string &configPath)
     if (!fs::exists(configPath))
         return {};
 
+    // Guard against symlink attacks
+    if (fs::is_symlink(configPath))
+        return {};
+
     std::string dir = backupDir(configPath);
     fs::create_directories(dir);
 
@@ -123,6 +127,10 @@ bool ConfigBackupManager::restoreBackup(const std::string &backupPath,
                                          const std::string &configPath)
 {
     if (!fs::exists(backupPath))
+        return false;
+
+    // Guard against symlink attacks
+    if (fs::is_symlink(backupPath) || fs::is_symlink(configPath))
         return false;
 
     std::error_code ec;

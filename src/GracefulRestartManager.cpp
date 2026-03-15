@@ -5,6 +5,24 @@
 #include <iostream>
 
 // ---------------------------------------------------------------------------
+// Sanitize a message for safe RCON broadcast (strip control characters)
+// ---------------------------------------------------------------------------
+static std::string sanitizeRconMessage(const std::string &msg)
+{
+    std::string result;
+    result.reserve(msg.size());
+    for (char c : msg) {
+        // Strip newlines, carriage returns, and other control characters
+        // that could be interpreted as RCON command separators
+        if (c == '\n' || c == '\r' || c == '\0')
+            result += ' ';
+        else
+            result += c;
+    }
+    return result;
+}
+
+// ---------------------------------------------------------------------------
 // Standard countdown alert schedule
 // ---------------------------------------------------------------------------
 
@@ -52,7 +70,7 @@ void GracefulRestartManager::beginGracefulRestart(const std::string &serverName,
         // Find the applicable starting server
         for (ServerConfig &s : m_manager->servers()) {
             if (s.name == serverName && m_manager->isServerRunning(s)) {
-                std::string msg = s.formatRestartWarning(countdownMinutes);
+                std::string msg = sanitizeRconMessage(s.formatRestartWarning(countdownMinutes));
                 m_manager->sendRconCommand(s, "broadcast " + msg);
                 emitLog(serverName, "Broadcast: " + msg);
                 m_states[serverName].lastBroadcastMinute = countdownMinutes;
@@ -164,7 +182,7 @@ void GracefulRestartManager::tick()
                 if (state.lastBroadcastMinute == -1 || currentMinute < state.lastBroadcastMinute) {
                     for (ServerConfig &s : m_manager->servers()) {
                         if (s.name == serverName && m_manager->isServerRunning(s)) {
-                            std::string msg = s.formatRestartWarning(currentMinute);
+                            std::string msg = sanitizeRconMessage(s.formatRestartWarning(currentMinute));
                             m_manager->sendRconCommand(s, "broadcast " + msg);
                             emitLog(serverName, "Broadcast (" + std::to_string(currentMinute) +
                                     " min remaining): " + msg);
