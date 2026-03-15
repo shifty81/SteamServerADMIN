@@ -4256,6 +4256,15 @@ TEST(ServerConfig, ServerManagerIsSteamCmdInstalledTrue)
 // launchProcess working directory and script handling
 // ===========================================================================
 
+// Helper: wait for a child process to exit with a timeout
+static void waitForChildProcess(ProcessInfo &proc, int maxIterations = 40, int intervalMs = 50)
+{
+    for (int i = 0; i < maxIterations; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(intervalMs));
+        if (!isProcessRunning(proc)) break;
+    }
+}
+
 TEST(ServerConfig, LaunchProcessWithWorkingDir)
 {
     TempDir tmp;
@@ -4276,11 +4285,7 @@ TEST(ServerConfig, LaunchProcessWithWorkingDir)
     bool ok = launchProcess(script, {}, env, proc, workDir);
     EXPECT_TRUE(ok);
 
-    // Wait for the child to finish
-    for (int i = 0; i < 40; ++i) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        if (!isProcessRunning(proc)) break;
-    }
+    waitForChildProcess(proc);
 
     // Verify the working directory was set correctly
     std::string output = readFile(outFile);
@@ -4312,13 +4317,21 @@ TEST(ServerConfig, LaunchProcessShellScript)
     bool ok = launchProcess(script, {}, env, proc, tmp.path());
     EXPECT_TRUE(ok);
 
-    // Wait for the child to finish
-    for (int i = 0; i < 40; ++i) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        if (!isProcessRunning(proc)) break;
-    }
+    waitForChildProcess(proc);
 
     EXPECT_TRUE(fs::exists(markerFile));
     std::string content = readFile(markerFile);
     EXPECT_TRUE(strContains(content, "executed"));
+}
+
+TEST(ServerConfig, SteamCmdInstallRejectsUnsafePath)
+{
+    SteamCmdModule mod;
+
+    // Paths with shell metacharacters should be rejected
+    EXPECT_FALSE(mod.installSteamCmd("/tmp/test; rm -rf /"));
+    EXPECT_FALSE(mod.installSteamCmd("/tmp/test'$(whoami)"));
+    EXPECT_FALSE(mod.installSteamCmd("/tmp/test`cmd`"));
+    EXPECT_FALSE(mod.installSteamCmd("/tmp/test|pipe"));
+    EXPECT_FALSE(mod.installSteamCmd("/tmp/test&bg"));
 }

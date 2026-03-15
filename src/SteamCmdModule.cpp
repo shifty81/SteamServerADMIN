@@ -70,10 +70,28 @@ bool SteamCmdModule::downloadMod(int appid, int modId)
 // installSteamCmd – download & extract the official SteamCMD package
 // ---------------------------------------------------------------------------
 
+/// Reject directory paths that contain characters dangerous in shell commands.
+static bool isPathSafeForShell(const std::string &path)
+{
+    for (char c : path) {
+        if (c == '\'' || c == '`' || c == '$' || c == '!' ||
+            c == '|' || c == ';' || c == '&' || c == '"' ||
+            c == '\n' || c == '\r')
+            return false;
+    }
+    return true;
+}
+
 bool SteamCmdModule::installSteamCmd(const std::string &installDir)
 {
     if (installDir.empty()) {
         if (onOutputLine) onOutputLine("Install directory is empty");
+        if (onFinished) onFinished(false);
+        return false;
+    }
+
+    if (!isPathSafeForShell(installDir)) {
+        if (onOutputLine) onOutputLine("Install directory contains invalid characters");
         if (onFinished) onFinished(false);
         return false;
     }
