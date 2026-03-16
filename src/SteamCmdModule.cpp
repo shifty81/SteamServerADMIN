@@ -31,8 +31,26 @@ std::string SteamCmdModule::steamCmdPath() const
     return m_steamCmdPath;
 }
 
+/// Reject directory paths that contain characters dangerous in shell commands.
+static bool isPathSafeForShell(const std::string &path)
+{
+    for (char c : path) {
+        if (c == '\'' || c == '`' || c == '$' || c == '!' ||
+            c == '|' || c == ';' || c == '&' || c == '"' ||
+            c == '\n' || c == '\r')
+            return false;
+    }
+    return true;
+}
+
 void SteamCmdModule::deployServer(const ServerConfig &server)
 {
+    if (!isPathSafeForShell(server.dir)) {
+        if (onOutputLine) onOutputLine("Server directory contains invalid characters");
+        if (onFinished) onFinished(false);
+        return;
+    }
+
     fs::create_directories(server.dir);
 
     std::vector<std::string> args = {
@@ -69,18 +87,6 @@ bool SteamCmdModule::downloadMod(int appid, int modId)
 // ---------------------------------------------------------------------------
 // installSteamCmd – download & extract the official SteamCMD package
 // ---------------------------------------------------------------------------
-
-/// Reject directory paths that contain characters dangerous in shell commands.
-static bool isPathSafeForShell(const std::string &path)
-{
-    for (char c : path) {
-        if (c == '\'' || c == '`' || c == '$' || c == '!' ||
-            c == '|' || c == ';' || c == '&' || c == '"' ||
-            c == '\n' || c == '\r')
-            return false;
-    }
-    return true;
-}
 
 bool SteamCmdModule::installSteamCmd(const std::string &installDir)
 {

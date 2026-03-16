@@ -54,6 +54,10 @@ public:
                     continue;
                 }
 
+                // Skip symlinks to prevent symlink attacks
+                if (it->is_symlink())
+                    continue;
+
                 // Skip well-known binary / cache directories
                 if (it->is_directory()) {
                     std::string dirName = it->path().filename().string();
@@ -83,7 +87,13 @@ public:
                     continue;
 
                 auto rel = fs::relative(it->path(), root);
-                results.push_back(rel.generic_string());
+                std::string relStr = rel.generic_string();
+
+                // Reject paths that escape the root via ../
+                if (relStr.find("..") != std::string::npos)
+                    continue;
+
+                results.push_back(relStr);
 
                 if (static_cast<int>(results.size()) >= maxResults)
                     break;

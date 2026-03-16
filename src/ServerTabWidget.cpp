@@ -106,6 +106,7 @@ void ServerTabWidget::renderOverviewTab()
         m_lastPlayerCountRefresh = now;
     } else if (!running) {
         m_cachedPlayerCount = 0;
+        m_lastPlayerCountRefresh = {}; // reset so next start gets a fresh query
     }
     int players = m_cachedPlayerCount;
 
