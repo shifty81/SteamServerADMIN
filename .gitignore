@@ -30,3 +30,25 @@ ssa.log
 ssa_preferences.json
 logs/
 
+# Object files and libraries
+*.o
+*.a
+*.so
+*.dll
+*.dylib
+
+# Executables
+*.exe
+*.app
+
+# CMake generated
+compile_commands.json
+
+# Build caches
+.cache/
+.ccache/
+
+# Editor swap/backup files
+*.swp
+*.swo
+*~

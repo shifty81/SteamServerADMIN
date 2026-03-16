@@ -51,7 +51,9 @@ struct GameTemplate {
               "valheim_server.x86_64",
               "-name MyServer -port 2456 -world Dedicated",
               "valheim",
-              {} },
+              { "adminlist.txt",
+                "bannedlist.txt",
+                "permittedlist.txt" } },
 
             { "Project Zomboid",
               380870,
