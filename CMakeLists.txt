@@ -40,7 +40,8 @@ FetchContent_Declare(
 
 # -------- Portable File Dialogs (header-only) --------
 # Note: v0.1.0 has cmake_minimum_required(VERSION 3.1) which is incompatible
-# with CMake >= 3.30.  We populate it manually and skip its CMakeLists.txt.
+# with CMake >= 3.30.  We download it and create the INTERFACE target manually,
+# skipping its broken CMakeLists.txt.
 FetchContent_Declare(
     portable_file_dialogs
     GIT_REPOSITORY https://github.com/samhocevar/portable-file-dialogs.git
@@ -49,11 +50,19 @@ FetchContent_Declare(
 
 FetchContent_MakeAvailable(glfw imgui nlohmann_json googletest)
 
+# Suppress CMP0169 deprecation warning for FetchContent_Populate
+if(POLICY CMP0169)
+    cmake_policy(PUSH)
+    cmake_policy(SET CMP0169 OLD)
+endif()
 FetchContent_GetProperties(portable_file_dialogs)
 if(NOT portable_file_dialogs_POPULATED)
     FetchContent_Populate(portable_file_dialogs)
     add_library(portable_file_dialogs INTERFACE)
     target_include_directories(portable_file_dialogs INTERFACE "${portable_file_dialogs_SOURCE_DIR}")
+endif()
+if(POLICY CMP0169)
+    cmake_policy(POP)
 endif()
 
 # -------- OpenGL --------

@@ -212,6 +212,7 @@ bool isProcessRunning(const ProcessInfo &info)
     if (info.pid <= 0) return false;
     int status;
     pid_t result = waitpid(info.pid, &status, WNOHANG);
+    if (result < 0) return false;  // error (e.g. already reaped)
     return result == 0;
 #endif
 }
@@ -425,6 +426,83 @@ static int64_t jsonInt64(const json &obj, const std::string &key, int64_t def = 
     return def;
 }
 
+// ---------------------------------------------------------------------------
+// Deserialise a single ServerConfig from a JSON object.
+// Used by both loadConfig() and importServerConfig() to avoid duplication.
+// ---------------------------------------------------------------------------
+static ServerConfig deserializeServerConfig(const json &obj)
+{
+    ServerConfig s;
+    s.name           = jsonStr(obj, "name");
+    s.appid          = jsonInt(obj, "appid");
+    s.dir            = jsonStr(obj, "dir");
+    s.executable     = jsonStr(obj, "executable");
+    s.launchArgs     = jsonStr(obj, "launchArgs");
+    s.backupFolder   = jsonStr(obj, "backupFolder");
+    s.notes          = jsonStr(obj, "notes");
+    s.discordWebhookUrl = jsonStr(obj, "discordWebhookUrl");
+    s.webhookTemplate= jsonStr(obj, "webhookTemplate");
+    s.autoUpdate     = jsonBool(obj, "autoUpdate", true);
+    s.autoStartOnLaunch = jsonBool(obj, "autoStartOnLaunch", false);
+    s.favorite       = jsonBool(obj, "favorite", false);
+    s.keepBackups    = jsonInt(obj, "keepBackups", 10);
+    s.backupIntervalMinutes  = jsonInt(obj, "backupIntervalMinutes", 30);
+    s.restartIntervalHours   = jsonInt(obj, "restartIntervalHours", 24);
+    s.rconCommandIntervalMinutes = jsonInt(obj, "rconCommandIntervalMinutes", 0);
+    s.backupCompressionLevel = jsonInt(obj, "backupCompressionLevel", 6);
+    s.maintenanceStartHour   = jsonInt(obj, "maintenanceStartHour", -1);
+    s.maintenanceEndHour     = jsonInt(obj, "maintenanceEndHour", -1);
+    s.consoleLogging = jsonBool(obj, "consoleLogging", false);
+    s.maxPlayers     = jsonInt(obj, "maxPlayers", 0);
+    s.restartWarningMinutes = jsonInt(obj, "restartWarningMinutes", 15);
+    s.restartWarningMessage = jsonStr(obj, "restartWarningMessage");
+    s.cpuAlertThreshold    = jsonDouble(obj, "cpuAlertThreshold", 90.0);
+    s.memAlertThresholdMB  = jsonDouble(obj, "memAlertThresholdMB", 0.0);
+
+    if (obj.contains("eventHooks") && obj["eventHooks"].is_object()) {
+        for (auto &[k, v] : obj["eventHooks"].items())
+            if (v.is_string()) s.eventHooks[k] = v.get<std::string>();
+    }
+    if (obj.contains("tags") && obj["tags"].is_array()) {
+        for (const auto &v : obj["tags"])
+            if (v.is_string()) s.tags.push_back(v.get<std::string>());
+    }
+
+    s.group = jsonStr(obj, "group");
+    s.startupPriority = jsonInt(obj, "startupPriority", 0);
+    s.backupBeforeRestart = jsonBool(obj, "backupBeforeRestart", false);
+    s.gracefulShutdownSeconds = jsonInt(obj, "gracefulShutdownSeconds", 10);
+    s.autoUpdateCheckIntervalMinutes = jsonInt(obj, "autoUpdateCheckIntervalMinutes", 0);
+    s.totalUptimeSeconds = jsonInt64(obj, "totalUptimeSeconds", 0);
+    s.totalCrashes = jsonInt(obj, "totalCrashes", 0);
+    s.lastCrashTime = jsonStr(obj, "lastCrashTime");
+
+    if (obj.contains("environmentVariables") && obj["environmentVariables"].is_object()) {
+        for (auto &[k, v] : obj["environmentVariables"].items())
+            if (v.is_string()) s.environmentVariables[k] = v.get<std::string>();
+    }
+    if (obj.contains("scheduledRconCommands") && obj["scheduledRconCommands"].is_array()) {
+        for (const auto &v : obj["scheduledRconCommands"])
+            if (v.is_string()) s.scheduledRconCommands.push_back(v.get<std::string>());
+    }
+    if (obj.contains("rcon") && obj["rcon"].is_object()) {
+        const auto &rcon = obj["rcon"];
+        s.rcon.host     = jsonStr(rcon, "host", "127.0.0.1");
+        s.rcon.port     = jsonInt(rcon, "port", 27015);
+        s.rcon.password = deobfuscatePassword(jsonStr(rcon, "password"));
+    }
+    if (obj.contains("mods") && obj["mods"].is_array()) {
+        for (const auto &m : obj["mods"])
+            if (m.is_number_integer()) s.mods.push_back(m.get<int>());
+    }
+    if (obj.contains("disabledMods") && obj["disabledMods"].is_array()) {
+        for (const auto &m : obj["disabledMods"])
+            if (m.is_number_integer()) s.disabledMods.push_back(m.get<int>());
+    }
+
+    return s;
+}
+
 bool ServerManager::loadConfig()
 {
     std::ifstream file(m_configFile);
@@ -445,75 +523,7 @@ bool ServerManager::loadConfig()
 
     m_servers.clear();
     for (const auto &obj : doc) {
-        ServerConfig s;
-        s.name           = jsonStr(obj, "name");
-        s.appid          = jsonInt(obj, "appid");
-        s.dir            = jsonStr(obj, "dir");
-        s.executable     = jsonStr(obj, "executable");
-        s.launchArgs     = jsonStr(obj, "launchArgs");
-        s.backupFolder   = jsonStr(obj, "backupFolder");
-        s.notes          = jsonStr(obj, "notes");
-        s.discordWebhookUrl = jsonStr(obj, "discordWebhookUrl");
-        s.webhookTemplate= jsonStr(obj, "webhookTemplate");
-        s.autoUpdate     = jsonBool(obj, "autoUpdate", true);
-        s.autoStartOnLaunch = jsonBool(obj, "autoStartOnLaunch", false);
-        s.favorite       = jsonBool(obj, "favorite", false);
-        s.keepBackups    = jsonInt(obj, "keepBackups", 10);
-        s.backupIntervalMinutes  = jsonInt(obj, "backupIntervalMinutes", 30);
-        s.restartIntervalHours   = jsonInt(obj, "restartIntervalHours", 24);
-        s.rconCommandIntervalMinutes = jsonInt(obj, "rconCommandIntervalMinutes", 0);
-        s.backupCompressionLevel = jsonInt(obj, "backupCompressionLevel", 6);
-        s.maintenanceStartHour   = jsonInt(obj, "maintenanceStartHour", -1);
-        s.maintenanceEndHour     = jsonInt(obj, "maintenanceEndHour", -1);
-        s.consoleLogging = jsonBool(obj, "consoleLogging", false);
-        s.maxPlayers     = jsonInt(obj, "maxPlayers", 0);
-        s.restartWarningMinutes = jsonInt(obj, "restartWarningMinutes", 15);
-        s.restartWarningMessage = jsonStr(obj, "restartWarningMessage");
-        s.cpuAlertThreshold    = jsonDouble(obj, "cpuAlertThreshold", 90.0);
-        s.memAlertThresholdMB  = jsonDouble(obj, "memAlertThresholdMB", 0.0);
-
-        if (obj.contains("eventHooks") && obj["eventHooks"].is_object()) {
-            for (auto &[k, v] : obj["eventHooks"].items())
-                if (v.is_string()) s.eventHooks[k] = v.get<std::string>();
-        }
-        if (obj.contains("tags") && obj["tags"].is_array()) {
-            for (const auto &v : obj["tags"])
-                if (v.is_string()) s.tags.push_back(v.get<std::string>());
-        }
-
-        s.group = jsonStr(obj, "group");
-        s.startupPriority = jsonInt(obj, "startupPriority", 0);
-        s.backupBeforeRestart = jsonBool(obj, "backupBeforeRestart", false);
-        s.gracefulShutdownSeconds = jsonInt(obj, "gracefulShutdownSeconds", 10);
-        s.autoUpdateCheckIntervalMinutes = jsonInt(obj, "autoUpdateCheckIntervalMinutes", 0);
-        s.totalUptimeSeconds = jsonInt64(obj, "totalUptimeSeconds", 0);
-        s.totalCrashes = jsonInt(obj, "totalCrashes", 0);
-        s.lastCrashTime = jsonStr(obj, "lastCrashTime");
-
-        if (obj.contains("environmentVariables") && obj["environmentVariables"].is_object()) {
-            for (auto &[k, v] : obj["environmentVariables"].items())
-                if (v.is_string()) s.environmentVariables[k] = v.get<std::string>();
-        }
-        if (obj.contains("scheduledRconCommands") && obj["scheduledRconCommands"].is_array()) {
-            for (const auto &v : obj["scheduledRconCommands"])
-                if (v.is_string()) s.scheduledRconCommands.push_back(v.get<std::string>());
-        }
-        if (obj.contains("rcon") && obj["rcon"].is_object()) {
-            const auto &rcon = obj["rcon"];
-            s.rcon.host     = jsonStr(rcon, "host", "127.0.0.1");
-            s.rcon.port     = jsonInt(rcon, "port", 27015);
-            s.rcon.password = deobfuscatePassword(jsonStr(rcon, "password"));
-        }
-        if (obj.contains("mods") && obj["mods"].is_array()) {
-            for (const auto &m : obj["mods"])
-                if (m.is_number_integer()) s.mods.push_back(m.get<int>());
-        }
-        if (obj.contains("disabledMods") && obj["disabledMods"].is_array()) {
-            for (const auto &m : obj["disabledMods"])
-                if (m.is_number_integer()) s.disabledMods.push_back(m.get<int>());
-        }
-
-        m_servers.push_back(s);
+        m_servers.push_back(deserializeServerConfig(obj));
     }
     return true;
 }
@@ -1180,73 +1190,7 @@ std::string ServerManager::importServerConfig(const std::string &filePath)
     }
     if (!obj.is_object()) return "Expected a JSON object.";
 
-    ServerConfig s;
-    s.name           = jsonStr(obj, "name");
-    s.appid          = jsonInt(obj, "appid");
-    s.dir            = jsonStr(obj, "dir");
-    s.executable     = jsonStr(obj, "executable");
-    s.launchArgs     = jsonStr(obj, "launchArgs");
-    s.backupFolder   = jsonStr(obj, "backupFolder");
-    s.notes          = jsonStr(obj, "notes");
-    s.discordWebhookUrl = jsonStr(obj, "discordWebhookUrl");
-    s.webhookTemplate= jsonStr(obj, "webhookTemplate");
-    s.autoUpdate     = jsonBool(obj, "autoUpdate", true);
-    s.autoStartOnLaunch = jsonBool(obj, "autoStartOnLaunch", false);
-    s.favorite       = jsonBool(obj, "favorite", false);
-    s.keepBackups    = jsonInt(obj, "keepBackups", 10);
-    s.backupIntervalMinutes = jsonInt(obj, "backupIntervalMinutes", 30);
-    s.restartIntervalHours  = jsonInt(obj, "restartIntervalHours", 24);
-    s.rconCommandIntervalMinutes = jsonInt(obj, "rconCommandIntervalMinutes", 0);
-    s.backupCompressionLevel = jsonInt(obj, "backupCompressionLevel", 6);
-    s.maintenanceStartHour   = jsonInt(obj, "maintenanceStartHour", -1);
-    s.maintenanceEndHour     = jsonInt(obj, "maintenanceEndHour", -1);
-    s.consoleLogging = jsonBool(obj, "consoleLogging", false);
-    s.maxPlayers     = jsonInt(obj, "maxPlayers", 0);
-    s.restartWarningMinutes = jsonInt(obj, "restartWarningMinutes", 15);
-    s.restartWarningMessage = jsonStr(obj, "restartWarningMessage");
-    s.cpuAlertThreshold    = jsonDouble(obj, "cpuAlertThreshold", 90.0);
-    s.memAlertThresholdMB  = jsonDouble(obj, "memAlertThresholdMB", 0.0);
-
-    if (obj.contains("eventHooks") && obj["eventHooks"].is_object()) {
-        for (auto &[k, v] : obj["eventHooks"].items())
-            if (v.is_string()) s.eventHooks[k] = v.get<std::string>();
-    }
-    if (obj.contains("tags") && obj["tags"].is_array()) {
-        for (const auto &v : obj["tags"])
-            if (v.is_string()) s.tags.push_back(v.get<std::string>());
-    }
-
-    s.group = jsonStr(obj, "group");
-    s.startupPriority = jsonInt(obj, "startupPriority", 0);
-    s.backupBeforeRestart = jsonBool(obj, "backupBeforeRestart", false);
-    s.gracefulShutdownSeconds = jsonInt(obj, "gracefulShutdownSeconds", 10);
-    s.autoUpdateCheckIntervalMinutes = jsonInt(obj, "autoUpdateCheckIntervalMinutes", 0);
-    s.totalUptimeSeconds = jsonInt64(obj, "totalUptimeSeconds", 0);
-    s.totalCrashes = jsonInt(obj, "totalCrashes", 0);
-    s.lastCrashTime = jsonStr(obj, "lastCrashTime");
-
-    if (obj.contains("environmentVariables") && obj["environmentVariables"].is_object()) {
-        for (auto &[k, v] : obj["environmentVariables"].items())
-            if (v.is_string()) s.environmentVariables[k] = v.get<std::string>();
-    }
-    if (obj.contains("rcon") && obj["rcon"].is_object()) {
-        const auto &rcon = obj["rcon"];
-        s.rcon.host     = jsonStr(rcon, "host", "127.0.0.1");
-        s.rcon.port     = jsonInt(rcon, "port", 27015);
-        s.rcon.password = deobfuscatePassword(jsonStr(rcon, "password"));
-    }
-    if (obj.contains("mods") && obj["mods"].is_array()) {
-        for (const auto &m : obj["mods"])
-            if (m.is_number_integer()) s.mods.push_back(m.get<int>());
-    }
-    if (obj.contains("disabledMods") && obj["disabledMods"].is_array()) {
-        for (const auto &m : obj["disabledMods"])
-            if (m.is_number_integer()) s.disabledMods.push_back(m.get<int>());
-    }
-    if (obj.contains("scheduledRconCommands") && obj["scheduledRconCommands"].is_array()) {
-        for (const auto &v : obj["scheduledRconCommands"])
-            if (v.is_string()) s.scheduledRconCommands.push_back(v.get<std::string>());
-    }
+    ServerConfig s = deserializeServerConfig(obj);
 
     m_servers.push_back(s);
     std::vector<std::string> errors = validateAll();

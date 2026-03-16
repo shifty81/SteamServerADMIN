@@ -4896,3 +4896,183 @@ TEST(GameTemplates, KnownTemplatesHaveConfigPaths)
     }
     EXPECT_TRUE(found);
 }
+
+// ===========================================================================
+// Valheim template configPaths test
+// ===========================================================================
+
+TEST(GameTemplates, ValheimHasConfigPaths)
+{
+    auto templates = GameTemplate::builtinTemplates();
+    bool found = false;
+    for (const auto &t : templates) {
+        if (t.displayName == "Valheim") {
+            EXPECT_FALSE(t.configPaths.empty())
+                << "Valheim template should have configPaths";
+            found = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(found);
+}
+
+// ===========================================================================
+// Extended validation tests
+// ===========================================================================
+
+TEST(ServerConfig, MaintenanceHoursMismatchValidation)
+{
+    ServerConfig s;
+    s.name  = "MaintMismatch";
+    s.appid = 730;
+    s.dir   = "/srv/mm";
+
+    // One set, one disabled -> error
+    s.maintenanceStartHour = 2;
+    s.maintenanceEndHour   = -1;
+    auto errors = s.validate();
+    bool found = false;
+    for (const auto &e : errors) {
+        if (strContains(e, "both be set or both disabled"))
+            found = true;
+    }
+    EXPECT_TRUE(found) << "Should report mismatch when only start hour is set";
+
+    // Reverse: only end set
+    s.maintenanceStartHour = -1;
+    s.maintenanceEndHour   = 6;
+    errors = s.validate();
+    found = false;
+    for (const auto &e : errors) {
+        if (strContains(e, "both be set or both disabled"))
+            found = true;
+    }
+    EXPECT_TRUE(found) << "Should report mismatch when only end hour is set";
+
+    // Both set -> no mismatch error
+    s.maintenanceStartHour = 2;
+    s.maintenanceEndHour   = 6;
+    errors = s.validate();
+    for (const auto &e : errors) {
+        EXPECT_FALSE(strContains(e, "both be set or both disabled"));
+    }
+
+    // Both disabled -> no mismatch error
+    s.maintenanceStartHour = -1;
+    s.maintenanceEndHour   = -1;
+    errors = s.validate();
+    for (const auto &e : errors) {
+        EXPECT_FALSE(strContains(e, "both be set or both disabled"));
+    }
+}
+
+TEST(ServerConfig, EmptyEnvVarKeyValidation)
+{
+    ServerConfig s;
+    s.name  = "EnvVal";
+    s.appid = 730;
+    s.dir   = "/srv/ev";
+    s.environmentVariables["GOOD_KEY"] = "value";
+    EXPECT_TRUE(s.validate().empty());
+
+    s.environmentVariables[""] = "bad";
+    auto errors = s.validate();
+    bool found = false;
+    for (const auto &e : errors) {
+        if (strContains(e, "Environment variable key"))
+            found = true;
+    }
+    EXPECT_TRUE(found) << "Should reject empty environment variable key";
+}
+
+TEST(ServerConfig, EmptyScheduledRconCommandValidation)
+{
+    ServerConfig s;
+    s.name  = "RconVal";
+    s.appid = 730;
+    s.dir   = "/srv/rv";
+    s.scheduledRconCommands.push_back("say hello");
+    EXPECT_TRUE(s.validate().empty());
+
+    s.scheduledRconCommands.push_back("   ");
+    auto errors = s.validate();
+    bool found = false;
+    for (const auto &e : errors) {
+        if (strContains(e, "Scheduled RCON command"))
+            found = true;
+    }
+    EXPECT_TRUE(found) << "Should reject whitespace-only RCON command";
+}
+
+// ===========================================================================
+// Deserialization helper consistency test
+// ===========================================================================
+
+TEST(ServerManager, ImportAndLoadUseConsistentDeserialization)
+{
+    // Verify that a config saved by loadConfig() round-trips identically
+    // through importServerConfig() — i.e., the shared deserialization
+    // helper produces the same results for both paths.
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string configPath = tmp.filePath("servers.json");
+
+    ServerConfig original;
+    original.name  = "RoundTrip";
+    original.appid = 730;
+    original.dir   = "/srv/rt";
+    original.group = "TestGroup";
+    original.tags  = {"alpha", "beta"};
+    original.environmentVariables["FOO"] = "bar";
+    original.scheduledRconCommands = {"say test"};
+    original.maintenanceStartHour = 2;
+    original.maintenanceEndHour   = 6;
+    original.totalUptimeSeconds   = 12345;
+    original.totalCrashes         = 3;
+    original.lastCrashTime        = "2026-01-01T00:00:00Z";
+
+    // Save via ServerManager
+    ServerManager mgr1(configPath);
+    mgr1.servers().push_back(original);
+    mgr1.saveConfig();
+
+    // Load via loadConfig()
+    ServerManager mgr2(configPath);
+    ASSERT_TRUE(mgr2.loadConfig());
+    ASSERT_EQ(mgr2.servers().size(), 1u);
+    const auto &loaded = mgr2.servers().front();
+
+    EXPECT_EQ(loaded.name, "RoundTrip");
+    EXPECT_EQ(loaded.group, "TestGroup");
+    EXPECT_EQ(loaded.tags.size(), 2u);
+    EXPECT_EQ(loaded.environmentVariables.size(), 1u);
+    EXPECT_EQ(loaded.environmentVariables.at("FOO"), "bar");
+    EXPECT_EQ(loaded.scheduledRconCommands.size(), 1u);
+    EXPECT_EQ(loaded.scheduledRconCommands.front(), "say test");
+    EXPECT_EQ(loaded.maintenanceStartHour, 2);
+    EXPECT_EQ(loaded.maintenanceEndHour, 6);
+    EXPECT_EQ(loaded.totalUptimeSeconds, 12345);
+    EXPECT_EQ(loaded.totalCrashes, 3);
+    EXPECT_EQ(loaded.lastCrashTime, "2026-01-01T00:00:00Z");
+
+    // Export and re-import via importServerConfig()
+    std::string exportPath = tmp.filePath("export.json");
+    EXPECT_TRUE(mgr2.exportServerConfig(loaded.name, exportPath));
+
+    ServerManager mgr3(tmp.filePath("servers3.json"));
+    std::string err = mgr3.importServerConfig(exportPath);
+    EXPECT_TRUE(err.empty()) << "Import error: " << err;
+    ASSERT_EQ(mgr3.servers().size(), 1u);
+    const auto &imported = mgr3.servers().front();
+
+    EXPECT_EQ(imported.name, loaded.name);
+    EXPECT_EQ(imported.group, loaded.group);
+    EXPECT_EQ(imported.tags, loaded.tags);
+    EXPECT_EQ(imported.environmentVariables, loaded.environmentVariables);
+    EXPECT_EQ(imported.scheduledRconCommands, loaded.scheduledRconCommands);
+    EXPECT_EQ(imported.maintenanceStartHour, loaded.maintenanceStartHour);
+    EXPECT_EQ(imported.maintenanceEndHour, loaded.maintenanceEndHour);
+    EXPECT_EQ(imported.totalUptimeSeconds, loaded.totalUptimeSeconds);
+    EXPECT_EQ(imported.totalCrashes, loaded.totalCrashes);
+    EXPECT_EQ(imported.lastCrashTime, loaded.lastCrashTime);
+}

@@ -143,6 +143,19 @@ struct ServerConfig {
         if (maintenanceEndHour != -1 && (maintenanceEndHour < 0 || maintenanceEndHour > 23))
             errors.push_back("Maintenance end hour must be between 0 and 23 (or -1 to disable).");
 
+        if ((maintenanceStartHour == -1) != (maintenanceEndHour == -1))
+            errors.push_back("Maintenance start and end hours must both be set or both disabled.");
+
+        for (const auto &[key, val] : environmentVariables) {
+            if (key.empty())
+                errors.push_back("Environment variable key must not be empty.");
+        }
+
+        for (const auto &cmd : scheduledRconCommands) {
+            if (trimString(cmd).empty())
+                errors.push_back("Scheduled RCON command must not be empty.");
+        }
+
         if (maxPlayers < 0)
             errors.push_back("Max players must not be negative.");
 
