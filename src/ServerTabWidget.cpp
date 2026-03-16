@@ -77,12 +77,42 @@ ServerTabWidget::ServerTabWidget(ServerManager *manager, ServerConfig &server)
 
 void ServerTabWidget::render()
 {
+    // NoScrollbar at this level keeps both the outer (main) tab bar and the
+    // sub-tab bar visible at all times.  Each sub-tab provides its own
+    // scrollable content child below.
     if (ImGui::BeginTabBar("##ServerSubTabs")) {
-        if (ImGui::BeginTabItem("Overview"))  { renderOverviewTab();  ImGui::EndTabItem(); }
-        if (ImGui::BeginTabItem("Settings"))  { renderSettingsTab();  ImGui::EndTabItem(); }
-        if (ImGui::BeginTabItem("Config"))    { renderConfigTab();    ImGui::EndTabItem(); }
-        if (ImGui::BeginTabItem("Mods"))      { renderModsTab();      ImGui::EndTabItem(); }
-        if (ImGui::BeginTabItem("Backups"))   { renderBackupsTab();   ImGui::EndTabItem(); }
+        if (ImGui::BeginTabItem("Overview")) {
+            ImGui::BeginChild("##OverviewContent", ImVec2(0, 0));
+            renderOverviewTab();
+            ImGui::EndChild();
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Settings")) {
+            ImGui::BeginChild("##SettingsContent", ImVec2(0, 0));
+            renderSettingsTab();
+            ImGui::EndChild();
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Config")) {
+            ImGui::BeginChild("##ConfigContent", ImVec2(0, 0));
+            renderConfigTab();
+            ImGui::EndChild();
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Mods")) {
+            ImGui::BeginChild("##ModsContent", ImVec2(0, 0));
+            renderModsTab();
+            ImGui::EndChild();
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Backups")) {
+            ImGui::BeginChild("##BackupsContent", ImVec2(0, 0));
+            renderBackupsTab();
+            ImGui::EndChild();
+            ImGui::EndTabItem();
+        }
+        // Console and Logs manage their own internal layout with fixed-height
+        // children, so they do not need an extra wrapper here.
         if (ImGui::BeginTabItem("Console"))   { renderConsoleTab();   ImGui::EndTabItem(); }
         if (ImGui::BeginTabItem("Logs"))      { renderLogsTab();      ImGui::EndTabItem(); }
         ImGui::EndTabBar();

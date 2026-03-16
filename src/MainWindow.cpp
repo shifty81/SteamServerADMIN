@@ -166,6 +166,7 @@ void MainWindow::render()
         std::strncpy(m_addRconHost, "127.0.0.1", sizeof(m_addRconHost) - 1);
         m_addRconPort = 27015;
         std::memset(m_addRconPass, 0, sizeof(m_addRconPass));
+        m_addInstallViaSteamCmd = true;  // default to deploying via SteamCMD
         ImGui::OpenPopup("Add Server");
         m_showAddServer = false;
     }
@@ -474,7 +475,10 @@ void MainWindow::renderSidebar()
 
 void MainWindow::renderTabArea()
 {
-    ImGui::BeginChild("##TabArea");
+    // NoScrollbar/NoScrollWithMouse keeps the tab bar permanently visible;
+    // each tab's content area provides its own scrollable child.
+    ImGui::BeginChild("##TabArea", ImVec2(0, 0), ImGuiChildFlags_None,
+                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
     if (ImGui::BeginTabBar("##MainTabs")) {
         // Home tab (index 0)
@@ -482,7 +486,9 @@ void MainWindow::renderTabArea()
             ImGuiTabItemFlags f = 0;
             if (m_selectedTab == 0) f |= ImGuiTabItemFlags_SetSelected;
             if (ImGui::BeginTabItem("Home", nullptr, f)) {
+                ImGui::BeginChild("##HomeContent", ImVec2(0, 0));
                 m_dashboard->render();
+                ImGui::EndChild();
                 ImGui::EndTabItem();
             }
         }
@@ -798,11 +804,25 @@ void MainWindow::renderAddServerDialog()
             m_scheduler->startScheduler(s.name);
             m_logModule->log(s.name, "Server added.");
 
-            // Install via SteamCMD if requested
+            // Always create the install directory so the server is ready to use.
+            // A non-empty dir that passes validation is expected to be a well-formed
+            // path; the filesystem_error catch handles any OS-level rejection.
+            if (!s.dir.empty()) {
+                try {
+                    std::filesystem::create_directories(s.dir);
+                    m_logModule->log(s.name, "Install directory created: " + s.dir);
+                } catch (const std::filesystem::filesystem_error &e) {
+                    std::string dirErr = std::string("Error: could not create install directory: ") + e.what();
+                    m_logModule->log(s.name, dirErr);
+                    m_trayManager->notify("Directory Error", dirErr);
+                }
+            }
+
+            // Deploy (install game files) via SteamCMD if requested
             if (m_addInstallViaSteamCmd) {
                 if (m_steamCmdPath[0] != '\0')
                     m_manager->setSteamCmdPath(m_steamCmdPath);
-                m_logModule->log(s.name, "Starting SteamCMD installation...");
+                m_logModule->log(s.name, "Starting SteamCMD deployment...");
                 m_manager->deployServer(m_manager->servers().back());
                 savePreferences();
             }
