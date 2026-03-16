@@ -4252,6 +4252,68 @@ TEST(ServerConfig, ServerManagerIsSteamCmdInstalledTrue)
     EXPECT_TRUE(mgr.isSteamCmdInstalled());
 }
 
+// ---------------------------------------------------------------------------
+// deployServer returns false for an unsafe path and for a missing SteamCMD
+// ---------------------------------------------------------------------------
+
+TEST(ServerConfig, DeployServerReturnsFalseOnUnsafePath)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    SteamCmdModule mod;
+    mod.setSteamCmdPath("/nonexistent/steamcmd");
+
+    ServerConfig s;
+    s.name  = "Test";
+    s.appid = 730;
+    s.dir   = "/path/with;dangerous|chars";
+
+    bool result = mod.deployServer(s);
+    EXPECT_FALSE(result);
+}
+
+TEST(ServerConfig, DeployServerReturnsFalseWhenSteamCmdMissing)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    SteamCmdModule mod;
+    mod.setSteamCmdPath("/nonexistent/path/to/steamcmd");
+
+    ServerConfig s;
+    s.name  = "Test";
+    s.appid = 730;
+    s.dir   = tmp.filePath("serverdir");
+
+    // SteamCMD is not available; popen should fail and deployServer should
+    // return false.
+    bool result = mod.deployServer(s);
+    EXPECT_FALSE(result);
+}
+
+// After installSteamCmd succeeds, the module's path should point to the
+// installed binary.  We fake a successful install by pre-creating the
+// expected binary file so the extraction step can be skipped (installation
+// itself requires network access; only the path-update logic is tested here
+// via ServerManager::setSteamCmdPath / isSteamCmdInstalled).
+TEST(ServerConfig, SteamCmdPathUpdatedAfterSetPath)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    // Simulate an already-installed steamcmd binary
+    std::string fakeBin = tmp.filePath("steamcmd.sh");
+    { std::ofstream f(fakeBin); f << "#!/bin/sh\necho ok\n"; }
+
+    ServerManager mgr(tmp.filePath("servers.json"));
+    // Simulates what renderInstallSteamCmdDialog does after a successful install:
+    // update manager path and verify isSteamCmdInstalled reflects the new path.
+    mgr.setSteamCmdPath(fakeBin);
+    EXPECT_TRUE(mgr.isSteamCmdInstalled());
+    EXPECT_EQ(mgr.steamCmdPath(), fakeBin);
+}
+
 // ===========================================================================
 // launchProcess working directory and script handling
 // ===========================================================================

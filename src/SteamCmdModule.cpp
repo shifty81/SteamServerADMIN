@@ -43,15 +43,21 @@ static bool isPathSafeForShell(const std::string &path)
     return true;
 }
 
-void SteamCmdModule::deployServer(const ServerConfig &server)
+bool SteamCmdModule::deployServer(const ServerConfig &server)
 {
     if (!isPathSafeForShell(server.dir)) {
         if (onOutputLine) onOutputLine("Server directory contains invalid characters");
         if (onFinished) onFinished(false);
-        return;
+        return false;
     }
 
-    fs::create_directories(server.dir);
+    try {
+        fs::create_directories(server.dir);
+    } catch (const fs::filesystem_error &e) {
+        if (onOutputLine) onOutputLine(std::string("Failed to create server directory: ") + e.what());
+        if (onFinished) onFinished(false);
+        return false;
+    }
 
     std::vector<std::string> args = {
         "+login",    "anonymous",
@@ -60,7 +66,7 @@ void SteamCmdModule::deployServer(const ServerConfig &server)
         "validate",
         "+quit"
     };
-    runSteamCmd(args);
+    return runSteamCmd(args);
 }
 
 bool SteamCmdModule::updateMods(const ServerConfig &server)

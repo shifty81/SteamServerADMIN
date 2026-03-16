@@ -22,8 +22,9 @@ public:
     /**
      * @brief Install or update a game server identified by server.appid into
      *        server.dir.  Calls onOutputLine() during execution.
+     * @return true on success.
      */
-    void deployServer(const ServerConfig &server);
+    bool deployServer(const ServerConfig &server);
 
     /**
      * @brief Download/update all mods listed in server.mods via the Steam

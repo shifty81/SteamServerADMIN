@@ -745,6 +745,14 @@ void MainWindow::renderAddServerDialog()
     ImGui::Text("SteamCMD Installation");
     ImGui::Checkbox("Install server via SteamCMD", &m_addInstallViaSteamCmd);
     if (m_addInstallViaSteamCmd) {
+        // Pre-populate the path field from the manager's configured path when
+        // the buffer is empty (e.g. first use or after the "Install SteamCMD"
+        // dialog was used to set it).
+        if (m_steamCmdPath[0] == '\0' && m_manager->isSteamCmdInstalled()) {
+            std::string managerPath = m_manager->steamCmdPath();
+            std::strncpy(m_steamCmdPath, managerPath.c_str(), sizeof(m_steamCmdPath) - 1);
+            m_steamCmdPath[sizeof(m_steamCmdPath) - 1] = '\0';
+        }
         ImGui::InputText("SteamCMD Path", m_steamCmdPath, sizeof(m_steamCmdPath));
         ImGui::SameLine();
         if (ImGui::Button("Browse##steamcmd")) {
@@ -1175,6 +1183,11 @@ void MainWindow::renderInstallSteamCmdDialog()
             if (ok) {
                 statusText = "SteamCMD installed successfully at " +
                              m_manager->steamCmdPath();
+                // Persist the newly installed path so it survives app restarts
+                std::string newPath = m_manager->steamCmdPath();
+                std::strncpy(m_steamCmdPath, newPath.c_str(), sizeof(m_steamCmdPath) - 1);
+                m_steamCmdPath[sizeof(m_steamCmdPath) - 1] = '\0';
+                savePreferences();
             } else {
                 statusText = "Failed to install SteamCMD. Check logs for details.";
             }
