@@ -51,6 +51,7 @@ private:
     char m_settRconHost[128] = {};
     int  m_settRconPort      = 27015;
     char m_settRconPass[128] = {};
+    bool m_settShowRconPass  = false;      // hold-to-reveal RCON password
     char m_settBackupDir[512]= {};
     int  m_settMaxPlayers    = 0;
     bool m_settAutoUpdate    = true;

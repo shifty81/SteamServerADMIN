@@ -255,8 +255,20 @@ void ServerTabWidget::renderSettingsTab()
     ImGui::SeparatorText("RCON");
     ImGui::InputText("Host",           m_settRconHost, sizeof(m_settRconHost));
     ImGui::InputInt("Port",            &m_settRconPort);
-    ImGui::InputText("Password",       m_settRconPass, sizeof(m_settRconPass),
-                     ImGuiInputTextFlags_Password);
+    {
+        ImGuiInputTextFlags passFlags = m_settShowRconPass ? 0 : ImGuiInputTextFlags_Password;
+        ImGui::InputText("Password",       m_settRconPass, sizeof(m_settRconPass),
+                         passFlags);
+        ImGui::SameLine();
+        ImGui::Button("Show##settRconPass");
+        m_settShowRconPass = ImGui::IsItemActive();
+        ImGui::SameLine();
+        ImGui::TextDisabled("(?)");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Hold 'Show' to reveal.\n"
+                              "Stored with XOR + base64 obfuscation in servers.json\n"
+                              "(not encrypted, but better than plain text).");
+    }
 
     ImGui::SeparatorText("Paths");
     ImGui::InputText("Backup Folder",  m_settBackupDir, sizeof(m_settBackupDir));

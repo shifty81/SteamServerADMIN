@@ -699,8 +699,19 @@ void MainWindow::renderAddServerDialog()
     ImGui::Text("RCON Settings");
     ImGui::InputText("Host",     m_addRconHost, sizeof(m_addRconHost));
     ImGui::InputInt("Port",      &m_addRconPort);
-    ImGui::InputText("Password", m_addRconPass, sizeof(m_addRconPass),
-                     ImGuiInputTextFlags_Password);
+    {
+        ImGuiInputTextFlags passFlags = m_addShowRconPass ? 0 : ImGuiInputTextFlags_Password;
+        ImGui::InputText("Password", m_addRconPass, sizeof(m_addRconPass), passFlags);
+        ImGui::SameLine();
+        ImGui::Button("Show##addRconPass");
+        m_addShowRconPass = ImGui::IsItemActive();
+        ImGui::SameLine();
+        ImGui::TextDisabled("(?)");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Hold 'Show' to reveal.\n"
+                              "Stored with XOR + base64 obfuscation in servers.json\n"
+                              "(not encrypted, but better than plain text).");
+    }
 
     // SteamCMD install option
     ImGui::Separator();

@@ -92,6 +92,7 @@ private:
     char m_addRconHost[128] = "127.0.0.1";
     int m_addRconPort = 27015;
     char m_addRconPass[128] = {};
+    bool m_addShowRconPass = false;        // hold-to-reveal RCON password
     bool m_addInstallViaSteamCmd = false;  // install the server via SteamCMD on add
     char m_steamCmdPath[512] = {};         // path to steamcmd binary
 
