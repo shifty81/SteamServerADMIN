@@ -69,6 +69,10 @@ private:
     std::string m_logFilterText;
     int m_selectedSidebarServer = -1;
 
+    // Per-frame cache for server running status (avoids repeated system calls)
+    std::vector<bool> m_cachedRunningStatus;
+    std::vector<std::string> m_cachedTabLabels;
+
     // Dialog state
     bool m_showAddServer = false;
     bool m_showCloneServer = false;

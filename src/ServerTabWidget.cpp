@@ -5,6 +5,8 @@
 #include "IniEditor.hpp"
 #include "ConfigBackupManager.hpp"
 #include "GracefulRestartManager.hpp"
+#include "ConfigFileDiscovery.hpp"
+#include "GameTemplates.hpp"
 
 #include "imgui.h"
 
@@ -95,7 +97,17 @@ void ServerTabWidget::renderOverviewTab()
 {
     bool running = m_manager->isServerRunning(m_server);
     int64_t uptime = m_manager->serverUptimeSeconds(m_server.name);
-    int players = m_manager->getPlayerCount(m_server);
+
+    // Throttle player count queries (RCON call) to once every 30 seconds
+    auto now = std::chrono::steady_clock::now();
+    if (running &&
+        std::chrono::duration_cast<std::chrono::seconds>(now - m_lastPlayerCountRefresh).count() >= 30) {
+        m_cachedPlayerCount = m_manager->getPlayerCount(m_server);
+        m_lastPlayerCountRefresh = now;
+    } else if (!running) {
+        m_cachedPlayerCount = 0;
+    }
+    int players = m_cachedPlayerCount;
 
     // Status
     ImGui::SeparatorText("Status");
@@ -506,7 +518,26 @@ void ServerTabWidget::renderSettingsTab()
 void ServerTabWidget::renderConfigTab()
 {
     if (!m_configLoaded) {
-        m_configPath = m_server.dir + "/GameUserSettings.ini";
+        // Try to find a suitable default config path.
+        // First: check template-known config paths for this appid.
+        std::string defaultPath;
+        for (const auto &t : GameTemplate::builtinTemplates()) {
+            if (t.appid == m_server.appid && !t.configPaths.empty()) {
+                for (const auto &cp : t.configPaths) {
+                    std::string full = (fs::path(m_server.dir) / cp).string();
+                    if (fs::exists(full)) {
+                        defaultPath = full;
+                        break;
+                    }
+                }
+                break;
+            }
+        }
+        // Fallback: legacy GameUserSettings.ini
+        if (defaultPath.empty())
+            defaultPath = m_server.dir + "/GameUserSettings.ini";
+
+        m_configPath = defaultPath;
         m_originalConfig = readFileToString(m_configPath);
         copyStr(m_configBuf, sizeof(m_configBuf), m_originalConfig);
 
@@ -521,14 +552,44 @@ void ServerTabWidget::renderConfigTab()
         m_configLoaded = true;
     }
 
-    // ---- INI file selector ----
+    // ---- Discover config files on first visit ----
+    if (!m_configsDiscovered && !m_server.dir.empty()) {
+        // Start with template-known paths
+        for (const auto &t : GameTemplate::builtinTemplates()) {
+            if (t.appid == m_server.appid) {
+                for (const auto &cp : t.configPaths) {
+                    std::string full = (fs::path(m_server.dir) / cp).string();
+                    if (fs::exists(full))
+                        m_discoveredConfigs.push_back(cp);
+                }
+                break;
+            }
+        }
+
+        // Then scan the directory for additional config files
+        auto scanned = ConfigFileDiscovery::discover(m_server.dir);
+        for (const auto &rel : scanned) {
+            // Avoid duplicates with template-known paths
+            bool dup = false;
+            for (const auto &existing : m_discoveredConfigs) {
+                if (existing == rel) { dup = true; break; }
+            }
+            if (!dup)
+                m_discoveredConfigs.push_back(rel);
+        }
+
+        m_configsDiscovered = true;
+    }
+
+    // ---- Config file selector ----
     ImGui::Text("File: %s", m_configPath.c_str());
     ImGui::SameLine();
     if (ImGui::SmallButton("Browse...")) {
         char pathBuf[1024];
         copyStr(pathBuf, sizeof(pathBuf), m_configPath);
-        FileDialogHelper::browseOpenFile("Select INI File", pathBuf, sizeof(pathBuf),
-            {"INI Files", "*.ini", "All Files", "*"});
+        FileDialogHelper::browseOpenFile("Select Config File", pathBuf, sizeof(pathBuf),
+            {"Config Files", "*.ini;*.cfg;*.conf;*.json;*.xml;*.yaml;*.yml;*.properties;*.txt",
+             "All Files", "*"});
         std::string chosen = pathBuf;
         if (!chosen.empty() && chosen != m_configPath) {
             m_configPath = chosen;
@@ -539,6 +600,38 @@ void ServerTabWidget::renderConfigTab()
             m_iniSelectedSection = 0;
             m_configBackups = ConfigBackupManager::listBackups(m_configPath);
         }
+    }
+
+    // ---- Discovered config files list ----
+    if (!m_discoveredConfigs.empty()) {
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Scan Dir")) {
+            m_discoveredConfigs.clear();
+            m_configsDiscovered = false; // force re-scan next frame
+        }
+
+        ImGui::SetNextItemWidth(400);
+        if (ImGui::BeginCombo("##DiscoveredConfigs", "Select discovered config...")) {
+            for (int i = 0; i < static_cast<int>(m_discoveredConfigs.size()); ++i) {
+                bool sel = (m_discoveredSelectedIdx == i);
+                if (ImGui::Selectable(m_discoveredConfigs[i].c_str(), sel)) {
+                    m_discoveredSelectedIdx = i;
+                    std::string full = (fs::path(m_server.dir) / m_discoveredConfigs[i]).string();
+                    if (full != m_configPath) {
+                        m_configPath = full;
+                        m_originalConfig = readFileToString(m_configPath);
+                        copyStr(m_configBuf, sizeof(m_configBuf), m_originalConfig);
+                        m_iniEditor.loadFromString(m_originalConfig);
+                        m_iniSections = m_iniEditor.sections();
+                        m_iniSelectedSection = 0;
+                        m_configBackups = ConfigBackupManager::listBackups(m_configPath);
+                    }
+                }
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("(%d files)", static_cast<int>(m_discoveredConfigs.size()));
     }
 
     // ---- View mode toggle ----

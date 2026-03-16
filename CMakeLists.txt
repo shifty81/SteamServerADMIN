@@ -125,6 +125,7 @@ set(APP_SOURCES
     src/ConfigBackupManager.hpp
     src/GracefulRestartManager.cpp
     src/GracefulRestartManager.hpp
+    src/ConfigFileDiscovery.hpp
 )
 
 add_executable(SSA ${APP_SOURCES})
@@ -182,6 +183,7 @@ set(TEST_SOURCES
     src/ConfigBackupManager.hpp
     src/GracefulRestartManager.cpp
     src/GracefulRestartManager.hpp
+    src/ConfigFileDiscovery.hpp
 )
 
 add_executable(SSA_Tests ${TEST_SOURCES})

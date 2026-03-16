@@ -4717,3 +4717,182 @@ TEST(ServerConfig, CompleteServersJsonLoadsAllFields)
     EXPECT_EQ(s.environmentVariables.at("KEY1"), "val1");
     EXPECT_EQ(s.environmentVariables.at("KEY2"), "val2");
 }
+
+// ===========================================================================
+// ConfigFileDiscovery tests
+// ===========================================================================
+
+#include "ConfigFileDiscovery.hpp"
+
+TEST(ConfigFileDiscovery, DiscoverFindsIniAndCfgFiles)
+{
+    TempDir tmp;
+    std::string root = tmp.path();
+
+    // Create some config files in the temp dir
+    { std::ofstream(root + "/settings.ini") << "[General]\nkey=val\n"; }
+    { std::ofstream(root + "/server.cfg") << "hostname \"test\"\n"; }
+    { std::ofstream(root + "/readme.md") << "# readme\n"; }
+
+    auto results = ConfigFileDiscovery::discover(root);
+
+    // Should find the .ini and .cfg but NOT .md
+    bool foundIni = false, foundCfg = false, foundMd = false;
+    for (const auto &r : results) {
+        if (r == "settings.ini") foundIni = true;
+        if (r == "server.cfg") foundCfg = true;
+        if (r == "readme.md") foundMd = true;
+    }
+    EXPECT_TRUE(foundIni);
+    EXPECT_TRUE(foundCfg);
+    EXPECT_FALSE(foundMd);
+}
+
+TEST(ConfigFileDiscovery, DiscoverRespectsMaxDepth)
+{
+    TempDir tmp;
+    std::string root = tmp.path();
+
+    // Create a config file 2 levels deep
+    fs::create_directories(root + "/sub1/sub2");
+    { std::ofstream(root + "/sub1/sub2/deep.ini") << "[X]\n"; }
+
+    // maxDepth=1 should NOT find it (it's at depth 2)
+    auto shallow = ConfigFileDiscovery::discover(root, 1);
+    bool found = false;
+    for (const auto &r : shallow) {
+        if (r.find("deep.ini") != std::string::npos) found = true;
+    }
+    EXPECT_FALSE(found);
+
+    // maxDepth=3 should find it
+    auto deep = ConfigFileDiscovery::discover(root, 3);
+    found = false;
+    for (const auto &r : deep) {
+        if (r.find("deep.ini") != std::string::npos) found = true;
+    }
+    EXPECT_TRUE(found);
+}
+
+TEST(ConfigFileDiscovery, DiscoverSkipsHiddenDirs)
+{
+    TempDir tmp;
+    std::string root = tmp.path();
+
+    fs::create_directories(root + "/.hidden");
+    { std::ofstream(root + "/.hidden/secret.ini") << "[S]\n"; }
+    { std::ofstream(root + "/visible.ini") << "[V]\n"; }
+
+    auto results = ConfigFileDiscovery::discover(root);
+    bool foundHidden = false, foundVisible = false;
+    for (const auto &r : results) {
+        if (r.find("secret.ini") != std::string::npos) foundHidden = true;
+        if (r == "visible.ini") foundVisible = true;
+    }
+    EXPECT_FALSE(foundHidden);
+    EXPECT_TRUE(foundVisible);
+}
+
+TEST(ConfigFileDiscovery, DiscoverEmptyDirReturnsEmpty)
+{
+    TempDir tmp;
+    auto results = ConfigFileDiscovery::discover(tmp.path());
+    EXPECT_TRUE(results.empty());
+}
+
+TEST(ConfigFileDiscovery, DiscoverNonexistentDirReturnsEmpty)
+{
+    auto results = ConfigFileDiscovery::discover("/nonexistent_path_that_does_not_exist");
+    EXPECT_TRUE(results.empty());
+}
+
+TEST(ConfigFileDiscovery, DiscoverFindsJsonXmlYamlProperties)
+{
+    TempDir tmp;
+    std::string root = tmp.path();
+
+    { std::ofstream(root + "/config.json") << "{}"; }
+    { std::ofstream(root + "/settings.xml") << "<root/>"; }
+    { std::ofstream(root + "/config.yaml") << "key: val"; }
+    { std::ofstream(root + "/app.properties") << "key=val"; }
+
+    auto results = ConfigFileDiscovery::discover(root);
+    ASSERT_GE(results.size(), 4u);
+}
+
+// ===========================================================================
+// Folder name generation tests
+// ===========================================================================
+
+TEST(ConfigFileDiscovery, GenerateFolderNameBasic)
+{
+    EXPECT_EQ(ConfigFileDiscovery::generateFolderName("ark_sa", "My Server"),
+              "ark_sa_My_Server");
+}
+
+TEST(ConfigFileDiscovery, GenerateFolderNameEmptyHint)
+{
+    EXPECT_EQ(ConfigFileDiscovery::generateFolderName("", "Test"),
+              "server_Test");
+}
+
+TEST(ConfigFileDiscovery, GenerateFolderNameEmptyName)
+{
+    EXPECT_EQ(ConfigFileDiscovery::generateFolderName("cs2", ""),
+              "cs2");
+}
+
+TEST(ConfigFileDiscovery, GenerateFolderNameSanitizesSpecialChars)
+{
+    // Special chars should be stripped (except - and _)
+    std::string result = ConfigFileDiscovery::generateFolderName("rust", "My!@#Server$%^");
+    EXPECT_EQ(result, "rust_MyServer");
+}
+
+TEST(ConfigFileDiscovery, GenerateFolderNameSpacesToUnderscores)
+{
+    EXPECT_EQ(ConfigFileDiscovery::generateFolderName("tf2", "My TF2 Server"),
+              "tf2_My_TF2_Server");
+}
+
+TEST(ConfigFileDiscovery, DefaultServersBaseDirNotEmpty)
+{
+    std::string baseDir = ConfigFileDiscovery::defaultServersBaseDir();
+    EXPECT_FALSE(baseDir.empty());
+    EXPECT_NE(baseDir.find("servers"), std::string::npos);
+}
+
+// ===========================================================================
+// Template extended fields tests
+// ===========================================================================
+
+TEST(GameTemplates, AllTemplatesHaveFolderHint)
+{
+    auto templates = GameTemplate::builtinTemplates();
+    for (const auto &t : templates) {
+        EXPECT_FALSE(t.folderHint.empty())
+            << "Template '" << t.displayName << "' has empty folderHint";
+    }
+}
+
+TEST(GameTemplates, TemplateCountIncreased)
+{
+    auto templates = GameTemplate::builtinTemplates();
+    // We now have 19+ templates (was 8)
+    EXPECT_GE(templates.size(), 19u);
+}
+
+TEST(GameTemplates, KnownTemplatesHaveConfigPaths)
+{
+    auto templates = GameTemplate::builtinTemplates();
+    // Check that ARK:SA has config paths
+    bool found = false;
+    for (const auto &t : templates) {
+        if (t.displayName == "ARK: Survival Ascended") {
+            EXPECT_FALSE(t.configPaths.empty());
+            found = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(found);
+}

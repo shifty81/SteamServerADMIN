@@ -41,6 +41,8 @@ private:
 
     // Overview
     char m_notesBuf[4096] = {};
+    int  m_cachedPlayerCount = -1;
+    std::chrono::steady_clock::time_point m_lastPlayerCountRefresh;
 
     // Settings form buffers
     char m_settName[256]     = {};
@@ -108,6 +110,11 @@ private:
 
     // Config backup state
     std::vector<ConfigBackupManager::BackupEntry> m_configBackups;
+
+    // Discovered config files (from directory scan + template known paths)
+    std::vector<std::string> m_discoveredConfigs;
+    bool m_configsDiscovered = false;
+    int  m_discoveredSelectedIdx = -1;
 
     // Graceful restart state
     int  m_gracefulCountdown = 10;
