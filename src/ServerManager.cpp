@@ -427,7 +427,7 @@ static int64_t jsonInt64(const json &obj, const std::string &key, int64_t def = 
 }
 
 // ---------------------------------------------------------------------------
-// Deserialise a single ServerConfig from a JSON object.
+// Deserialize a single ServerConfig from a JSON object.
 // Used by both loadConfig() and importServerConfig() to avoid duplication.
 // ---------------------------------------------------------------------------
 static ServerConfig deserializeServerConfig(const json &obj)
