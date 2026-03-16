@@ -41,6 +41,8 @@ private:
 
     // Overview
     char m_notesBuf[4096] = {};
+    int  m_cachedPlayerCount = -1;
+    std::chrono::steady_clock::time_point m_lastPlayerCountRefresh;
 
     // Settings form buffers
     char m_settName[256]     = {};
@@ -51,6 +53,7 @@ private:
     char m_settRconHost[128] = {};
     int  m_settRconPort      = 27015;
     char m_settRconPass[128] = {};
+    bool m_settShowRconPass  = false;      // hold-to-reveal RCON password
     char m_settBackupDir[512]= {};
     int  m_settMaxPlayers    = 0;
     bool m_settAutoUpdate    = true;
@@ -107,6 +110,11 @@ private:
 
     // Config backup state
     std::vector<ConfigBackupManager::BackupEntry> m_configBackups;
+
+    // Discovered config files (from directory scan + template known paths)
+    std::vector<std::string> m_discoveredConfigs;
+    bool m_configsDiscovered = false;
+    int  m_discoveredSelectedIdx = -1;
 
     // Graceful restart state
     int  m_gracefulCountdown = 10;

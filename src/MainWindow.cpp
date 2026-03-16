@@ -8,6 +8,7 @@
 #include "FileDialogHelper.hpp"
 #include "SteamLibraryDetector.hpp"
 #include "SteamCmdModule.hpp"
+#include "ConfigFileDiscovery.hpp"
 
 #include "imgui.h"
 #include <GLFW/glfw3.h>
@@ -15,6 +16,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <nlohmann/json.hpp>
 
@@ -126,6 +128,18 @@ void MainWindow::render()
 {
     m_manager->tick();
     m_scheduler->tick();
+
+    // Build per-frame status cache (one system call per server, reused everywhere)
+    {
+        const auto &servers = m_manager->servers();
+        m_cachedRunningStatus.resize(servers.size());
+        m_cachedTabLabels.resize(servers.size());
+        for (size_t i = 0; i < servers.size(); ++i) {
+            m_cachedRunningStatus[i] = m_manager->isServerRunning(servers[i]);
+            m_cachedTabLabels[i] = m_cachedRunningStatus[i] ? "[ON] " : "[OFF] ";
+            m_cachedTabLabels[i] += servers[i].name;
+        }
+    }
 
     const ImGuiViewport *viewport = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(viewport->WorkPos);
@@ -386,7 +400,8 @@ void MainWindow::renderSidebar()
         if (!m_searchText.empty() && !containsIgnoreCase(s->name, m_searchText))
             continue;
 
-        bool running = m_manager->isServerRunning(*s);
+        bool running = (entry.index < static_cast<int>(m_cachedRunningStatus.size()))
+            ? m_cachedRunningStatus[entry.index] : false;
 
         // Build label: [*] [ON/OFF] name
         std::string label;
@@ -473,24 +488,18 @@ void MainWindow::renderTabArea()
         }
 
         // Per-server tabs (index 1..N)
-        const auto &servers = m_manager->servers();
         for (int i = 0; i < static_cast<int>(m_serverTabs.size()); ++i) {
             int tabIdx = i + 1;
             ImGuiTabItemFlags f = 0;
             if (m_selectedTab == tabIdx) f |= ImGuiTabItemFlags_SetSelected;
 
-            // Status indicator in tab title
-            std::string label;
-            if (i < static_cast<int>(servers.size())) {
-                bool running = m_manager->isServerRunning(servers[i]);
-                label = running ? "[ON] " : "[OFF] ";
-                label += servers[i].name;
-            } else {
-                label = "Server " + std::to_string(i);
-            }
+            // Use cached tab label (built once per frame in render())
+            const char *label = (i < static_cast<int>(m_cachedTabLabels.size()))
+                ? m_cachedTabLabels[i].c_str()
+                : "Server";
 
             ImGui::PushID(i);
-            if (ImGui::BeginTabItem(label.c_str(), nullptr, f)) {
+            if (ImGui::BeginTabItem(label, nullptr, f)) {
                 m_serverTabs[i]->render();
                 ImGui::EndTabItem();
             }
@@ -644,6 +653,14 @@ void MainWindow::renderAddServerDialog()
                 std::strncpy(m_addArgs, templates[i].defaultArgs.c_str(),
                              sizeof(m_addArgs) - 1);
                 m_addArgs[sizeof(m_addArgs) - 1] = '\0';
+
+                // Auto-generate install directory: servers/<game>_<name>
+                std::string folder = ConfigFileDiscovery::generateFolderName(
+                    templates[i].folderHint, m_addName);
+                std::string autoDir = (std::filesystem::path(
+                    ConfigFileDiscovery::defaultServersBaseDir()) / folder).string();
+                std::strncpy(m_addDir, autoDir.c_str(), sizeof(m_addDir) - 1);
+                m_addDir[sizeof(m_addDir) - 1] = '\0';
             }
         }
         ImGui::EndCombo();
@@ -678,7 +695,17 @@ void MainWindow::renderAddServerDialog()
     }
 
     ImGui::Separator();
-    ImGui::InputText("Server Name",       m_addName, sizeof(m_addName));
+    if (ImGui::InputText("Server Name",       m_addName, sizeof(m_addName))) {
+        // Auto-update install directory when server name changes
+        if (m_addTemplateIdx >= 0 && m_addTemplateIdx < static_cast<int>(templates.size())) {
+            std::string folder = ConfigFileDiscovery::generateFolderName(
+                templates[m_addTemplateIdx].folderHint, m_addName);
+            std::string autoDir = (std::filesystem::path(
+                ConfigFileDiscovery::defaultServersBaseDir()) / folder).string();
+            std::strncpy(m_addDir, autoDir.c_str(), sizeof(m_addDir) - 1);
+            m_addDir[sizeof(m_addDir) - 1] = '\0';
+        }
+    }
     ImGui::InputInt("Steam AppID",        &m_addAppId);
     ImGui::InputText("Install Directory", m_addDir,  sizeof(m_addDir));
     ImGui::SameLine();
@@ -699,8 +726,19 @@ void MainWindow::renderAddServerDialog()
     ImGui::Text("RCON Settings");
     ImGui::InputText("Host",     m_addRconHost, sizeof(m_addRconHost));
     ImGui::InputInt("Port",      &m_addRconPort);
-    ImGui::InputText("Password", m_addRconPass, sizeof(m_addRconPass),
-                     ImGuiInputTextFlags_Password);
+    {
+        ImGuiInputTextFlags passFlags = m_addShowRconPass ? 0 : ImGuiInputTextFlags_Password;
+        ImGui::InputText("Password", m_addRconPass, sizeof(m_addRconPass), passFlags);
+        ImGui::SameLine();
+        ImGui::Button("Show##addRconPass");
+        m_addShowRconPass = ImGui::IsItemActive();
+        ImGui::SameLine();
+        ImGui::TextDisabled("(?)");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Hold 'Show' to reveal.\n"
+                              "Stored with XOR + base64 obfuscation in servers.json\n"
+                              "(not encrypted, but better than plain text).");
+    }
 
     // SteamCMD install option
     ImGui::Separator();

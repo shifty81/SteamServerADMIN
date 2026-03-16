@@ -69,6 +69,10 @@ private:
     std::string m_logFilterText;
     int m_selectedSidebarServer = -1;
 
+    // Per-frame cache for server running status (avoids repeated system calls)
+    std::vector<bool> m_cachedRunningStatus;
+    std::vector<std::string> m_cachedTabLabels;
+
     // Dialog state
     bool m_showAddServer = false;
     bool m_showCloneServer = false;
@@ -92,6 +96,7 @@ private:
     char m_addRconHost[128] = "127.0.0.1";
     int m_addRconPort = 27015;
     char m_addRconPass[128] = {};
+    bool m_addShowRconPass = false;        // hold-to-reveal RCON password
     bool m_addInstallViaSteamCmd = false;  // install the server via SteamCMD on add
     char m_steamCmdPath[512] = {};         // path to steamcmd binary
 
