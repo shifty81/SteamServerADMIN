@@ -151,6 +151,9 @@ public:
     // ---- Crash backoff ----
     static constexpr int kMaxCrashRestarts = 5;
     static constexpr int kCrashBackoffBaseMs = 2000;
+
+    // Fallback interval used when a server has autoUpdateCheckIntervalMinutes == 0
+    static constexpr int kDefaultUpdateCheckIntervalMinutes = 60;
     int crashCount(const std::string &serverName) const;
     void resetCrashCount(const std::string &serverName);
 
@@ -210,8 +213,8 @@ private:
     };
     std::map<std::string, PendingRestart> m_pendingRestarts;
 
-    // Hourly maintenance: last time we ran the auto-update check
-    std::chrono::steady_clock::time_point m_lastMaintenanceCheck;
+    // Per-server auto-update check: last time each server was checked
+    std::map<std::string, std::chrono::steady_clock::time_point> m_lastUpdateChecks;
 
     WebhookModule    m_webhook;
     ResourceMonitor  m_resourceMonitor;

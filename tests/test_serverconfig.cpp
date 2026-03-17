@@ -1321,6 +1321,7 @@ TEST(ServerConfig, ScheduledRconCommandsPersistence)
     s.name  = "RconCmdServer";
     s.appid = 730;
     s.dir   = "/srv/rconcmd";
+    s.rcon.host = "127.0.0.1";
     s.scheduledRconCommands = { "say Hello", "status" };
     s.rconCommandIntervalMinutes = 15;
     mgr.servers().push_back(s);
@@ -5484,4 +5485,122 @@ TEST(ServerManager, HourlyMaintenanceSkipsRunningServers)
     mgr.tick();
     // Verify the server is not flagged for pending update (SteamCMD not installed)
     EXPECT_FALSE(mgr.hasPendingUpdate("MaintTest"));
+}
+
+// ===========================================================================
+// Discord webhook URL validation
+// ===========================================================================
+
+TEST(ServerConfig, DiscordWebhookUrlValidation)
+{
+    ServerConfig s;
+    s.name  = "WebhookVal";
+    s.appid = 730;
+    s.dir   = "/srv/wh";
+
+    // Empty URL is fine
+    s.discordWebhookUrl = "";
+    EXPECT_TRUE(s.validate().empty());
+
+    // Valid HTTPS URL is fine
+    s.discordWebhookUrl = "https://discord.com/api/webhooks/123/abc";
+    EXPECT_TRUE(s.validate().empty());
+
+    // Valid HTTP URL is fine
+    s.discordWebhookUrl = "http://discord.com/api/webhooks/123/abc";
+    EXPECT_TRUE(s.validate().empty());
+
+    // Invalid URL (no scheme)
+    s.discordWebhookUrl = "discord.com/api/webhooks/123/abc";
+    auto errors = s.validate();
+    bool found = false;
+    for (const auto &e : errors) {
+        if (e.find("Discord webhook URL") != std::string::npos)
+            found = true;
+    }
+    EXPECT_TRUE(found) << "Should reject URL without http:// or https:// prefix";
+
+    // Whitespace-only URL is treated as empty
+    s.discordWebhookUrl = "   ";
+    EXPECT_TRUE(s.validate().empty());
+}
+
+TEST(ServerConfig, DiscordWebhookUrlInvalidScheme)
+{
+    // Verify the error message content
+    ServerConfig s;
+    s.name = "SchemeTest";
+    s.appid = 1;
+    s.dir = "/srv/scheme";
+    s.discordWebhookUrl = "ftp://example.com/webhook";
+    auto errors = s.validate();
+    bool found = false;
+    for (const auto &e : errors) {
+        if (e.find("http://") != std::string::npos || e.find("https://") != std::string::npos)
+            found = true;
+    }
+    EXPECT_TRUE(found) << "Error message should mention http:// or https://";
+}
+
+// ===========================================================================
+// RCON host validation with scheduled commands
+// ===========================================================================
+
+TEST(ServerConfig, RconHostRequiredWhenCommandsScheduled)
+{
+    ServerConfig s;
+    s.name  = "RconHostReq";
+    s.appid = 730;
+    s.dir   = "/srv/rh";
+
+    // Commands present but interval = 0 (disabled) — no error
+    s.scheduledRconCommands = {"say hello"};
+    s.rconCommandIntervalMinutes = 0;
+    EXPECT_TRUE(s.validate().empty());
+
+    // Interval active but no host — should error
+    s.rconCommandIntervalMinutes = 10;
+    s.rcon.host = "";
+    auto errors = s.validate();
+    bool found = false;
+    for (const auto &e : errors) {
+        if (e.find("RCON host") != std::string::npos)
+            found = true;
+    }
+    EXPECT_TRUE(found) << "Should require RCON host when interval > 0 and commands are set";
+
+    // Interval active with a host — no error
+    s.rcon.host = "127.0.0.1";
+    EXPECT_TRUE(s.validate().empty());
+}
+
+TEST(ServerConfig, RconHostNotRequiredWhenNoNonEmptyCommands)
+{
+    ServerConfig s;
+    s.name  = "RconHostEmpty";
+    s.appid = 730;
+    s.dir   = "/srv/rhe";
+    s.rconCommandIntervalMinutes = 10;
+    s.rcon.host = "";
+
+    // Only empty/whitespace commands — should not trigger host error
+    // (the individual empty-command check handles those)
+    s.scheduledRconCommands = {"   "};
+    auto errors = s.validate();
+    bool foundHostError = false;
+    for (const auto &e : errors) {
+        if (e.find("RCON host") != std::string::npos)
+            foundHostError = true;
+    }
+    EXPECT_FALSE(foundHostError) << "Should not require host when all commands are blank";
+}
+
+// ===========================================================================
+// Per-server auto-update check interval (logic test)
+// ===========================================================================
+
+TEST(ServerConfig, DefaultUpdateCheckIntervalConstant)
+{
+    // kDefaultUpdateCheckIntervalMinutes should be 60
+    EXPECT_EQ(ServerManager::kDefaultUpdateCheckIntervalMinutes, 60);
 }

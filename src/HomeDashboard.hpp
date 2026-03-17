@@ -13,7 +13,11 @@
  *   - Uptime
  *   - Pending game / mod update indicators
  *   - Player count / max players
+ *   - CPU and memory usage (when running)
  *   - Server statistics (total uptime, crash count)
+ *
+ * A group filter dropdown allows narrowing the displayed servers to a
+ * specific group.
  *
  * Right-click context menu on each card offers Save Config and Restart
  * (with configurable in-game warning countdown).
@@ -36,6 +40,9 @@ private:
     void renderContextMenu(ServerConfig &server);
 
     ServerManager *m_manager;
+
+    // Dashboard group filter (empty string = show all)
+    std::string m_groupFilter;
 
     // Delayed restart after in-game warning
     struct PendingWarningRestart {

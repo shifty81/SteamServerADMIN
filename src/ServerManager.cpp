@@ -1329,42 +1329,53 @@ void ServerManager::seedConfigFiles(ServerConfig &server)
 }
 
 // ---------------------------------------------------------------------------
-// processHourlyMaintenance – auto-update check for all servers once per hour
+// processHourlyMaintenance – per-server auto-update checks respecting
+// each server's autoUpdateCheckIntervalMinutes setting
 // ---------------------------------------------------------------------------
 
 void ServerManager::processHourlyMaintenance()
 {
-    static constexpr int kMaintenanceIntervalMinutes = 60;
-
-    auto now = std::chrono::steady_clock::now();
-    if (m_lastMaintenanceCheck.time_since_epoch().count() > 0 &&
-        std::chrono::duration_cast<std::chrono::minutes>(now - m_lastMaintenanceCheck).count() < kMaintenanceIntervalMinutes)
-        return;
-
-    m_lastMaintenanceCheck = now;
-
     // Only proceed if SteamCMD is installed
     if (!isSteamCmdInstalled())
         return;
+
+    auto now = std::chrono::steady_clock::now();
 
     for (ServerConfig &server : m_servers) {
         // Skip servers that have auto-update disabled
         if (!server.autoUpdate)
             continue;
 
+        // Determine the interval for this server.
+        // A per-server value of 0 means "use the default".
+        int intervalMin = server.autoUpdateCheckIntervalMinutes > 0
+                              ? server.autoUpdateCheckIntervalMinutes
+                              : kDefaultUpdateCheckIntervalMinutes;
+
+        // Check whether enough time has elapsed since the last check for
+        // this particular server.
+        auto it = m_lastUpdateChecks.find(server.name);
+        if (it != m_lastUpdateChecks.end()) {
+            auto elapsed = std::chrono::duration_cast<std::chrono::minutes>(now - it->second).count();
+            if (elapsed < intervalMin)
+                continue;
+        }
+
+        m_lastUpdateChecks[server.name] = now;
+
         // Don't update running servers – flag them for later
         if (isServerRunning(server)) {
             setPendingUpdate(server.name, true);
-            emitLog(server.name, "Hourly check: server is running, flagged for update when stopped.");
+            emitLog(server.name, "Update check: server is running, flagged for update when stopped.");
             continue;
         }
 
-        emitLog(server.name, "Hourly maintenance: verifying/updating server files...");
+        emitLog(server.name, "Scheduled update check: verifying/updating server files...");
         deployOrUpdateServer(server);
 
         // Also update mods if any are configured
         if (!server.mods.empty()) {
-            emitLog(server.name, "Hourly maintenance: updating mods...");
+            emitLog(server.name, "Scheduled update check: updating mods...");
             updateMods(server);
         }
     }

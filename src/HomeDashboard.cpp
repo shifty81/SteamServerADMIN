@@ -39,6 +39,16 @@ static std::string formatTotalUptime(int64_t totalSecs) {
     return buf;
 }
 
+static std::string formatMemoryMB(int64_t bytes) {
+    double mb = static_cast<double>(bytes) / (1024.0 * 1024.0);
+    char buf[32];
+    if (mb >= 1024.0)
+        std::snprintf(buf, sizeof(buf), "%.1f GB", mb / 1024.0);
+    else
+        std::snprintf(buf, sizeof(buf), "%.0f MB", mb);
+    return buf;
+}
+
 // ---------------------------------------------------------------------------
 // Construction
 // ---------------------------------------------------------------------------
@@ -106,6 +116,29 @@ void HomeDashboard::render()
     ImGui::SameLine(0.0f, 0.0f);
     ImGui::TextColored(ImVec4(0.9f, 0.2f, 0.2f, 1.0f), "Offline: %d", offlineCount);
 
+    // --- Group filter dropdown ---
+    {
+        ImGui::SameLine();
+        ImGui::Text("   ");
+        ImGui::SameLine();
+
+        std::vector<std::string> groups = m_manager->serverGroups();
+        // Build combo preview
+        const char *preview = m_groupFilter.empty() ? "All Groups" : m_groupFilter.c_str();
+        ImGui::SetNextItemWidth(180.0f);
+        if (ImGui::BeginCombo("##GroupFilter", preview)) {
+            // "All Groups" entry
+            if (ImGui::Selectable("All Groups", m_groupFilter.empty()))
+                m_groupFilter.clear();
+            for (const auto &g : groups) {
+                bool selected = (m_groupFilter == g);
+                if (ImGui::Selectable(g.c_str(), selected))
+                    m_groupFilter = g;
+            }
+            ImGui::EndCombo();
+        }
+    }
+
     ImGui::Spacing();
 
     // --- Server card grid (3 per row) ---
@@ -116,6 +149,10 @@ void HomeDashboard::render()
 
     int col = 0;
     for (int i = 0; i < static_cast<int>(servers.size()); ++i) {
+        // Apply group filter
+        if (!m_groupFilter.empty() && trimString(servers[static_cast<size_t>(i)].group) != m_groupFilter)
+            continue;
+
         if (col > 0)
             ImGui::SameLine();
 
@@ -186,6 +223,24 @@ void HomeDashboard::renderCard(ServerConfig &server, int index)
     // --- Uptime ---
     int64_t secs = m_manager->serverUptimeSeconds(server.name);
     ImGui::Text("Uptime: %s", formatUptime(secs).c_str());
+
+    // --- Resource usage (CPU / Memory) ---
+    if (online) {
+        ResourceUsage ru = m_manager->resourceMonitor()->usage(server.name);
+        if (ru.cpuPercent > 0.0 || ru.memoryBytes > 0) {
+            ImVec4 cpuColor = (server.cpuAlertThreshold > 0.0 && ru.cpuPercent > server.cpuAlertThreshold)
+                ? ImVec4(0.9f, 0.2f, 0.2f, 1.0f)
+                : ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+            ImGui::TextColored(cpuColor, "CPU: %.1f%%", ru.cpuPercent);
+            ImGui::SameLine();
+
+            double memMB = static_cast<double>(ru.memoryBytes) / (1024.0 * 1024.0);
+            ImVec4 memColor = (server.memAlertThresholdMB > 0.0 && memMB > server.memAlertThresholdMB)
+                ? ImVec4(0.9f, 0.2f, 0.2f, 1.0f)
+                : ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+            ImGui::TextColored(memColor, "Mem: %s", formatMemoryMB(ru.memoryBytes).c_str());
+        }
+    }
 
     // --- Pending update badges ---
     if (m_manager->hasPendingUpdate(server.name))
