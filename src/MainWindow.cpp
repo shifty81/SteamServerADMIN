@@ -550,21 +550,31 @@ void MainWindow::renderLogViewerTab()
                                  filterBuf, sizeof(filterBuf)))
         m_logFilterText = filterBuf;
 
-    // Scrollable log area
-    ImGui::BeginChild("##LogEntries", ImVec2(0, 0), ImGuiChildFlags_Borders);
-
+    // Build the filtered log text for display
+    static std::string filteredLogText;
+    filteredLogText.clear();
     const auto entries = m_logModule->entries();
     for (const auto &entry : entries) {
         if (!m_logFilterText.empty() && !containsIgnoreCase(entry, m_logFilterText))
             continue;
-        ImGui::TextUnformatted(entry.c_str());
+        filteredLogText += entry;
+        filteredLogText += '\n';
     }
 
-    // Auto-scroll when already at the bottom
-    if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
-        ImGui::SetScrollHereY(1.0f);
+    // Copy to clipboard button
+    if (ImGui::Button("📋 Copy All")) {
+        ImGui::SetClipboardText(filteredLogText.c_str());
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("(Select text below with mouse to highlight, Ctrl+C to copy)");
 
-    ImGui::EndChild();
+    // Use InputTextMultiline in read-only mode so users can highlight and
+    // copy log entries for debugging.
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    ImGui::InputTextMultiline("##LogEntries",
+                              const_cast<char *>(filteredLogText.c_str()),
+                              filteredLogText.size() + 1, avail,
+                              ImGuiInputTextFlags_ReadOnly);
 }
 
 // ---------------------------------------------------------------------------
@@ -659,6 +669,10 @@ void MainWindow::renderAddServerDialog()
                 std::strncpy(m_addArgs, templates[i].defaultArgs.c_str(),
                              sizeof(m_addArgs) - 1);
                 m_addArgs[sizeof(m_addArgs) - 1] = '\0';
+
+                // Set the game-specific default RCON port
+                if (templates[i].defaultRconPort > 0)
+                    m_addRconPort = templates[i].defaultRconPort;
 
                 // Auto-generate install directory: servers/<game>_<name>
                 std::string folder = ConfigFileDiscovery::generateFolderName(
@@ -823,7 +837,7 @@ void MainWindow::renderAddServerDialog()
                 if (m_steamCmdPath[0] != '\0')
                     m_manager->setSteamCmdPath(m_steamCmdPath);
                 m_logModule->log(s.name, "Starting SteamCMD deployment...");
-                m_manager->deployServer(m_manager->servers().back());
+                m_manager->deployOrUpdateServer(m_manager->servers().back());
                 savePreferences();
             }
 

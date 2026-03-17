@@ -3,6 +3,7 @@
 
 #include <cstdio>
 #include <algorithm>
+#include <filesystem>
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -210,6 +211,22 @@ void HomeDashboard::renderCard(ServerConfig &server, int index)
     ImGui::SameLine();
     if (ImGui::Button("📦 Backup"))
         m_manager->takeSnapshot(server);
+
+    // Deploy / Verify button (second row)
+    {
+        bool dirEmpty = true;
+        try {
+            namespace fs = std::filesystem;
+            if (fs::exists(server.dir) && fs::is_directory(server.dir)) {
+                auto it = fs::directory_iterator(server.dir);
+                dirEmpty = (it == fs::directory_iterator());
+            }
+        } catch (...) { dirEmpty = true; }
+
+        const char *label = dirEmpty ? "⬇ Install" : "⬆ Update";
+        if (ImGui::Button(label))
+            m_manager->deployOrUpdateServer(server);
+    }
 
     // --- Right-click context menu ---
     renderContextMenu(server);

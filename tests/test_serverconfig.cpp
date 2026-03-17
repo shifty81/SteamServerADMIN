@@ -5138,3 +5138,292 @@ TEST(ServerManager, ImportAndLoadUseConsistentDeserialization)
     EXPECT_EQ(imported.totalCrashes, loaded.totalCrashes);
     EXPECT_EQ(imported.lastCrashTime, loaded.lastCrashTime);
 }
+
+// ===========================================================================
+// SteamCMD runSteamCmd path quoting tests
+// ===========================================================================
+
+TEST(SteamCmdModule, DeployServerQuotesPathWithSpaces)
+{
+    // Verify that deployServer creates the target directory even when the path
+    // contains spaces (the shell command must quote it properly).
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    std::string dirWithSpaces = tmp.filePath("my server dir");
+    SteamCmdModule mod;
+    mod.setSteamCmdPath("/nonexistent/steamcmd");  // will fail to run, that's OK
+
+    ServerConfig s;
+    s.name  = "SpaceTest";
+    s.appid = 730;
+    s.dir   = dirWithSpaces;
+
+    // deployServer should at least create the directory even though SteamCMD
+    // binary is missing.  The important thing is it doesn't fail on the
+    // isPathSafeForShell check (spaces are allowed).
+    mod.deployServer(s);
+    EXPECT_TRUE(fs::exists(dirWithSpaces));
+}
+
+// ===========================================================================
+// deployOrUpdateServer tests
+// ===========================================================================
+
+TEST(ServerManager, DeployOrUpdateServerFailsWithoutSteamCmd)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    ServerManager mgr(tmp.filePath("servers.json"));
+    mgr.setSteamCmdPath("/nonexistent/steamcmd");
+
+    ServerConfig s;
+    s.name  = "TestDeploy";
+    s.appid = 730;
+    s.dir   = tmp.filePath("serverdir");
+    mgr.servers().push_back(s);
+
+    bool result = mgr.deployOrUpdateServer(mgr.servers().back());
+    EXPECT_FALSE(result);
+}
+
+TEST(ServerManager, DeployOrUpdateServerDetectsEmptyDir)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    // Create a fake steamcmd binary
+    std::string fakeBin = tmp.filePath("steamcmd.sh");
+    { std::ofstream f(fakeBin); f << "#!/bin/sh\necho ok\n"; }
+
+    ServerManager mgr(tmp.filePath("servers.json"));
+    mgr.setSteamCmdPath(fakeBin);
+
+    std::string serverDir = tmp.filePath("emptyserver");
+    fs::create_directories(serverDir);
+
+    ServerConfig s;
+    s.name  = "EmptyDirTest";
+    s.appid = 730;
+    s.dir   = serverDir;
+    mgr.servers().push_back(s);
+
+    // Capture log messages to verify "empty" is detected
+    std::vector<std::string> logs;
+    mgr.onLogMessage = [&](const std::string &, const std::string &msg) {
+        logs.push_back(msg);
+    };
+
+    // SteamCMD won't actually run (fake binary), but the method should at
+    // least detect the directory is empty and log accordingly.
+    mgr.deployOrUpdateServer(mgr.servers().back());
+
+    bool foundEmptyMsg = false;
+    for (const auto &l : logs) {
+        if (l.find("empty") != std::string::npos || l.find("fresh install") != std::string::npos)
+            foundEmptyMsg = true;
+    }
+    EXPECT_TRUE(foundEmptyMsg) << "Should log that directory is empty for fresh install";
+}
+
+TEST(ServerManager, DeployOrUpdateServerDetectsExistingFiles)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    std::string fakeBin = tmp.filePath("steamcmd.sh");
+    { std::ofstream f(fakeBin); f << "#!/bin/sh\necho ok\n"; }
+
+    ServerManager mgr(tmp.filePath("servers.json"));
+    mgr.setSteamCmdPath(fakeBin);
+
+    std::string serverDir = tmp.filePath("existingserver");
+    fs::create_directories(serverDir);
+    // Put a file in the directory so it's not empty
+    { std::ofstream f(serverDir + "/gamefile.exe"); f << "fake"; }
+
+    ServerConfig s;
+    s.name  = "ExistingDirTest";
+    s.appid = 730;
+    s.dir   = serverDir;
+    mgr.servers().push_back(s);
+
+    std::vector<std::string> logs;
+    mgr.onLogMessage = [&](const std::string &, const std::string &msg) {
+        logs.push_back(msg);
+    };
+
+    mgr.deployOrUpdateServer(mgr.servers().back());
+
+    bool foundUpdateMsg = false;
+    for (const auto &l : logs) {
+        if (l.find("existing files") != std::string::npos || l.find("verifying") != std::string::npos)
+            foundUpdateMsg = true;
+    }
+    EXPECT_TRUE(foundUpdateMsg) << "Should log that directory has existing files for verify/update";
+}
+
+// ===========================================================================
+// seedConfigFiles tests
+// ===========================================================================
+
+TEST(ServerManager, SeedConfigFilesCreatesFilesForKnownTemplate)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    ServerManager mgr(tmp.filePath("servers.json"));
+
+    std::string serverDir = tmp.filePath("cs2_server");
+    fs::create_directories(serverDir);
+
+    ServerConfig s;
+    s.name  = "CS2Test";
+    s.appid = 730;  // CS2
+    s.dir   = serverDir;
+    mgr.servers().push_back(s);
+
+    mgr.seedConfigFiles(mgr.servers().back());
+
+    // CS2 template has config paths: game/csgo/cfg/server.cfg and gamemode_competitive.cfg
+    fs::path serverCfg = fs::path(serverDir) / "game/csgo/cfg/server.cfg";
+    EXPECT_TRUE(fs::exists(serverCfg))
+        << "server.cfg should be created for CS2 template";
+
+    // Verify the file has some content
+    std::ifstream f(serverCfg);
+    std::string content((std::istreambuf_iterator<char>(f)),
+                         std::istreambuf_iterator<char>());
+    EXPECT_FALSE(content.empty());
+    EXPECT_NE(content.find("rcon_password"), std::string::npos)
+        << "CS2 server.cfg should contain rcon_password";
+}
+
+TEST(ServerManager, SeedConfigFilesDoesNotOverwriteExisting)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    ServerManager mgr(tmp.filePath("servers.json"));
+
+    std::string serverDir = tmp.filePath("ark_server");
+    // Pre-create the config directory and file
+    fs::path cfgDir = fs::path(serverDir) / "ShooterGame/Saved/Config/WindowsServer";
+    fs::create_directories(cfgDir);
+    {
+        std::ofstream f(cfgDir / "GameUserSettings.ini");
+        f << "[MyCustomSettings]\nKey=Value\n";
+    }
+
+    ServerConfig s;
+    s.name  = "ARKTest";
+    s.appid = 2430930;  // ARK:SA
+    s.dir   = serverDir;
+    mgr.servers().push_back(s);
+
+    mgr.seedConfigFiles(mgr.servers().back());
+
+    // Verify the existing file was NOT overwritten
+    std::ifstream f(cfgDir / "GameUserSettings.ini");
+    std::string content((std::istreambuf_iterator<char>(f)),
+                         std::istreambuf_iterator<char>());
+    EXPECT_NE(content.find("MyCustomSettings"), std::string::npos)
+        << "Existing config file should not be overwritten by seeding";
+}
+
+TEST(ServerManager, SeedConfigFilesNoOpForCustomTemplate)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    ServerManager mgr(tmp.filePath("servers.json"));
+
+    std::string serverDir = tmp.filePath("custom_server");
+    fs::create_directories(serverDir);
+
+    ServerConfig s;
+    s.name  = "CustomTest";
+    s.appid = 0;  // Custom template has no config paths
+    s.dir   = serverDir;
+    mgr.servers().push_back(s);
+
+    mgr.seedConfigFiles(mgr.servers().back());
+
+    // Custom template should not create any files
+    int fileCount = 0;
+    for (auto &e : fs::directory_iterator(serverDir)) {
+        (void)e;
+        ++fileCount;
+    }
+    EXPECT_EQ(fileCount, 0)
+        << "Custom template should not create any config files";
+}
+
+// ===========================================================================
+// GameTemplate updated tests
+// ===========================================================================
+
+TEST(GameTemplates, TemplatesHaveDefaultRconPort)
+{
+    auto templates = GameTemplate::builtinTemplates();
+
+    // Check that Rust has RCON port 28016
+    for (const auto &t : templates) {
+        if (t.displayName == "Rust") {
+            EXPECT_EQ(t.defaultRconPort, 28016)
+                << "Rust RCON port should be 28016";
+        }
+    }
+
+    // ARK:SA should have RCON port 27020
+    for (const auto &t : templates) {
+        if (t.displayName == "ARK: Survival Ascended") {
+            EXPECT_EQ(t.defaultRconPort, 27020)
+                << "ARK:SA RCON port should be 27020";
+        }
+    }
+
+    // Palworld should have RCON port 25575
+    for (const auto &t : templates) {
+        if (t.displayName == "Palworld") {
+            EXPECT_EQ(t.defaultRconPort, 25575)
+                << "Palworld RCON port should be 25575";
+        }
+    }
+}
+
+TEST(GameTemplates, LastTemplateIsCustom)
+{
+    auto templates = GameTemplate::builtinTemplates();
+    ASSERT_FALSE(templates.empty());
+    const auto &last = templates.back();
+    EXPECT_EQ(last.appid, 0);
+    EXPECT_EQ(last.displayName, "Custom (manual entry)");
+}
+
+// ===========================================================================
+// processHourlyMaintenance test (tick-driven)
+// ===========================================================================
+
+TEST(ServerManager, HourlyMaintenanceSkipsRunningServers)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    ServerManager mgr(tmp.filePath("servers.json"));
+    // SteamCMD not installed – maintenance should be a no-op
+    mgr.setSteamCmdPath("/nonexistent/steamcmd");
+
+    ServerConfig s;
+    s.name  = "MaintTest";
+    s.appid = 730;
+    s.dir   = tmp.filePath("maintserver");
+    s.autoUpdate = true;
+    mgr.servers().push_back(s);
+
+    // tick() should not crash even without SteamCMD
+    mgr.tick();
+    // Verify the server is not flagged for pending update (SteamCMD not installed)
+    EXPECT_FALSE(mgr.hasPendingUpdate("MaintTest"));
+}
