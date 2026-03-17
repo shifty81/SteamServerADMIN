@@ -4,6 +4,7 @@
 #include <vector>
 #include <map>
 #include <algorithm>
+#include <unordered_set>
 
 inline std::string trimString(const std::string &s) {
     auto start = s.find_first_not_of(" \t\n\r");
@@ -206,13 +207,11 @@ struct ServerConfig {
 
         // Detect duplicate tags
         {
-            std::vector<std::string> seen;
+            std::unordered_set<std::string> seen;
             for (const auto &tag : tags) {
                 std::string t = trimString(tag);
-                if (!t.empty() && std::find(seen.begin(), seen.end(), t) != seen.end())
+                if (!t.empty() && !seen.insert(t).second)
                     errors.push_back("Duplicate tag: " + t);
-                if (!t.empty())
-                    seen.push_back(t);
             }
         }
 

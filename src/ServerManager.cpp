@@ -1335,7 +1335,7 @@ static std::string defaultConfigContent(int appid, const std::string &relPath)
     }
 
     // ---- Space Engineers SpaceEngineers-Dedicated.cfg ----
-    if (relPath.find("SpaceEngineers-Dedicated.cfg") != std::string::npos) {
+    if (relPath.find("SpaceEngineers-Dedicated.cfg") != std::string::npos && appid == 298740) {
         return "<?xml version=\"1.0\"?>\n"
                "<MyConfigDedicated>\n"
                "  <ServerName>My Space Engineers Server</ServerName>\n"
