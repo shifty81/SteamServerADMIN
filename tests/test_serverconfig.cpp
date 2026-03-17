@@ -5187,7 +5187,7 @@ TEST(SteamCmdModule, BuildCommandLineQuotesBinaryWithSpaces)
     EXPECT_EQ(cmd.front(), '"');
     EXPECT_EQ(cmd.back(), '"');
     // Inner binary path should still be double-quoted
-    EXPECT_NE(cmd.find("\"\\path with spaces\\steamcmd\""), std::string::npos);
+    EXPECT_NE(cmd.find("\"/path with spaces/steamcmd\""), std::string::npos);
 #else
     EXPECT_NE(cmd.find("'/path with spaces/steamcmd'"), std::string::npos);
 #endif
