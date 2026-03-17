@@ -127,6 +127,10 @@ bool RconClient::connectToServer(const std::string &host, int port, const std::s
 
     m_connected = true;
 
+    // Telnet mode: use plain-text password authentication (7DTD, etc.)
+    if (m_telnetMode)
+        return telnetAuth(password, timeoutMs);
+
     // Send auth packet
     Packet auth;
     auth.id   = m_nextId++;
@@ -177,6 +181,9 @@ std::string RconClient::sendCommand(const std::string &command, int timeoutMs)
         emitError("Not connected to RCON");
         return {};
     }
+
+    if (m_telnetMode)
+        return telnetSendCommand(command, timeoutMs);
 
     Packet cmd;
     cmd.id   = m_nextId++;
@@ -281,4 +288,84 @@ bool RconClient::recvPacket(Packet &pkt, int timeoutMs)
     }
 
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// Telnet-mode helpers (7 Days to Die, etc.)
+// ---------------------------------------------------------------------------
+
+std::string RconClient::readAvailable(int timeoutMs)
+{
+    std::string result;
+    char buf[1024];
+    while (waitForData(timeoutMs)) {
+        int n = socketRecv(buf, sizeof(buf));
+        if (n <= 0) break;
+        result.append(buf, n);
+        // After first chunk, use a short timeout for any remaining data
+        timeoutMs = 200;
+    }
+    return result;
+}
+
+bool RconClient::telnetAuth(const std::string &password, int timeoutMs)
+{
+    // Read welcome / password prompt from the telnet server
+    std::string welcome = readAvailable(timeoutMs);
+
+    // 7DTD allows TelnetPassword="" which disables the password prompt.
+    // When the SSA config also has an empty password, skip authentication.
+    if (password.empty())
+        return true;
+
+    // Send password followed by newline
+    std::string passLine = password + "\n";
+    if (socketSend(passLine.c_str(), static_cast<int>(passLine.size())) <= 0) {
+        emitError("Failed to send telnet password");
+        disconnect();
+        return false;
+    }
+
+    // Read auth response
+    std::string authResp = readAvailable(timeoutMs);
+
+    // Convert to lowercase for case-insensitive matching
+    std::string lower;
+    lower.reserve(authResp.size());
+    for (char c : authResp)
+        lower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+
+    // Accept common success indicators from 7DTD / generic telnet servers
+    if (lower.find("successful") != std::string::npos ||
+        lower.find("logon") != std::string::npos ||
+        lower.find("authenticated") != std::string::npos ||
+        lower.find("welcome") != std::string::npos) {
+        return true;
+    }
+
+    // Explicit failure keywords
+    if (lower.find("incorrect") != std::string::npos ||
+        lower.find("denied") != std::string::npos ||
+        lower.find("failed") != std::string::npos) {
+        emitError("Telnet authentication failed: wrong password");
+        disconnect();
+        return false;
+    }
+
+    // No recognized response – default to failure for safety
+    emitError("Telnet authentication: unrecognized server response");
+    disconnect();
+    return false;
+}
+
+std::string RconClient::telnetSendCommand(const std::string &command, int timeoutMs)
+{
+    std::string cmdLine = command + "\n";
+    if (socketSend(cmdLine.c_str(), static_cast<int>(cmdLine.size())) <= 0) {
+        emitError("Failed to send telnet command");
+        m_connected = false;
+        return {};
+    }
+
+    return readAvailable(timeoutMs);
 }

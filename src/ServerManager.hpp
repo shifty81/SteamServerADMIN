@@ -223,6 +223,12 @@ private:
     // like 7 Days to Die that log every telnet connect/disconnect).
     std::map<std::string, std::unique_ptr<RconClient>> m_rconPool;
 
+    // Connection-failure cooldown – after a failed RCON/telnet connection
+    // attempt, suppress retries for kRconFailCooldownSeconds to avoid
+    // spamming the game server with connect/disconnect cycles.
+    static constexpr int kRconFailCooldownSeconds = 60;
+    std::map<std::string, std::chrono::steady_clock::time_point> m_rconFailTimes;
+
     /** Get or create a persistent RCON connection for the given server. */
     RconClient *acquireRcon(const ServerConfig &server);
     /** Drop the cached connection for a server (e.g. on stop/crash). */

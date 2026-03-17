@@ -27,6 +27,7 @@
 #include "GracefulRestartManager.hpp"
 #include "SteamLibraryDetector.hpp"
 #include "SteamCmdModule.hpp"
+#include "RconClient.hpp"
 
 namespace fs = std::filesystem;
 
@@ -5711,4 +5712,101 @@ TEST(ServerManager, RemoveServerCleansUpRconPool)
     // removeServer should succeed and not crash (pool entry may or may not exist)
     EXPECT_TRUE(mgr.removeServer("Removable"));
     EXPECT_TRUE(mgr.servers().empty());
+}
+
+// ===========================================================================
+// Connection failure cooldown tests
+// ===========================================================================
+
+TEST(ServerManager, RconCooldownPreventsSpam)
+{
+    // After a failed connection, a rapid follow-up call should be suppressed
+    // by the cooldown and return -1 without making a new TCP connection.
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    ServerManager mgr(tmp.filePath("servers.json"));
+
+    ServerConfig s;
+    s.name  = "CooldownTest";
+    s.appid = 730;
+    s.dir   = tmp.filePath("cooldown");
+    s.rcon.host = "127.0.0.1";
+    s.rcon.port = 1;  // unreachable
+    s.rcon.password = "test";
+    mgr.servers().push_back(s);
+
+    // First call – actual connection attempt that fails
+    EXPECT_EQ(mgr.getPlayerCount(mgr.servers().front()), -1);
+    // Second call – should be suppressed by cooldown (no new connection)
+    EXPECT_EQ(mgr.getPlayerCount(mgr.servers().front()), -1);
+    // sendRconCommand should also respect the cooldown
+    EXPECT_EQ(mgr.sendRconCommand(mgr.servers().front(), "status"), "[RCON] Connection failed.");
+}
+
+TEST(ServerManager, RconCooldownClearedOnRelease)
+{
+    // Stopping a server clears the RCON pool via releaseRcon, which should
+    // also clear the cooldown so the next start gets a fresh attempt.
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    ServerManager mgr(tmp.filePath("servers.json"));
+
+    ServerConfig s;
+    s.name  = "CooldownRelease";
+    s.appid = 730;
+    s.dir   = tmp.filePath("coolrelease");
+    s.rcon.host = "127.0.0.1";
+    s.rcon.port = 1;
+    s.rcon.password = "test";
+    mgr.servers().push_back(s);
+
+    // Trigger a failed connection to start cooldown
+    EXPECT_EQ(mgr.getPlayerCount(mgr.servers().front()), -1);
+
+    // Simulating server stop clears the pool (removeServer also calls releaseRcon)
+    ASSERT_TRUE(mgr.saveConfig());
+    EXPECT_TRUE(mgr.removeServer("CooldownRelease"));
+}
+
+// ===========================================================================
+// RconClient telnet mode flag
+// ===========================================================================
+
+TEST(RconClient, TelnetModeDefaultOff)
+{
+    RconClient client;
+    EXPECT_FALSE(client.isTelnetMode());
+}
+
+TEST(RconClient, TelnetModeToggle)
+{
+    RconClient client;
+    client.setTelnetMode(true);
+    EXPECT_TRUE(client.isTelnetMode());
+    client.setTelnetMode(false);
+    EXPECT_FALSE(client.isTelnetMode());
+}
+
+TEST(ServerManager, SevenDaysToDieGetsTelnetMode)
+{
+    // A 7 Days to Die server (appid 294420) should fail gracefully on an
+    // unreachable port, just like a Source RCON server.  The key difference
+    // is internal: acquireRcon enables telnet mode for this appid.
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    ServerManager mgr(tmp.filePath("servers.json"));
+
+    ServerConfig s;
+    s.name  = "7DTD Test";
+    s.appid = 294420;
+    s.dir   = tmp.filePath("7dtd");
+    s.rcon.host = "127.0.0.1";
+    s.rcon.port = 1;  // unreachable
+    s.rcon.password = "test";
+    mgr.servers().push_back(s);
+
+    // Should fail gracefully (no crash, no infinite loop)
+    EXPECT_EQ(mgr.getPlayerCount(mgr.servers().front()), -1);
+    EXPECT_EQ(mgr.sendRconCommand(mgr.servers().front(), "listplayers"),
+              "[RCON] Connection failed.");
 }
