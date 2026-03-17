@@ -4942,8 +4942,8 @@ TEST(GameTemplates, AllTemplatesHaveFolderHint)
 TEST(GameTemplates, TemplateCountIncreased)
 {
     auto templates = GameTemplate::builtinTemplates();
-    // We now have 19+ templates (was 8)
-    EXPECT_GE(templates.size(), 19u);
+    // We now have 27+ templates (was 19)
+    EXPECT_GE(templates.size(), 27u);
 }
 
 TEST(GameTemplates, KnownTemplatesHaveConfigPaths)
@@ -5809,4 +5809,303 @@ TEST(ServerManager, SevenDaysToDieGetsTelnetMode)
     EXPECT_EQ(mgr.getPlayerCount(mgr.servers().front()), -1);
     EXPECT_EQ(mgr.sendRconCommand(mgr.servers().front(), "listplayers"),
               "[RCON] Connection failed.");
+}
+
+// ---------------------------------------------------------------------------
+// New game template tests
+// ---------------------------------------------------------------------------
+
+TEST(GameTemplates, SquadTemplatePresent)
+{
+    auto templates = GameTemplate::builtinTemplates();
+    bool found = false;
+    for (const auto &t : templates) {
+        if (t.appid == 403240) {
+            found = true;
+            EXPECT_EQ(t.displayName, "Squad");
+            EXPECT_FALSE(t.executable.empty());
+            EXPECT_FALSE(t.configPaths.empty());
+            EXPECT_EQ(t.defaultRconPort, 21114);
+            break;
+        }
+    }
+    EXPECT_TRUE(found) << "Squad template not found";
+}
+
+TEST(GameTemplates, InsurgencySandstormTemplatePresent)
+{
+    auto templates = GameTemplate::builtinTemplates();
+    bool found = false;
+    for (const auto &t : templates) {
+        if (t.appid == 581330) {
+            found = true;
+            EXPECT_EQ(t.displayName, "Insurgency: Sandstorm");
+            EXPECT_FALSE(t.executable.empty());
+            break;
+        }
+    }
+    EXPECT_TRUE(found) << "Insurgency: Sandstorm template not found";
+}
+
+TEST(GameTemplates, DontStarveTogetherTemplatePresent)
+{
+    auto templates = GameTemplate::builtinTemplates();
+    bool found = false;
+    for (const auto &t : templates) {
+        if (t.appid == 343050) {
+            found = true;
+            EXPECT_EQ(t.displayName, "Don't Starve Together");
+            EXPECT_FALSE(t.executable.empty());
+            EXPECT_EQ(t.defaultRconPort, 0); // no RCON
+            break;
+        }
+    }
+    EXPECT_TRUE(found) << "Don't Starve Together template not found";
+}
+
+TEST(GameTemplates, Arma3TemplatePresent)
+{
+    auto templates = GameTemplate::builtinTemplates();
+    bool found = false;
+    for (const auto &t : templates) {
+        if (t.appid == 233780) {
+            found = true;
+            EXPECT_EQ(t.displayName, "ARMA 3");
+            EXPECT_FALSE(t.executable.empty());
+            EXPECT_FALSE(t.configPaths.empty());
+            break;
+        }
+    }
+    EXPECT_TRUE(found) << "ARMA 3 template not found";
+}
+
+TEST(GameTemplates, BarotraumaTemplatePresent)
+{
+    auto templates = GameTemplate::builtinTemplates();
+    bool found = false;
+    for (const auto &t : templates) {
+        if (t.appid == 1026340) {
+            found = true;
+            EXPECT_EQ(t.displayName, "Barotrauma");
+            EXPECT_FALSE(t.executable.empty());
+            break;
+        }
+    }
+    EXPECT_TRUE(found) << "Barotrauma template not found";
+}
+
+TEST(GameTemplates, SpaceEngineersTemplatePresent)
+{
+    auto templates = GameTemplate::builtinTemplates();
+    bool found = false;
+    for (const auto &t : templates) {
+        if (t.appid == 298740) {
+            found = true;
+            EXPECT_EQ(t.displayName, "Space Engineers");
+            EXPECT_FALSE(t.executable.empty());
+            break;
+        }
+    }
+    EXPECT_TRUE(found) << "Space Engineers template not found";
+}
+
+TEST(GameTemplates, SonsOfTheForestTemplatePresent)
+{
+    auto templates = GameTemplate::builtinTemplates();
+    bool found = false;
+    for (const auto &t : templates) {
+        if (t.appid == 2465200) {
+            found = true;
+            EXPECT_EQ(t.displayName, "Sons of the Forest");
+            EXPECT_FALSE(t.executable.empty());
+            break;
+        }
+    }
+    EXPECT_TRUE(found) << "Sons of the Forest template not found";
+}
+
+TEST(GameTemplates, MordhauTemplatePresent)
+{
+    auto templates = GameTemplate::builtinTemplates();
+    bool found = false;
+    for (const auto &t : templates) {
+        if (t.appid == 629800) {
+            found = true;
+            EXPECT_EQ(t.displayName, "Mordhau");
+            EXPECT_FALSE(t.executable.empty());
+            break;
+        }
+    }
+    EXPECT_TRUE(found) << "Mordhau template not found";
+}
+
+TEST(GameTemplates, AllTemplatesHaveUniqueAppIds)
+{
+    auto templates = GameTemplate::builtinTemplates();
+    std::vector<int> appids;
+    for (const auto &t : templates) {
+        if (t.appid == 0) continue; // Custom entry
+        EXPECT_EQ(std::count(appids.begin(), appids.end(), t.appid), 0)
+            << "Duplicate appid " << t.appid << " for " << t.displayName;
+        appids.push_back(t.appid);
+    }
+}
+
+TEST(GameTemplates, AllTemplatesHaveUniqueDisplayNames)
+{
+    auto templates = GameTemplate::builtinTemplates();
+    std::vector<std::string> names;
+    for (const auto &t : templates) {
+        EXPECT_EQ(std::count(names.begin(), names.end(), t.displayName), 0)
+            << "Duplicate display name: " << t.displayName;
+        names.push_back(t.displayName);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Validation: graceful shutdown upper bound
+// ---------------------------------------------------------------------------
+
+TEST(ServerConfig, GracefulShutdownUpperBoundValidation)
+{
+    ServerConfig s;
+    s.name  = "TestServer";
+    s.appid = 730;
+    s.dir   = "/srv/test";
+    s.gracefulShutdownSeconds = 3601;
+    auto errors = s.validate();
+    bool found = false;
+    for (const auto &e : errors) {
+        if (e.find("exceed 3600") != std::string::npos) {
+            found = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(found) << "Expected validation error for graceful shutdown > 3600";
+}
+
+TEST(ServerConfig, GracefulShutdownAtBoundaryIsValid)
+{
+    ServerConfig s;
+    s.name  = "TestServer";
+    s.appid = 730;
+    s.dir   = "/srv/test";
+    s.gracefulShutdownSeconds = 3600;
+    auto errors = s.validate();
+    for (const auto &e : errors) {
+        EXPECT_EQ(e.find("exceed 3600"), std::string::npos)
+            << "Unexpected validation error at boundary: " << e;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Validation: duplicate tags
+// ---------------------------------------------------------------------------
+
+TEST(ServerConfig, DuplicateTagValidation)
+{
+    ServerConfig s;
+    s.name  = "TestServer";
+    s.appid = 730;
+    s.dir   = "/srv/test";
+    s.tags  = {"production", "ark", "production"};
+    auto errors = s.validate();
+    bool found = false;
+    for (const auto &e : errors) {
+        if (e.find("Duplicate tag") != std::string::npos) {
+            found = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(found) << "Expected duplicate tag validation error";
+}
+
+TEST(ServerConfig, UniqueTagsAreValid)
+{
+    ServerConfig s;
+    s.name  = "TestServer";
+    s.appid = 730;
+    s.dir   = "/srv/test";
+    s.tags  = {"production", "ark", "cluster1"};
+    auto errors = s.validate();
+    for (const auto &e : errors) {
+        EXPECT_EQ(e.find("Duplicate tag"), std::string::npos)
+            << "Unexpected duplicate tag error: " << e;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Webhook template formatting
+// ---------------------------------------------------------------------------
+
+TEST(WebhookModule, FormatMessageReplacesServerPlaceholder)
+{
+    auto msg = WebhookModule::formatMessage("{server} started", "MyARK", "started");
+    EXPECT_EQ(msg, "MyARK started");
+}
+
+TEST(WebhookModule, FormatMessageReplacesEventPlaceholder)
+{
+    auto msg = WebhookModule::formatMessage("Event: {event}", "Server1", "crashed");
+    EXPECT_EQ(msg, "Event: crashed");
+}
+
+TEST(WebhookModule, FormatMessageReplacesTimestamp)
+{
+    auto msg = WebhookModule::formatMessage("At {timestamp}", "S", "e");
+    // Timestamp should be replaced with something like 2026-03-17T...
+    EXPECT_EQ(msg.find("{timestamp}"), std::string::npos)
+        << "Timestamp placeholder was not replaced";
+    EXPECT_NE(msg.find("At "), std::string::npos);
+}
+
+TEST(WebhookModule, FormatMessageAllPlaceholders)
+{
+    auto msg = WebhookModule::formatMessage(
+        "[{server}] {event} at {timestamp}", "ARK-1", "backup completed");
+    EXPECT_NE(msg.find("[ARK-1]"), std::string::npos);
+    EXPECT_NE(msg.find("backup completed"), std::string::npos);
+    EXPECT_EQ(msg.find("{server}"), std::string::npos);
+    EXPECT_EQ(msg.find("{event}"), std::string::npos);
+    EXPECT_EQ(msg.find("{timestamp}"), std::string::npos);
+}
+
+TEST(WebhookModule, FormatMessageNoPlaceholders)
+{
+    auto msg = WebhookModule::formatMessage("plain message", "S", "E");
+    EXPECT_EQ(msg, "plain message");
+}
+
+TEST(WebhookModule, FormatMessageMultipleSamePlaceholder)
+{
+    auto msg = WebhookModule::formatMessage("{server} and {server}", "MyServer", "e");
+    EXPECT_EQ(msg, "MyServer and MyServer");
+}
+
+// ---------------------------------------------------------------------------
+// Restart warning message formatting
+// ---------------------------------------------------------------------------
+
+TEST(ServerConfig, FormatRestartWarningDefaultMessage)
+{
+    ServerConfig s;
+    auto msg = s.formatRestartWarning(5);
+    EXPECT_NE(msg.find("5 minute(s)"), std::string::npos);
+    EXPECT_EQ(msg.find("{minutes}"), std::string::npos);
+}
+
+TEST(ServerConfig, FormatRestartWarningCustomMessage)
+{
+    ServerConfig s;
+    s.restartWarningMessage = "Restarting in {minutes}m!";
+    auto msg = s.formatRestartWarning(10);
+    EXPECT_EQ(msg, "Restarting in 10m!");
+}
+
+TEST(ServerConfig, FormatRestartWarningEmptyUsesDefault)
+{
+    ServerConfig s;
+    s.restartWarningMessage = "   ";
+    auto msg = s.formatRestartWarning(3);
+    EXPECT_NE(msg.find("3 minute(s)"), std::string::npos);
 }

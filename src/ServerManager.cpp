@@ -1272,6 +1272,100 @@ static std::string defaultConfigContent(int appid, const std::string &relPath)
                "Password\n";
     }
 
+    // ---- Don't Starve Together cluster.ini ----
+    if (relPath.find("cluster.ini") != std::string::npos && appid == 343050) {
+        return "[GAMEPLAY]\n"
+               "game_mode = survival\n"
+               "max_players = 6\n"
+               "pvp = false\n"
+               "\n"
+               "[NETWORK]\n"
+               "cluster_name = My DST Server\n"
+               "cluster_password = \n"
+               "cluster_description = \n"
+               "\n"
+               "[MISC]\n"
+               "console_enabled = true\n";
+    }
+
+    // ---- ARMA 3 server.cfg ----
+    if (relPath.find("server.cfg") != std::string::npos && appid == 233780) {
+        return "// ARMA 3 Server Config\n"
+               "hostname = \"My ARMA 3 Server\";\n"
+               "password = \"\";\n"
+               "passwordAdmin = \"changeme\";\n"
+               "maxPlayers = 32;\n"
+               "motd[] = { \"Welcome to my server\" };\n";
+    }
+
+    // ---- ARMA 3 basic.cfg ----
+    if (relPath.find("basic.cfg") != std::string::npos && appid == 233780) {
+        return "// ARMA 3 Basic Network Config\n"
+               "MaxMsgSend = 128;\n"
+               "MaxSizeGuaranteed = 512;\n"
+               "MaxSizeNonguaranteed = 256;\n"
+               "MinBandwidth = 131072;\n"
+               "MaxBandwidth = 10000000;\n";
+    }
+
+    // ---- Squad Server.cfg ----
+    if (relPath.find("Server.cfg") != std::string::npos && appid == 403240) {
+        return "// Squad Server Config\n"
+               "ServerName=\"My Squad Server\"\n"
+               "MaxPlayers=80\n"
+               "ShouldAdvertise=true\n";
+    }
+
+    // ---- Squad Rcon.cfg ----
+    if (relPath.find("Rcon.cfg") != std::string::npos && appid == 403240) {
+        return "// Squad RCON Config\n"
+               "Port=21114\n"
+               "Password=changeme\n";
+    }
+
+    // ---- Barotrauma serversettings.xml ----
+    if (relPath.find("serversettings.xml") != std::string::npos && appid == 1026340) {
+        return "<?xml version=\"1.0\"?>\n"
+               "<serversettings\n"
+               "  name=\"My Barotrauma Server\"\n"
+               "  port=\"27015\"\n"
+               "  maxplayers=\"6\"\n"
+               "  password=\"\"\n"
+               "/>\n";
+    }
+
+    // ---- Space Engineers SpaceEngineers-Dedicated.cfg ----
+    if (relPath.find("SpaceEngineers-Dedicated.cfg") != std::string::npos && appid == 298740) {
+        return "<?xml version=\"1.0\"?>\n"
+               "<MyConfigDedicated>\n"
+               "  <ServerName>My Space Engineers Server</ServerName>\n"
+               "  <ServerPort>27016</ServerPort>\n"
+               "  <WorldName>Star System</WorldName>\n"
+               "</MyConfigDedicated>\n";
+    }
+
+    // ---- Sons of the Forest dedicatedserver.cfg ----
+    if (relPath.find("dedicatedserver.cfg") != std::string::npos && appid == 2465200) {
+        return "{\n"
+               "  \"IpAddress\": \"0.0.0.0\",\n"
+               "  \"GamePort\": 8766,\n"
+               "  \"QueryPort\": 27016,\n"
+               "  \"BlobSyncPort\": 9700,\n"
+               "  \"MaxPlayers\": 8,\n"
+               "  \"ServerName\": \"My Sons of the Forest Server\",\n"
+               "  \"Password\": \"\"\n"
+               "}\n";
+    }
+
+    // ---- Mordhau Game.ini ----
+    if (relPath.find("Game.ini") != std::string::npos && appid == 629800) {
+        return "[/Script/Mordhau.MordhauGameSession]\n"
+               "MaxSlots=32\n"
+               "ServerName=My Mordhau Server\n"
+               "ServerPassword=\n"
+               "AdminPassword=changeme\n";
+    }
+
     // Fallback: empty file with a comment
     if (relPath.find(".ini") != std::string::npos || relPath.find(".cfg") != std::string::npos)
         return "// Auto-generated config stub – edit to taste\n";

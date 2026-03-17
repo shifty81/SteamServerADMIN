@@ -4,6 +4,7 @@
 #include <vector>
 #include <map>
 #include <algorithm>
+#include <unordered_set>
 
 inline std::string trimString(const std::string &s) {
     auto start = s.find_first_not_of(" \t\n\r");
@@ -192,6 +193,9 @@ struct ServerConfig {
         if (gracefulShutdownSeconds < 0)
             errors.push_back("Graceful shutdown timeout must not be negative.");
 
+        if (gracefulShutdownSeconds > 3600)
+            errors.push_back("Graceful shutdown timeout must not exceed 3600 seconds.");
+
         if (autoUpdateCheckIntervalMinutes < 0)
             errors.push_back("Auto-update check interval must not be negative.");
 
@@ -200,6 +204,16 @@ struct ServerConfig {
 
         if (totalCrashes < 0)
             errors.push_back("Total crashes must not be negative.");
+
+        // Detect duplicate tags
+        {
+            std::unordered_set<std::string> seen;
+            for (const auto &tag : tags) {
+                std::string t = trimString(tag);
+                if (!t.empty() && !seen.insert(t).second)
+                    errors.push_back("Duplicate tag: " + t);
+            }
+        }
 
         return errors;
     }
