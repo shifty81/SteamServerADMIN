@@ -831,6 +831,7 @@ void ServerManager::stopServer(ServerConfig &server)
     m_crashCounts.erase(server.name);
     m_pendingRestarts.erase(server.name);
     m_resourceMonitor.untrackProcess(server.name);
+    releaseRcon(server.name);
     emitLog(server.name, "Server stopped.");
 
     auto hookIt = server.eventHooks.find("onStop");
@@ -884,6 +885,7 @@ void ServerManager::checkProcesses()
         m_processes.erase(name);
         m_startTimes.erase(name);
         m_resourceMonitor.untrackProcess(name);
+        releaseRcon(name);
     }
 }
 
@@ -1413,15 +1415,51 @@ std::vector<std::string> ServerManager::listSnapshots(const ServerConfig &server
 }
 
 // ---------------------------------------------------------------------------
+// RCON – persistent connection pool
+// ---------------------------------------------------------------------------
+
+RconClient *ServerManager::acquireRcon(const ServerConfig &server)
+{
+    auto it = m_rconPool.find(server.name);
+
+    // Try the cached connection first
+    if (it != m_rconPool.end() && it->second && it->second->isConnected())
+        return it->second.get();
+
+    // Create or reconnect
+    auto client = std::make_unique<RconClient>();
+    if (!client->connectToServer(server.rcon.host, server.rcon.port,
+                                 server.rcon.password, 3000)) {
+        m_rconPool.erase(server.name);   // clear stale entry
+        return nullptr;
+    }
+    RconClient *ptr = client.get();
+    m_rconPool[server.name] = std::move(client);
+    return ptr;
+}
+
+void ServerManager::releaseRcon(const std::string &serverName)
+{
+    m_rconPool.erase(serverName);
+}
+
+// ---------------------------------------------------------------------------
 // RCON
 // ---------------------------------------------------------------------------
 
 int ServerManager::getPlayerCount(const ServerConfig &server)
 {
-    RconClient rcon;
-    if (!rcon.connectToServer(server.rcon.host, server.rcon.port, server.rcon.password, 3000))
+    RconClient *rcon = acquireRcon(server);
+    if (!rcon)
         return -1;
-    std::string resp = rcon.sendCommand("status", 3000);
+    std::string resp = rcon->sendCommand("status", 3000);
+    if (resp.empty() && !rcon->isConnected()) {
+        // Connection dropped – retry once with a fresh connection
+        releaseRcon(server.name);
+        rcon = acquireRcon(server);
+        if (!rcon) return -1;
+        resp = rcon->sendCommand("status", 3000);
+    }
     auto lines = splitString(resp, '\n');
     for (const auto &line : lines) {
         if (line.find("players") != std::string::npos) {
@@ -1438,10 +1476,17 @@ std::string ServerManager::sendRconCommand(const ServerConfig &server, const std
 {
     if (server.consoleLogging)
         ConsoleLogWriter::append(server.dir, server.name, "> " + cmd);
-    RconClient rcon;
-    if (!rcon.connectToServer(server.rcon.host, server.rcon.port, server.rcon.password, 3000))
+    RconClient *rcon = acquireRcon(server);
+    if (!rcon)
         return "[RCON] Connection failed.";
-    std::string resp = rcon.sendCommand(cmd);
+    std::string resp = rcon->sendCommand(cmd);
+    if (resp.empty() && !rcon->isConnected()) {
+        // Connection dropped – retry once with a fresh connection
+        releaseRcon(server.name);
+        rcon = acquireRcon(server);
+        if (!rcon) return "[RCON] Connection failed.";
+        resp = rcon->sendCommand(cmd);
+    }
     if (server.consoleLogging && !resp.empty())
         ConsoleLogWriter::append(server.dir, server.name, resp);
     return resp;

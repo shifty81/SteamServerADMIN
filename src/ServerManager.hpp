@@ -6,11 +6,13 @@
 #include "EventHookManager.hpp"
 #include "GracefulRestartManager.hpp"
 #include "SteamLibraryDetector.hpp"
+#include "RconClient.hpp"
 
 #include <string>
 #include <vector>
 #include <map>
 #include <set>
+#include <memory>
 #include <functional>
 #include <chrono>
 #include <cstdint>
@@ -215,6 +217,16 @@ private:
 
     // Per-server auto-update check: last time each server was checked
     std::map<std::string, std::chrono::steady_clock::time_point> m_lastUpdateChecks;
+
+    // Persistent RCON connection pool – avoids opening/closing a TCP
+    // connection for every single command (which floods game servers
+    // like 7 Days to Die that log every telnet connect/disconnect).
+    std::map<std::string, std::unique_ptr<RconClient>> m_rconPool;
+
+    /** Get or create a persistent RCON connection for the given server. */
+    RconClient *acquireRcon(const ServerConfig &server);
+    /** Drop the cached connection for a server (e.g. on stop/crash). */
+    void releaseRcon(const std::string &serverName);
 
     WebhookModule    m_webhook;
     ResourceMonitor  m_resourceMonitor;

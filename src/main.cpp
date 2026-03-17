@@ -59,7 +59,7 @@ int main(int /*argc*/, char * /*argv*/[])
         int displayH = 0;
         glfwGetFramebufferSize(glfwWindow, &displayW, &displayH);
         glViewport(0, 0, displayW, displayH);
-        glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
+        glClearColor(0.08f, 0.08f, 0.10f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 

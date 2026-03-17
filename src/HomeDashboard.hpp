@@ -2,6 +2,7 @@
 
 #include "ServerManager.hpp"
 #include <chrono>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -36,13 +37,21 @@ public:
     void refresh();
 
 private:
-    void renderCard(ServerConfig &server, int index);
+    void renderCard(ServerConfig &server, int index, float cardWidth);
     void renderContextMenu(ServerConfig &server);
 
     ServerManager *m_manager;
 
     // Dashboard group filter (empty string = show all)
     std::string m_groupFilter;
+
+    // Per-server player count cache (throttled to avoid flooding RCON)
+    struct CachedPlayerCount {
+        int count = -1;
+        std::chrono::steady_clock::time_point lastRefresh;
+    };
+    std::map<std::string, CachedPlayerCount> m_playerCounts;
+    static constexpr int kPlayerCountRefreshSeconds = 30;
 
     // Delayed restart after in-game warning
     struct PendingWarningRestart {

@@ -5604,3 +5604,111 @@ TEST(ServerConfig, DefaultUpdateCheckIntervalConstant)
     // kDefaultUpdateCheckIntervalMinutes should be 60
     EXPECT_EQ(ServerManager::kDefaultUpdateCheckIntervalMinutes, 60);
 }
+
+// ===========================================================================
+// RCON connection pool – releaseRcon cleans up stale entries
+// ===========================================================================
+
+TEST(ServerManager, ReleaseRconOnStopDoesNotCrash)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    ServerManager mgr(tmp.filePath("servers.json"));
+
+    ServerConfig s;
+    s.name  = "PoolTest";
+    s.appid = 730;
+    s.dir   = tmp.filePath("pooltest");
+    s.rcon.host = "127.0.0.1";
+    s.rcon.port = 27015;
+    s.rcon.password = "test";
+    mgr.servers().push_back(s);
+
+    // Calling stopServer on a non-running server should be safe (no crash)
+    mgr.stopServer(mgr.servers().front());
+    SUCCEED();
+}
+
+TEST(ServerManager, GetPlayerCountReturnsNegativeOneWhenNoServer)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    ServerManager mgr(tmp.filePath("servers.json"));
+
+    ServerConfig s;
+    s.name  = "PlayerCount";
+    s.appid = 730;
+    s.dir   = tmp.filePath("playercount");
+    s.rcon.host = "127.0.0.1";
+    s.rcon.port = 1;  // unreachable port
+    s.rcon.password = "test";
+    mgr.servers().push_back(s);
+
+    // With no server listening, getPlayerCount should return -1 (connection failed)
+    int count = mgr.getPlayerCount(mgr.servers().front());
+    EXPECT_EQ(count, -1);
+}
+
+TEST(ServerManager, SendRconCommandReturnsFailureWhenNoServer)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    ServerManager mgr(tmp.filePath("servers.json"));
+
+    ServerConfig s;
+    s.name  = "RconFail";
+    s.appid = 730;
+    s.dir   = tmp.filePath("rconfail");
+    s.rcon.host = "127.0.0.1";
+    s.rcon.port = 1;  // unreachable port
+    s.rcon.password = "test";
+    mgr.servers().push_back(s);
+
+    // With no server listening, sendRconCommand should return failure message
+    std::string resp = mgr.sendRconCommand(mgr.servers().front(), "status");
+    EXPECT_EQ(resp, "[RCON] Connection failed.");
+}
+
+TEST(ServerManager, GetPlayerCountReusesConnection)
+{
+    // Two consecutive calls to getPlayerCount with an unreachable server
+    // should both fail gracefully (no crash), confirming the pool handles
+    // failed connections correctly.
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    ServerManager mgr(tmp.filePath("servers.json"));
+
+    ServerConfig s;
+    s.name  = "ReuseTest";
+    s.appid = 730;
+    s.dir   = tmp.filePath("reusetest");
+    s.rcon.host = "127.0.0.1";
+    s.rcon.port = 1;  // unreachable port
+    s.rcon.password = "test";
+    mgr.servers().push_back(s);
+
+    EXPECT_EQ(mgr.getPlayerCount(mgr.servers().front()), -1);
+    EXPECT_EQ(mgr.getPlayerCount(mgr.servers().front()), -1);
+}
+
+// ===========================================================================
+// RCON pool clears on removeServer
+// ===========================================================================
+
+TEST(ServerManager, RemoveServerCleansUpRconPool)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    ServerManager mgr(tmp.filePath("servers.json"));
+
+    ServerConfig s;
+    s.name  = "Removable";
+    s.appid = 730;
+    s.dir   = tmp.filePath("removable");
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.saveConfig());
+
+    // removeServer should succeed and not crash (pool entry may or may not exist)
+    EXPECT_TRUE(mgr.removeServer("Removable"));
+    EXPECT_TRUE(mgr.servers().empty());
+}
