@@ -299,7 +299,7 @@ std::string RconClient::readAvailable(int timeoutMs)
     std::string result;
     char buf[1024];
     while (waitForData(timeoutMs)) {
-        int n = socketRecv(buf, sizeof(buf) - 1);
+        int n = socketRecv(buf, sizeof(buf));
         if (n <= 0) break;
         result.append(buf, n);
         // After first chunk, use a short timeout for any remaining data
@@ -313,8 +313,8 @@ bool RconClient::telnetAuth(const std::string &password, int timeoutMs)
     // Read welcome / password prompt from the telnet server
     std::string welcome = readAvailable(timeoutMs);
 
-    // If server didn't send a prompt the connection may still be valid
-    // (some 7DTD configs have TelnetPassword empty → no prompt).
+    // 7DTD allows TelnetPassword="" which disables the password prompt.
+    // When the SSA config also has an empty password, skip authentication.
     if (password.empty())
         return true;
 
@@ -329,24 +329,33 @@ bool RconClient::telnetAuth(const std::string &password, int timeoutMs)
     // Read auth response
     std::string authResp = readAvailable(timeoutMs);
 
+    // Convert to lowercase for case-insensitive matching
+    std::string lower;
+    lower.reserve(authResp.size());
+    for (char c : authResp)
+        lower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+
     // Accept common success indicators from 7DTD / generic telnet servers
-    if (authResp.find("successful") != std::string::npos ||
-        authResp.find("Logon") != std::string::npos ||
-        authResp.find("authenticated") != std::string::npos ||
-        authResp.find("Welcome") != std::string::npos) {
+    if (lower.find("successful") != std::string::npos ||
+        lower.find("logon") != std::string::npos ||
+        lower.find("authenticated") != std::string::npos ||
+        lower.find("welcome") != std::string::npos) {
         return true;
     }
 
-    // If the response contains an explicit failure keyword, reject
-    if (authResp.find("incorrect") != std::string::npos ||
-        authResp.find("denied") != std::string::npos) {
+    // Explicit failure keywords
+    if (lower.find("incorrect") != std::string::npos ||
+        lower.find("denied") != std::string::npos ||
+        lower.find("failed") != std::string::npos) {
         emitError("Telnet authentication failed: wrong password");
         disconnect();
         return false;
     }
 
-    // No clear indicator – assume success (the server may not echo anything)
-    return true;
+    // No recognized response – default to failure for safety
+    emitError("Telnet authentication: unrecognized server response");
+    disconnect();
+    return false;
 }
 
 std::string RconClient::telnetSendCommand(const std::string &command, int timeoutMs)
