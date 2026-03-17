@@ -1142,7 +1142,7 @@ static std::string defaultConfigContent(int appid, const std::string &relPath)
                "server.hostname \"My Rust Server\"\n"
                "server.maxplayers 100\n"
                "server.worldsize 4000\n"
-               "server.seed 12345\n"
+               "server.seed 0\n"  // 0 = random seed; change to a fixed value for a consistent world
                "rcon.password \"changeme\"\n"
                "rcon.port 28016\n"
                "rcon.web 1\n";
@@ -1334,9 +1334,11 @@ void ServerManager::seedConfigFiles(ServerConfig &server)
 
 void ServerManager::processHourlyMaintenance()
 {
+    static constexpr int kMaintenanceIntervalMinutes = 60;
+
     auto now = std::chrono::steady_clock::now();
     if (m_lastMaintenanceCheck.time_since_epoch().count() > 0 &&
-        std::chrono::duration_cast<std::chrono::minutes>(now - m_lastMaintenanceCheck).count() < 60)
+        std::chrono::duration_cast<std::chrono::minutes>(now - m_lastMaintenanceCheck).count() < kMaintenanceIntervalMinutes)
         return;
 
     m_lastMaintenanceCheck = now;

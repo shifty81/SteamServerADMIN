@@ -571,9 +571,13 @@ void MainWindow::renderLogViewerTab()
     // Use InputTextMultiline in read-only mode so users can highlight and
     // copy log entries for debugging.
     ImVec2 avail = ImGui::GetContentRegionAvail();
+    // Copy into a mutable buffer to avoid const_cast UB
+    static std::vector<char> logDisplayBuf;
+    logDisplayBuf.assign(filteredLogText.begin(), filteredLogText.end());
+    logDisplayBuf.push_back('\0');
     ImGui::InputTextMultiline("##LogEntries",
-                              const_cast<char *>(filteredLogText.c_str()),
-                              filteredLogText.size() + 1, avail,
+                              logDisplayBuf.data(),
+                              logDisplayBuf.size(), avail,
                               ImGuiInputTextFlags_ReadOnly);
 }
 

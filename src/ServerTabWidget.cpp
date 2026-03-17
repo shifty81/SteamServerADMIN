@@ -1050,9 +1050,13 @@ void ServerTabWidget::renderConsoleTab()
     // Output area – read-only InputTextMultiline for select + copy
     ImVec2 avail = ImGui::GetContentRegionAvail();
     ImVec2 outputSize(-1, avail.y - 30.0f);
+    // Copy into a mutable buffer to avoid const_cast UB
+    static std::vector<char> consoleBuf;
+    consoleBuf.assign(m_consoleOutput.begin(), m_consoleOutput.end());
+    consoleBuf.push_back('\0');
     ImGui::InputTextMultiline("##ConsoleOutput",
-                              const_cast<char *>(m_consoleOutput.c_str()),
-                              m_consoleOutput.size() + 1, outputSize,
+                              consoleBuf.data(),
+                              consoleBuf.size(), outputSize,
                               ImGuiInputTextFlags_ReadOnly);
 
     // Input line with Up/Down arrow history navigation
@@ -1102,10 +1106,13 @@ void ServerTabWidget::renderLogsTab()
     ImGui::TextDisabled("(Select text below with mouse to highlight, Ctrl+C to copy selection)");
 
     // Use InputTextMultiline in read-only mode so users can highlight and
-    // copy text for debugging.  We need a mutable buffer so we copy into a
-    // static-sized staging area.
+    // copy text for debugging.
     ImVec2 avail = ImGui::GetContentRegionAvail();
-    ImGui::InputTextMultiline("##LogView", const_cast<char *>(m_logContent.c_str()),
-                              m_logContent.size() + 1, avail,
+    // Copy into a mutable buffer to avoid const_cast UB
+    static std::vector<char> logBuf;
+    logBuf.assign(m_logContent.begin(), m_logContent.end());
+    logBuf.push_back('\0');
+    ImGui::InputTextMultiline("##LogView", logBuf.data(),
+                              logBuf.size(), avail,
                               ImGuiInputTextFlags_ReadOnly);
 }
