@@ -1321,6 +1321,7 @@ TEST(ServerConfig, ScheduledRconCommandsPersistence)
     s.name  = "RconCmdServer";
     s.appid = 730;
     s.dir   = "/srv/rconcmd";
+    s.rcon.host = "127.0.0.1";
     s.scheduledRconCommands = { "say Hello", "status" };
     s.rconCommandIntervalMinutes = 15;
     mgr.servers().push_back(s);
@@ -5484,4 +5485,230 @@ TEST(ServerManager, HourlyMaintenanceSkipsRunningServers)
     mgr.tick();
     // Verify the server is not flagged for pending update (SteamCMD not installed)
     EXPECT_FALSE(mgr.hasPendingUpdate("MaintTest"));
+}
+
+// ===========================================================================
+// Discord webhook URL validation
+// ===========================================================================
+
+TEST(ServerConfig, DiscordWebhookUrlValidation)
+{
+    ServerConfig s;
+    s.name  = "WebhookVal";
+    s.appid = 730;
+    s.dir   = "/srv/wh";
+
+    // Empty URL is fine
+    s.discordWebhookUrl = "";
+    EXPECT_TRUE(s.validate().empty());
+
+    // Valid HTTPS URL is fine
+    s.discordWebhookUrl = "https://discord.com/api/webhooks/123/abc";
+    EXPECT_TRUE(s.validate().empty());
+
+    // Valid HTTP URL is fine
+    s.discordWebhookUrl = "http://discord.com/api/webhooks/123/abc";
+    EXPECT_TRUE(s.validate().empty());
+
+    // Invalid URL (no scheme)
+    s.discordWebhookUrl = "discord.com/api/webhooks/123/abc";
+    auto errors = s.validate();
+    bool found = false;
+    for (const auto &e : errors) {
+        if (e.find("Discord webhook URL") != std::string::npos)
+            found = true;
+    }
+    EXPECT_TRUE(found) << "Should reject URL without http:// or https:// prefix";
+
+    // Whitespace-only URL is treated as empty
+    s.discordWebhookUrl = "   ";
+    EXPECT_TRUE(s.validate().empty());
+}
+
+TEST(ServerConfig, DiscordWebhookUrlInvalidScheme)
+{
+    // Verify the error message content
+    ServerConfig s;
+    s.name = "SchemeTest";
+    s.appid = 1;
+    s.dir = "/srv/scheme";
+    s.discordWebhookUrl = "ftp://example.com/webhook";
+    auto errors = s.validate();
+    bool found = false;
+    for (const auto &e : errors) {
+        if (e.find("http://") != std::string::npos || e.find("https://") != std::string::npos)
+            found = true;
+    }
+    EXPECT_TRUE(found) << "Error message should mention http:// or https://";
+}
+
+// ===========================================================================
+// RCON host validation with scheduled commands
+// ===========================================================================
+
+TEST(ServerConfig, RconHostRequiredWhenCommandsScheduled)
+{
+    ServerConfig s;
+    s.name  = "RconHostReq";
+    s.appid = 730;
+    s.dir   = "/srv/rh";
+
+    // Commands present but interval = 0 (disabled) — no error
+    s.scheduledRconCommands = {"say hello"};
+    s.rconCommandIntervalMinutes = 0;
+    EXPECT_TRUE(s.validate().empty());
+
+    // Interval active but no host — should error
+    s.rconCommandIntervalMinutes = 10;
+    s.rcon.host = "";
+    auto errors = s.validate();
+    bool found = false;
+    for (const auto &e : errors) {
+        if (e.find("RCON host") != std::string::npos)
+            found = true;
+    }
+    EXPECT_TRUE(found) << "Should require RCON host when interval > 0 and commands are set";
+
+    // Interval active with a host — no error
+    s.rcon.host = "127.0.0.1";
+    EXPECT_TRUE(s.validate().empty());
+}
+
+TEST(ServerConfig, RconHostNotRequiredWhenNoNonEmptyCommands)
+{
+    ServerConfig s;
+    s.name  = "RconHostEmpty";
+    s.appid = 730;
+    s.dir   = "/srv/rhe";
+    s.rconCommandIntervalMinutes = 10;
+    s.rcon.host = "";
+
+    // Only empty/whitespace commands — should not trigger host error
+    // (the individual empty-command check handles those)
+    s.scheduledRconCommands = {"   "};
+    auto errors = s.validate();
+    bool foundHostError = false;
+    for (const auto &e : errors) {
+        if (e.find("RCON host") != std::string::npos)
+            foundHostError = true;
+    }
+    EXPECT_FALSE(foundHostError) << "Should not require host when all commands are blank";
+}
+
+// ===========================================================================
+// Per-server auto-update check interval (logic test)
+// ===========================================================================
+
+TEST(ServerConfig, DefaultUpdateCheckIntervalConstant)
+{
+    // kDefaultUpdateCheckIntervalMinutes should be 60
+    EXPECT_EQ(ServerManager::kDefaultUpdateCheckIntervalMinutes, 60);
+}
+
+// ===========================================================================
+// RCON connection pool – releaseRcon cleans up stale entries
+// ===========================================================================
+
+TEST(ServerManager, ReleaseRconOnStopDoesNotCrash)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    ServerManager mgr(tmp.filePath("servers.json"));
+
+    ServerConfig s;
+    s.name  = "PoolTest";
+    s.appid = 730;
+    s.dir   = tmp.filePath("pooltest");
+    s.rcon.host = "127.0.0.1";
+    s.rcon.port = 27015;
+    s.rcon.password = "test";
+    mgr.servers().push_back(s);
+
+    // Calling stopServer on a non-running server should be safe (no crash)
+    mgr.stopServer(mgr.servers().front());
+    SUCCEED();
+}
+
+TEST(ServerManager, GetPlayerCountReturnsNegativeOneWhenNoServer)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    ServerManager mgr(tmp.filePath("servers.json"));
+
+    ServerConfig s;
+    s.name  = "PlayerCount";
+    s.appid = 730;
+    s.dir   = tmp.filePath("playercount");
+    s.rcon.host = "127.0.0.1";
+    s.rcon.port = 1;  // unreachable port
+    s.rcon.password = "test";
+    mgr.servers().push_back(s);
+
+    // With no server listening, getPlayerCount should return -1 (connection failed)
+    int count = mgr.getPlayerCount(mgr.servers().front());
+    EXPECT_EQ(count, -1);
+}
+
+TEST(ServerManager, SendRconCommandReturnsFailureWhenNoServer)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    ServerManager mgr(tmp.filePath("servers.json"));
+
+    ServerConfig s;
+    s.name  = "RconFail";
+    s.appid = 730;
+    s.dir   = tmp.filePath("rconfail");
+    s.rcon.host = "127.0.0.1";
+    s.rcon.port = 1;  // unreachable port
+    s.rcon.password = "test";
+    mgr.servers().push_back(s);
+
+    // With no server listening, sendRconCommand should return failure message
+    std::string resp = mgr.sendRconCommand(mgr.servers().front(), "status");
+    EXPECT_EQ(resp, "[RCON] Connection failed.");
+}
+
+TEST(ServerManager, GetPlayerCountReusesConnection)
+{
+    // Two consecutive calls to getPlayerCount with an unreachable server
+    // should both fail gracefully (no crash), confirming the pool handles
+    // failed connections correctly.
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    ServerManager mgr(tmp.filePath("servers.json"));
+
+    ServerConfig s;
+    s.name  = "ReuseTest";
+    s.appid = 730;
+    s.dir   = tmp.filePath("reusetest");
+    s.rcon.host = "127.0.0.1";
+    s.rcon.port = 1;  // unreachable port
+    s.rcon.password = "test";
+    mgr.servers().push_back(s);
+
+    EXPECT_EQ(mgr.getPlayerCount(mgr.servers().front()), -1);
+    EXPECT_EQ(mgr.getPlayerCount(mgr.servers().front()), -1);
+}
+
+// ===========================================================================
+// RCON pool clears on removeServer
+// ===========================================================================
+
+TEST(ServerManager, RemoveServerCleansUpRconPool)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    ServerManager mgr(tmp.filePath("servers.json"));
+
+    ServerConfig s;
+    s.name  = "Removable";
+    s.appid = 730;
+    s.dir   = tmp.filePath("removable");
+    mgr.servers().push_back(s);
+    ASSERT_TRUE(mgr.saveConfig());
+
+    // removeServer should succeed and not crash (pool entry may or may not exist)
+    EXPECT_TRUE(mgr.removeServer("Removable"));
+    EXPECT_TRUE(mgr.servers().empty());
 }

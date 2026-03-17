@@ -122,6 +122,24 @@ struct ServerConfig {
         if (rcon.port < 1 || rcon.port > 65535)
             errors.push_back("RCON port must be between 1 and 65535.");
 
+        // Warn when RCON commands will actually be scheduled (interval > 0)
+        // but the host is blank – the commands won't be deliverable.
+        if (rconCommandIntervalMinutes > 0 && !scheduledRconCommands.empty() && trimString(rcon.host).empty()) {
+            bool hasNonEmpty = false;
+            for (const auto &cmd : scheduledRconCommands) {
+                if (!trimString(cmd).empty()) { hasNonEmpty = true; break; }
+            }
+            if (hasNonEmpty)
+                errors.push_back("RCON host must not be empty when scheduled RCON commands are configured.");
+        }
+
+        // Basic Discord webhook URL format check
+        if (!trimString(discordWebhookUrl).empty()) {
+            std::string url = trimString(discordWebhookUrl);
+            if (url.rfind("https://", 0) != 0 && url.rfind("http://", 0) != 0)
+                errors.push_back("Discord webhook URL must start with http:// or https://.");
+        }
+
         if (keepBackups < 0)
             errors.push_back("Keep-backups count must not be negative.");
 
