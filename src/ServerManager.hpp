@@ -95,7 +95,20 @@ public:
 
     // ---- SteamCMD ----
     void deployServer(ServerConfig &server);
+    /**
+     * @brief Smart deploy: install if dir is empty, verify/update if already
+     *        deployed.  Returns true on success.
+     */
+    bool deployOrUpdateServer(ServerConfig &server);
     bool updateMods(ServerConfig &server);
+
+    /**
+     * @brief Seed default config files for a game template after deployment.
+     *
+     * Uses the template configPaths to create stub/starter config files in
+     * the server directory so the server can start without manual setup.
+     */
+    void seedConfigFiles(ServerConfig &server);
 
     // ---- Backup / restore ----
     std::string takeSnapshot(const ServerConfig &server);
@@ -171,6 +184,7 @@ private:
     void checkProcesses();
     void handleCrash(const std::string &serverName, int exitCode);
     void processPendingRestarts();
+    void processHourlyMaintenance();
 
     std::string m_configFile;
     std::vector<ServerConfig> m_servers;
@@ -192,6 +206,9 @@ private:
         std::chrono::steady_clock::time_point when;
     };
     std::map<std::string, PendingRestart> m_pendingRestarts;
+
+    // Hourly maintenance: last time we ran the auto-update check
+    std::chrono::steady_clock::time_point m_lastMaintenanceCheck;
 
     WebhookModule    m_webhook;
     ResourceMonitor  m_resourceMonitor;

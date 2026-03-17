@@ -167,6 +167,42 @@ bool SteamCmdModule::installSteamCmd(const std::string &installDir)
     // Update path to point to the freshly installed binary
     m_steamCmdPath = binary;
 
+    // Run SteamCMD once with +quit to let it fully bootstrap / self-update.
+    // The first run downloads additional runtime files and populates the
+    // steamcmd folder; without this step SteamCMD is not functional.
+    if (onOutputLine) onOutputLine("Running SteamCMD first-time setup (this may take a minute)...");
+
+    {
+        auto quoteIfNeeded = [](const std::string &s) -> std::string {
+            if (s.find(' ') == std::string::npos) return s;
+#ifdef _WIN32
+            return "\"" + s + "\"";
+#else
+            return "'" + s + "'";
+#endif
+        };
+
+        std::string bootstrapCmd = quoteIfNeeded(m_steamCmdPath) + " +quit 2>&1";
+        FILE *bsPipe = popen(bootstrapCmd.c_str(), "r");
+        if (bsPipe) {
+            while (fgets(buffer, sizeof(buffer), bsPipe)) {
+                std::string bsLine(buffer);
+                while (!bsLine.empty() && (bsLine.back() == '\n' || bsLine.back() == '\r'))
+                    bsLine.pop_back();
+                if (!bsLine.empty() && onOutputLine)
+                    onOutputLine(bsLine);
+            }
+            int bsStatus = pclose(bsPipe);
+            if (bsStatus != 0) {
+                if (onOutputLine)
+                    onOutputLine("SteamCMD first-time setup returned non-zero exit ("
+                                 + std::to_string(bsStatus) + ") – this is often normal on first run.");
+            }
+        } else {
+            if (onOutputLine) onOutputLine("Warning: could not run SteamCMD first-time setup");
+        }
+    }
+
     if (onOutputLine) onOutputLine("SteamCMD installed successfully at " + binary);
     if (onFinished) onFinished(true);
     return true;
@@ -188,10 +224,22 @@ std::string SteamCmdModule::defaultInstallDir()
 
 bool SteamCmdModule::runSteamCmd(const std::vector<std::string> &args)
 {
-    // Build command line
-    std::string cmd = m_steamCmdPath;
+    // Build command line – quote the binary path and any argument that
+    // contains spaces so that OS paths like "C:\GIT PROJECTS\..." work
+    // correctly.  On Windows we use double-quotes; on Unix single-quotes.
+    auto quoteIfNeeded = [](const std::string &s) -> std::string {
+        if (s.find(' ') == std::string::npos)
+            return s;
+#ifdef _WIN32
+        return "\"" + s + "\"";
+#else
+        return "'" + s + "'";
+#endif
+    };
+
+    std::string cmd = quoteIfNeeded(m_steamCmdPath);
     for (const auto &arg : args)
-        cmd += " " + arg;
+        cmd += " " + quoteIfNeeded(arg);
     cmd += " 2>&1";
 
     FILE *pipe = popen(cmd.c_str(), "r");

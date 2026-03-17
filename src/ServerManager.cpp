@@ -3,6 +3,7 @@
 #include "SteamCmdModule.hpp"
 #include "RconClient.hpp"
 #include "ConsoleLogWriter.hpp"
+#include "GameTemplates.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -862,6 +863,7 @@ void ServerManager::tick()
 {
     checkProcesses();
     processPendingRestarts();
+    processHourlyMaintenance();
     m_resourceMonitor.tick();
     m_gracefulRestartManager.tick();
 }
@@ -1020,7 +1022,353 @@ bool ServerManager::updateMods(ServerConfig &server)
 }
 
 // ---------------------------------------------------------------------------
-// Backup / restore
+// deployOrUpdateServer – smart deploy: install if empty, verify/update if
+//                        already deployed
+// ---------------------------------------------------------------------------
+
+bool ServerManager::deployOrUpdateServer(ServerConfig &server)
+{
+    if (!isSteamCmdInstalled()) {
+        emitLog(server.name, "SteamCMD is not installed. Please install SteamCMD first.");
+        return false;
+    }
+
+    if (isServerRunning(server)) {
+        emitLog(server.name, "Server is running – stop it before deploying/updating.");
+        return false;
+    }
+
+    // Determine if the server directory is empty (fresh install) or already
+    // has files (update / verify).
+    bool dirEmpty = true;
+    try {
+        if (fs::exists(server.dir) && fs::is_directory(server.dir)) {
+            auto it = fs::directory_iterator(server.dir);
+            dirEmpty = (it == fs::directory_iterator());
+        }
+    } catch (...) {
+        dirEmpty = true;
+    }
+
+    if (dirEmpty)
+        emitLog(server.name, "Server directory is empty – performing fresh install...");
+    else
+        emitLog(server.name, "Server directory has existing files – verifying/updating...");
+
+    SteamCmdModule steamCmd;
+    steamCmd.setSteamCmdPath(m_steamCmdPath);
+    steamCmd.onOutputLine = [this, &server](const std::string &line) {
+        emitLog(server.name, line);
+    };
+
+    bool ok = steamCmd.deployServer(server);
+
+    if (ok) {
+        setPendingUpdate(server.name, false);
+        emitLog(server.name, "SteamCMD deployment/verification complete.");
+
+        // Seed default config files for the game template on first install
+        if (dirEmpty)
+            seedConfigFiles(server);
+
+        auto hookIt = server.eventHooks.find("onUpdate");
+        if (hookIt != server.eventHooks.end())
+            m_eventHookManager.fireHook(server.name, server.dir, "onUpdate", hookIt->second);
+    } else {
+        emitLog(server.name, "SteamCMD deployment failed. Check the log for details.");
+    }
+    return ok;
+}
+
+// ---------------------------------------------------------------------------
+// seedConfigFiles – create starter config files after a fresh install
+// ---------------------------------------------------------------------------
+
+/// Return the default content for a well-known config file based on its name
+/// and the game AppID.
+static std::string defaultConfigContent(int appid, const std::string &relPath)
+{
+    // ---- Source-engine server.cfg (CS2, GMod, TF2, L4D2) ----
+    if (relPath.find("server.cfg") != std::string::npos) {
+        switch (appid) {
+            case 730: // CS2
+                return "// CS2 Dedicated Server Config\n"
+                       "hostname \"My CS2 Server\"\n"
+                       "rcon_password \"changeme\"\n"
+                       "sv_cheats 0\n"
+                       "sv_lan 0\n"
+                       "mp_autoteambalance 1\n";
+            case 4020: // GMod
+                return "// Garry's Mod Server Config\n"
+                       "hostname \"My GMod Server\"\n"
+                       "rcon_password \"changeme\"\n"
+                       "sv_defaultgamemode sandbox\n"
+                       "sbox_maxprops 200\n";
+            case 232250: // TF2
+                return "// TF2 Dedicated Server Config\n"
+                       "hostname \"My TF2 Server\"\n"
+                       "rcon_password \"changeme\"\n"
+                       "tf_mm_strict 0\n"
+                       "sv_pure 1\n";
+            case 222860: // L4D2
+                return "// Left 4 Dead 2 Server Config\n"
+                       "hostname \"My L4D2 Server\"\n"
+                       "rcon_password \"changeme\"\n"
+                       "sv_steamgroup_exclusive 0\n";
+            default:
+                return "// Server Configuration\n"
+                       "hostname \"My Server\"\n"
+                       "rcon_password \"changeme\"\n";
+        }
+    }
+
+    // ---- ARK GameUserSettings.ini ----
+    if (relPath.find("GameUserSettings.ini") != std::string::npos) {
+        return "[ServerSettings]\n"
+               "ServerAdminPassword=changeme\n"
+               "ServerPassword=\n"
+               "RCONEnabled=True\n"
+               "RCONPort=27020\n"
+               "MaxPlayers=70\n"
+               "DifficultyOffset=0.2\n"
+               "\n"
+               "[SessionSettings]\n"
+               "SessionName=My ARK Server\n";
+    }
+
+    // ---- Rust server.cfg ----
+    if (relPath.find("server.cfg") != std::string::npos && appid == 258550) {
+        return "// Rust Dedicated Server Config\n"
+               "server.hostname \"My Rust Server\"\n"
+               "server.maxplayers 100\n"
+               "server.worldsize 4000\n"
+               "server.seed 0\n"  // 0 = random seed; change to a fixed value for a consistent world
+               "rcon.password \"changeme\"\n"
+               "rcon.port 28016\n"
+               "rcon.web 1\n";
+    }
+
+    // ---- Valheim adminlist/bannedlist/permittedlist ----
+    if (relPath.find("adminlist.txt") != std::string::npos)
+        return "// Add Steam64 IDs here, one per line\n";
+    if (relPath.find("bannedlist.txt") != std::string::npos)
+        return "// Add Steam64 IDs here, one per line\n";
+    if (relPath.find("permittedlist.txt") != std::string::npos)
+        return "// Add Steam64 IDs here, one per line\n";
+
+    // ---- 7 Days to Die serverconfig.xml ----
+    if (relPath.find("serverconfig.xml") != std::string::npos && appid == 294420) {
+        return "<?xml version=\"1.0\"?>\n"
+               "<ServerSettings>\n"
+               "  <property name=\"ServerName\" value=\"My 7DTD Server\"/>\n"
+               "  <property name=\"ServerPassword\" value=\"\"/>\n"
+               "  <property name=\"TelnetEnabled\" value=\"true\"/>\n"
+               "  <property name=\"TelnetPort\" value=\"8081\"/>\n"
+               "  <property name=\"TelnetPassword\" value=\"changeme\"/>\n"
+               "  <property name=\"MaxPlayerCount\" value=\"8\"/>\n"
+               "</ServerSettings>\n";
+    }
+
+    // ---- DayZ serverDZ.cfg ----
+    if (relPath.find("serverDZ.cfg") != std::string::npos) {
+        return "hostname = \"My DayZ Server\";\n"
+               "password = \"\";\n"
+               "passwordAdmin = \"changeme\";\n"
+               "maxPlayers = 60;\n"
+               "steamQueryPort = 2305;\n";
+    }
+
+    // ---- Palworld PalWorldSettings.ini ----
+    if (relPath.find("PalWorldSettings.ini") != std::string::npos) {
+        return "[/Script/Pal.PalGameWorldSettings]\n"
+               "OptionSettings=(ServerName=\"My Palworld Server\",AdminPassword=\"changeme\","
+               "ServerPassword=\"\",PublicPort=8211,RCONEnabled=True,RCONPort=25575)\n";
+    }
+
+    // ---- Enshrouded enshrouded_server.json ----
+    if (relPath.find("enshrouded_server.json") != std::string::npos) {
+        return "{\n"
+               "  \"name\": \"My Enshrouded Server\",\n"
+               "  \"password\": \"\",\n"
+               "  \"saveDirectory\": \"./savegame\",\n"
+               "  \"logDirectory\": \"./logs\",\n"
+               "  \"ip\": \"0.0.0.0\",\n"
+               "  \"gamePort\": 15636,\n"
+               "  \"queryPort\": 15637,\n"
+               "  \"slotCount\": 16\n"
+               "}\n";
+    }
+
+    // ---- V Rising ServerHostSettings.json ----
+    if (relPath.find("ServerHostSettings.json") != std::string::npos) {
+        return "{\n"
+               "  \"Name\": \"My V Rising Server\",\n"
+               "  \"Port\": 9876,\n"
+               "  \"QueryPort\": 9877,\n"
+               "  \"MaxConnectedUsers\": 40,\n"
+               "  \"MaxConnectedAdmins\": 4,\n"
+               "  \"Password\": \"\",\n"
+               "  \"Rcon\": { \"Enabled\": true, \"Port\": 25575, \"Password\": \"changeme\" }\n"
+               "}\n";
+    }
+
+    // ---- Conan Exiles ServerSettings.ini ----
+    if (relPath.find("ServerSettings.ini") != std::string::npos && appid == 443030) {
+        return "[ServerSettings]\n"
+               "ServerName=My Conan Exiles Server\n"
+               "AdminPassword=changeme\n"
+               "MaxPlayers=40\n"
+               "ServerPort=7777\n"
+               "ServerQueryPort=27015\n";
+    }
+
+    // ---- Project Zomboid servertest.ini ----
+    if (relPath.find("servertest.ini") != std::string::npos) {
+        return "# Project Zomboid Server Settings\n"
+               "RCONPassword=changeme\n"
+               "RCONPort=27015\n"
+               "DefaultPort=16261\n"
+               "MaxPlayers=16\n"
+               "Public=true\n"
+               "PublicName=My PZ Server\n";
+    }
+
+    // ---- Satisfactory Game.ini ----
+    if (relPath.find("Game.ini") != std::string::npos && appid == 1690800) {
+        return "[/Script/Engine.GameSession]\n"
+               "MaxPlayers=4\n";
+    }
+
+    // ---- Terraria serverconfig.txt ----
+    if (relPath.find("serverconfig.txt") != std::string::npos && appid == 1281930) {
+        return "# Terraria Server Config\n"
+               "maxplayers=8\n"
+               "port=7777\n"
+               "password=\n"
+               "worldname=world1\n"
+               "autocreate=2\n"
+               "difficulty=0\n";
+    }
+
+    // ---- The Forest config.cfg ----
+    if (relPath.find("config.cfg") != std::string::npos && appid == 556450) {
+        return "// The Forest Dedicated Server Config\n"
+               "serverName My Forest Server\n"
+               "serverPlayers 8\n"
+               "serverPort 8766\n"
+               "serverSteamPort 8766\n"
+               "serverPassword \n"
+               "enableVAC on\n";
+    }
+
+    // ---- Unturned Commands.dat ----
+    if (relPath.find("Commands.dat") != std::string::npos) {
+        return "Name MyServer\n"
+               "Port 27015\n"
+               "MaxPlayers 24\n"
+               "Map PEI\n"
+               "Password\n";
+    }
+
+    // Fallback: empty file with a comment
+    if (relPath.find(".ini") != std::string::npos || relPath.find(".cfg") != std::string::npos)
+        return "// Auto-generated config stub – edit to taste\n";
+    if (relPath.find(".json") != std::string::npos)
+        return "{}\n";
+    if (relPath.find(".xml") != std::string::npos)
+        return "<?xml version=\"1.0\"?>\n<Config/>\n";
+    if (relPath.find(".txt") != std::string::npos)
+        return "# Auto-generated config stub\n";
+    if (relPath.find(".lua") != std::string::npos)
+        return "-- Auto-generated config stub\n";
+    if (relPath.find(".dat") != std::string::npos)
+        return "";
+
+    return "";
+}
+
+void ServerManager::seedConfigFiles(ServerConfig &server)
+{
+    // Find the matching template for this server's appid
+    auto templates = GameTemplate::builtinTemplates();
+    const GameTemplate *tmpl = nullptr;
+    for (const auto &t : templates) {
+        if (t.appid == server.appid) { tmpl = &t; break; }
+    }
+    if (!tmpl || tmpl->configPaths.empty()) return;
+
+    emitLog(server.name, "Seeding default config files...");
+
+    for (const auto &relPath : tmpl->configPaths) {
+        fs::path full = fs::path(server.dir) / relPath;
+
+        // Don't overwrite existing files
+        if (fs::exists(full)) {
+            emitLog(server.name, "  Config already exists: " + relPath);
+            continue;
+        }
+
+        // Create parent directories
+        try {
+            fs::create_directories(full.parent_path());
+        } catch (const fs::filesystem_error &e) {
+            emitLog(server.name, "  Failed to create directory for " + relPath + ": " + e.what());
+            continue;
+        }
+
+        std::string content = defaultConfigContent(server.appid, relPath);
+        std::ofstream f(full);
+        if (f.is_open()) {
+            f << content;
+            f.close();
+            emitLog(server.name, "  Created: " + relPath);
+        } else {
+            emitLog(server.name, "  Failed to create: " + relPath);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// processHourlyMaintenance – auto-update check for all servers once per hour
+// ---------------------------------------------------------------------------
+
+void ServerManager::processHourlyMaintenance()
+{
+    static constexpr int kMaintenanceIntervalMinutes = 60;
+
+    auto now = std::chrono::steady_clock::now();
+    if (m_lastMaintenanceCheck.time_since_epoch().count() > 0 &&
+        std::chrono::duration_cast<std::chrono::minutes>(now - m_lastMaintenanceCheck).count() < kMaintenanceIntervalMinutes)
+        return;
+
+    m_lastMaintenanceCheck = now;
+
+    // Only proceed if SteamCMD is installed
+    if (!isSteamCmdInstalled())
+        return;
+
+    for (ServerConfig &server : m_servers) {
+        // Skip servers that have auto-update disabled
+        if (!server.autoUpdate)
+            continue;
+
+        // Don't update running servers – flag them for later
+        if (isServerRunning(server)) {
+            setPendingUpdate(server.name, true);
+            emitLog(server.name, "Hourly check: server is running, flagged for update when stopped.");
+            continue;
+        }
+
+        emitLog(server.name, "Hourly maintenance: verifying/updating server files...");
+        deployOrUpdateServer(server);
+
+        // Also update mods if any are configured
+        if (!server.mods.empty()) {
+            emitLog(server.name, "Hourly maintenance: updating mods...");
+            updateMods(server);
+        }
+    }
+}
 // ---------------------------------------------------------------------------
 
 std::string ServerManager::takeSnapshot(const ServerConfig &server)

@@ -158,7 +158,22 @@ void ServerTabWidget::renderOverviewTab()
     ImGui::SameLine();
     if (ImGui::Button("Restart")) m_manager->restartServer(m_server);
     ImGui::SameLine();
-    if (ImGui::Button("Deploy / Update")) m_manager->deployServer(m_server);
+
+    // Smart deploy button: shows contextual label based on server state
+    {
+        bool dirEmpty = true;
+        try {
+            if (std::filesystem::exists(m_server.dir) &&
+                std::filesystem::is_directory(m_server.dir)) {
+                auto it = std::filesystem::directory_iterator(m_server.dir);
+                dirEmpty = (it == std::filesystem::directory_iterator());
+            }
+        } catch (...) { dirEmpty = true; }
+
+        const char *deployLabel = dirEmpty ? "Install Server" : "Verify / Update";
+        if (ImGui::Button(deployLabel))
+            m_manager->deployOrUpdateServer(m_server);
+    }
 
     // Graceful restart with countdown
     ImGui::SeparatorText("Graceful Restart");
@@ -1023,12 +1038,26 @@ void ServerTabWidget::renderConsoleTab()
 {
     ImGui::SeparatorText("RCON Console");
 
-    // Output area
-    ImGui::BeginChild("##ConsoleOutput", ImVec2(-1, -40), ImGuiChildFlags_Borders);
-    ImGui::TextUnformatted(m_consoleOutput.c_str());
-    if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
-        ImGui::SetScrollHereY(1.0f);
-    ImGui::EndChild();
+    // Copy button for console output
+    if (ImGui::Button("📋 Copy Console")) {
+        ImGui::SetClipboardText(m_consoleOutput.c_str());
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("🗑 Clear")) {
+        m_consoleOutput.clear();
+    }
+
+    // Output area – read-only InputTextMultiline for select + copy
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    ImVec2 outputSize(-1, avail.y - 30.0f);
+    // Copy into a mutable buffer to avoid const_cast UB
+    static std::vector<char> consoleBuf;
+    consoleBuf.assign(m_consoleOutput.begin(), m_consoleOutput.end());
+    consoleBuf.push_back('\0');
+    ImGui::InputTextMultiline("##ConsoleOutput",
+                              consoleBuf.data(),
+                              consoleBuf.size(), outputSize,
+                              ImGuiInputTextFlags_ReadOnly);
 
     // Input line with Up/Down arrow history navigation
     bool send = ImGui::InputText("##CmdInput", m_consoleCmdBuf, sizeof(m_consoleCmdBuf),
@@ -1068,9 +1097,22 @@ void ServerTabWidget::renderLogsTab()
     }
 
     ImGui::SeparatorText("Server Log");
-    ImGui::BeginChild("##LogView", ImVec2(-1, -1), ImGuiChildFlags_Borders);
-    ImGui::TextUnformatted(m_logContent.c_str());
-    if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
-        ImGui::SetScrollHereY(1.0f);
-    ImGui::EndChild();
+
+    // Copy to clipboard button
+    if (ImGui::Button("📋 Copy All")) {
+        ImGui::SetClipboardText(m_logContent.c_str());
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("(Select text below with mouse to highlight, Ctrl+C to copy selection)");
+
+    // Use InputTextMultiline in read-only mode so users can highlight and
+    // copy text for debugging.
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    // Copy into a mutable buffer to avoid const_cast UB
+    static std::vector<char> logBuf;
+    logBuf.assign(m_logContent.begin(), m_logContent.end());
+    logBuf.push_back('\0');
+    ImGui::InputTextMultiline("##LogView", logBuf.data(),
+                              logBuf.size(), avail,
+                              ImGuiInputTextFlags_ReadOnly);
 }
