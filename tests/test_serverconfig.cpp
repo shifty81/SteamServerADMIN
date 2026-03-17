@@ -5166,6 +5166,64 @@ TEST(SteamCmdModule, DeployServerQuotesPathWithSpaces)
     EXPECT_TRUE(fs::exists(dirWithSpaces));
 }
 
+TEST(SteamCmdModule, BuildCommandLineNoSpaces)
+{
+    // When neither the binary nor args contain spaces, no quoting is added
+    std::string cmd = SteamCmdModule::buildCommandLine("/usr/bin/steamcmd",
+        {"+login", "anonymous", "+quit"});
+    EXPECT_NE(cmd.find("/usr/bin/steamcmd"), std::string::npos);
+    EXPECT_NE(cmd.find("+login"), std::string::npos);
+    EXPECT_NE(cmd.find("anonymous"), std::string::npos);
+    EXPECT_NE(cmd.find("2>&1"), std::string::npos);
+}
+
+TEST(SteamCmdModule, BuildCommandLineQuotesBinaryWithSpaces)
+{
+    // Binary path containing spaces must be quoted
+    std::string cmd = SteamCmdModule::buildCommandLine("/path with spaces/steamcmd",
+        {"+login", "anonymous", "+quit"});
+#ifdef _WIN32
+    // On Windows the whole command is wrapped in an extra pair of quotes
+    EXPECT_EQ(cmd.front(), '"');
+    EXPECT_EQ(cmd.back(), '"');
+    // Inner binary path should still be double-quoted
+    EXPECT_NE(cmd.find("\"\\path with spaces\\steamcmd\""), std::string::npos);
+#else
+    EXPECT_NE(cmd.find("'/path with spaces/steamcmd'"), std::string::npos);
+#endif
+}
+
+TEST(SteamCmdModule, BuildCommandLineQuotesArgWithSpaces)
+{
+    // An argument containing spaces must be quoted
+    std::string cmd = SteamCmdModule::buildCommandLine("/usr/bin/steamcmd",
+        {"+force_install_dir", "/srv/my server"});
+#ifdef _WIN32
+    EXPECT_NE(cmd.find("\"/srv/my server\""), std::string::npos);
+#else
+    EXPECT_NE(cmd.find("'/srv/my server'"), std::string::npos);
+#endif
+}
+
+TEST(SteamCmdModule, BuildCommandLineBothPathsWithSpaces)
+{
+    // When BOTH the binary and an argument contain spaces, both must be
+    // properly quoted.  This is the exact scenario that caused the
+    // 'C:\GIT' is not recognized bug on Windows.
+    std::string cmd = SteamCmdModule::buildCommandLine(
+        "/path with spaces/steamcmd",
+        {"+login", "anonymous", "+force_install_dir", "/srv/my server", "+quit"});
+#ifdef _WIN32
+    // On Windows the entire command must be wrapped in outer quotes
+    EXPECT_EQ(cmd.front(), '"');
+    EXPECT_EQ(cmd.back(), '"');
+#else
+    EXPECT_NE(cmd.find("'/path with spaces/steamcmd'"), std::string::npos);
+    EXPECT_NE(cmd.find("'/srv/my server'"), std::string::npos);
+#endif
+    EXPECT_NE(cmd.find("2>&1"), std::string::npos);
+}
+
 // ===========================================================================
 // deployOrUpdateServer tests
 // ===========================================================================

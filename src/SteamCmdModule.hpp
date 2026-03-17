@@ -62,6 +62,16 @@ public:
      */
     static std::string defaultInstallDir();
 
+    /**
+     * @brief Build a properly quoted command line from a binary path and arguments.
+     *
+     * On Windows, wraps the entire command in an extra pair of double quotes so
+     * that cmd.exe /c (used by popen) does not strip inner quoting when
+     * multiple arguments contain spaces.
+     */
+    static std::string buildCommandLine(const std::string &binary,
+                                        const std::vector<std::string> &args);
+
     /** Callback invoked for each line of SteamCMD output. */
     std::function<void(const std::string &line)> onOutputLine;
 
