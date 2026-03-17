@@ -127,6 +127,10 @@ bool RconClient::connectToServer(const std::string &host, int port, const std::s
 
     m_connected = true;
 
+    // Telnet mode: use plain-text password authentication (7DTD, etc.)
+    if (m_telnetMode)
+        return telnetAuth(password, timeoutMs);
+
     // Send auth packet
     Packet auth;
     auth.id   = m_nextId++;
@@ -177,6 +181,9 @@ std::string RconClient::sendCommand(const std::string &command, int timeoutMs)
         emitError("Not connected to RCON");
         return {};
     }
+
+    if (m_telnetMode)
+        return telnetSendCommand(command, timeoutMs);
 
     Packet cmd;
     cmd.id   = m_nextId++;
@@ -281,4 +288,75 @@ bool RconClient::recvPacket(Packet &pkt, int timeoutMs)
     }
 
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// Telnet-mode helpers (7 Days to Die, etc.)
+// ---------------------------------------------------------------------------
+
+std::string RconClient::readAvailable(int timeoutMs)
+{
+    std::string result;
+    char buf[1024];
+    while (waitForData(timeoutMs)) {
+        int n = socketRecv(buf, sizeof(buf) - 1);
+        if (n <= 0) break;
+        result.append(buf, n);
+        // After first chunk, use a short timeout for any remaining data
+        timeoutMs = 200;
+    }
+    return result;
+}
+
+bool RconClient::telnetAuth(const std::string &password, int timeoutMs)
+{
+    // Read welcome / password prompt from the telnet server
+    std::string welcome = readAvailable(timeoutMs);
+
+    // If server didn't send a prompt the connection may still be valid
+    // (some 7DTD configs have TelnetPassword empty → no prompt).
+    if (password.empty())
+        return true;
+
+    // Send password followed by newline
+    std::string passLine = password + "\n";
+    if (socketSend(passLine.c_str(), static_cast<int>(passLine.size())) <= 0) {
+        emitError("Failed to send telnet password");
+        disconnect();
+        return false;
+    }
+
+    // Read auth response
+    std::string authResp = readAvailable(timeoutMs);
+
+    // Accept common success indicators from 7DTD / generic telnet servers
+    if (authResp.find("successful") != std::string::npos ||
+        authResp.find("Logon") != std::string::npos ||
+        authResp.find("authenticated") != std::string::npos ||
+        authResp.find("Welcome") != std::string::npos) {
+        return true;
+    }
+
+    // If the response contains an explicit failure keyword, reject
+    if (authResp.find("incorrect") != std::string::npos ||
+        authResp.find("denied") != std::string::npos) {
+        emitError("Telnet authentication failed: wrong password");
+        disconnect();
+        return false;
+    }
+
+    // No clear indicator – assume success (the server may not echo anything)
+    return true;
+}
+
+std::string RconClient::telnetSendCommand(const std::string &command, int timeoutMs)
+{
+    std::string cmdLine = command + "\n";
+    if (socketSend(cmdLine.c_str(), static_cast<int>(cmdLine.size())) <= 0) {
+        emitError("Failed to send telnet command");
+        m_connected = false;
+        return {};
+    }
+
+    return readAvailable(timeoutMs);
 }

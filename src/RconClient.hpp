@@ -26,7 +26,9 @@ constexpr SocketType kInvalidSocket = -1;
 #endif
 
 /**
- * @brief Implements the Valve Source RCON protocol.
+ * @brief Implements the Valve Source RCON protocol, with optional plain-telnet
+ *        mode for games like 7 Days to Die that expose a telnet console instead
+ *        of the binary Source RCON protocol.
  *
  * https://developer.valvesoftware.com/wiki/Source_RCON_Protocol
  */
@@ -34,6 +36,11 @@ class RconClient {
 public:
     RconClient();
     ~RconClient();
+
+    /** Enable plain-telnet mode (for 7DTD and similar games). Must be called
+     *  before connectToServer(). */
+    void setTelnetMode(bool enabled) { m_telnetMode = enabled; }
+    bool isTelnetMode() const { return m_telnetMode; }
 
     bool connectToServer(const std::string &host, int port, const std::string &password,
                          int timeoutMs = 5000);
@@ -71,6 +78,12 @@ private:
     int socketSend(const void *data, int len);
     int socketRecv(void *buf, int len);
     void emitError(const std::string &msg);
+
+    // Telnet-mode helpers (7DTD)
+    bool m_telnetMode = false;
+    bool telnetAuth(const std::string &password, int timeoutMs);
+    std::string telnetSendCommand(const std::string &command, int timeoutMs);
+    std::string readAvailable(int timeoutMs);
 
     SocketType m_socket = kInvalidSocket;
     int m_nextId = 1;

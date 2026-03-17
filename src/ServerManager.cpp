@@ -1426,13 +1426,29 @@ RconClient *ServerManager::acquireRcon(const ServerConfig &server)
     if (it != m_rconPool.end() && it->second && it->second->isConnected())
         return it->second.get();
 
+    // Connection-failure cooldown: don't spam reconnection attempts
+    auto failIt = m_rconFailTimes.find(server.name);
+    if (failIt != m_rconFailTimes.end()) {
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::steady_clock::now() - failIt->second).count();
+        if (elapsed < kRconFailCooldownSeconds)
+            return nullptr;   // still in cooldown
+    }
+
     // Create or reconnect
     auto client = std::make_unique<RconClient>();
+
+    // 7 Days to Die (appid 294420) uses a plain telnet console, not Source RCON
+    if (server.appid == 294420)
+        client->setTelnetMode(true);
+
     if (!client->connectToServer(server.rcon.host, server.rcon.port,
                                  server.rcon.password, 3000)) {
         m_rconPool.erase(server.name);   // clear stale entry
+        m_rconFailTimes[server.name] = std::chrono::steady_clock::now();
         return nullptr;
     }
+    m_rconFailTimes.erase(server.name);  // clear cooldown on success
     RconClient *ptr = client.get();
     m_rconPool[server.name] = std::move(client);
     return ptr;
@@ -1441,6 +1457,7 @@ RconClient *ServerManager::acquireRcon(const ServerConfig &server)
 void ServerManager::releaseRcon(const std::string &serverName)
 {
     m_rconPool.erase(serverName);
+    m_rconFailTimes.erase(serverName);  // allow immediate reconnect after stop/restart
 }
 
 // ---------------------------------------------------------------------------
