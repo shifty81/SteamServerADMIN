@@ -192,6 +192,9 @@ struct ServerConfig {
         if (gracefulShutdownSeconds < 0)
             errors.push_back("Graceful shutdown timeout must not be negative.");
 
+        if (gracefulShutdownSeconds > 3600)
+            errors.push_back("Graceful shutdown timeout must not exceed 3600 seconds.");
+
         if (autoUpdateCheckIntervalMinutes < 0)
             errors.push_back("Auto-update check interval must not be negative.");
 
@@ -200,6 +203,18 @@ struct ServerConfig {
 
         if (totalCrashes < 0)
             errors.push_back("Total crashes must not be negative.");
+
+        // Detect duplicate tags
+        {
+            std::vector<std::string> seen;
+            for (const auto &tag : tags) {
+                std::string t = trimString(tag);
+                if (!t.empty() && std::find(seen.begin(), seen.end(), t) != seen.end())
+                    errors.push_back("Duplicate tag: " + t);
+                if (!t.empty())
+                    seen.push_back(t);
+            }
+        }
 
         return errors;
     }

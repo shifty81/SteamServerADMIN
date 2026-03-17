@@ -271,6 +271,107 @@ struct GameTemplate {
                 "ShooterGame/Saved/Config/LinuxServer/Game.ini" },
               27020 },
 
+            { "Don't Starve Together",
+              343050,
+#ifdef _WIN32
+              "bin64/dontstarve_dedicated_server_nullrenderer_x64.exe",
+#else
+              "bin64/dontstarve_dedicated_server_nullrenderer_x64",
+#endif
+              "-console -cluster MyDediServer -shard Master",
+              "dst",
+              { "cluster.ini",
+                "cluster_token.txt" },
+              0 },   // DST has no RCON
+
+            { "ARMA 3",
+              233780,
+#ifdef _WIN32
+              "arma3server_x64.exe",
+#else
+              "arma3server_x64",
+#endif
+              "-name=server -config=server.cfg -port=2302",
+              "arma3",
+              { "server.cfg",
+                "basic.cfg" },
+              2302 },  // ARMA 3 uses BattlEye RCON
+
+            { "Squad",
+              403240,
+#ifdef _WIN32
+              "SquadGameServer.exe",
+#else
+              "SquadGameServer.sh",
+#endif
+              "-log",
+              "squad",
+              { "SquadGame/ServerConfig/Server.cfg",
+                "SquadGame/ServerConfig/Rcon.cfg",
+                "SquadGame/ServerConfig/Admins.cfg" },
+              21114 },
+
+            { "Insurgency: Sandstorm",
+              581330,
+#ifdef _WIN32
+              "InsurgencyServer-Win64-Shipping.exe",
+#else
+              "InsurgencyServer-Linux-Shipping",
+#endif
+              "-Port=27102 -QueryPort=27131 -log",
+              "insurgency",
+              { "Insurgency/Saved/Config/LinuxServer/Game.ini",
+                "Insurgency/Saved/Config/LinuxServer/Engine.ini" },
+              27015 },
+
+            { "Barotrauma",
+              1026340,
+#ifdef _WIN32
+              "DedicatedServer.exe",
+#else
+              "DedicatedServer",
+#endif
+              "",
+              "barotrauma",
+              { "serversettings.xml" },
+              0 },   // Barotrauma has no RCON
+
+            { "Space Engineers",
+              298740,
+#ifdef _WIN32
+              "DedicatedServer64/SpaceEngineersDedicated.exe",
+#else
+              "DedicatedServer64/SpaceEngineersDedicated",
+#endif
+              "-console",
+              "space_engineers",
+              { "SpaceEngineers-Dedicated.cfg" },
+              0 },   // Space Engineers has no standard RCON
+
+            { "Sons of the Forest",
+              2465200,
+#ifdef _WIN32
+              "SonsOfTheForestDS.exe",
+#else
+              "SonsOfTheForestDS",
+#endif
+              "",
+              "sons_of_the_forest",
+              { "dedicatedserver.cfg" },
+              0 },   // Sons of the Forest has no RCON
+
+            { "Mordhau",
+              629800,
+#ifdef _WIN32
+              "MordhauServer.exe",
+#else
+              "MordhauServer-Linux-Shipping",
+#endif
+              "-log -Port=7777 -QueryPort=27015",
+              "mordhau",
+              { "Mordhau/Saved/Config/LinuxServer/Game.ini" },
+              0 },   // Mordhau has no standard RCON
+
             { "Custom (manual entry)",
               0,
               "",

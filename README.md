@@ -37,7 +37,7 @@ A cross-platform Dear ImGui / GLFW desktop application for managing SteamCMD-bas
 | **Cluster summary** | Home Dashboard shows total / online / offline server counts at a glance |
 | **Broadcast command** | Send an RCON command to all managed servers simultaneously |
 | **Tab status indicators** | Server tabs display 🟢/🔴 status indicators that update in real time |
-| **Game server templates** | Pre-defined profiles for popular games (ARK:SA, CS2, Rust, Valheim, Palworld, Satisfactory, Project Zomboid) with pre-filled AppID, executable, and launch arguments when adding a server |
+| **Game server templates** | Pre-defined profiles for popular games (ARK:SA, CS2, Rust, Valheim, Palworld, Satisfactory, Project Zomboid, 7 Days to Die, DayZ, Squad, ARMA 3, and more) with pre-filled AppID, executable, and launch arguments when adding a server |
 | **RCON command history** | Up/Down arrow keys in the RCON console recall previously sent commands |
 | **Server uptime display** | Overview tab shows how long each server has been running |
 | **Crash restart backoff** | Exponential backoff on crash auto-restart (up to 5 attempts) prevents infinite restart loops |
