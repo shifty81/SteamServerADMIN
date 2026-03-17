@@ -173,16 +173,7 @@ bool SteamCmdModule::installSteamCmd(const std::string &installDir)
     if (onOutputLine) onOutputLine("Running SteamCMD first-time setup (this may take a minute)...");
 
     {
-        auto quoteIfNeeded = [](const std::string &s) -> std::string {
-            if (s.find(' ') == std::string::npos) return s;
-#ifdef _WIN32
-            return "\"" + s + "\"";
-#else
-            return "'" + s + "'";
-#endif
-        };
-
-        std::string bootstrapCmd = quoteIfNeeded(m_steamCmdPath) + " +quit 2>&1";
+        std::string bootstrapCmd = buildCommandLine(m_steamCmdPath, {"+quit"});
         FILE *bsPipe = popen(bootstrapCmd.c_str(), "r");
         if (bsPipe) {
             while (fgets(buffer, sizeof(buffer), bsPipe)) {
@@ -222,11 +213,9 @@ std::string SteamCmdModule::defaultInstallDir()
 
 // ---------------------------------------------------------------------------
 
-bool SteamCmdModule::runSteamCmd(const std::vector<std::string> &args)
+std::string SteamCmdModule::buildCommandLine(const std::string &binary,
+                                             const std::vector<std::string> &args)
 {
-    // Build command line – quote the binary path and any argument that
-    // contains spaces so that OS paths like "C:\GIT PROJECTS\..." work
-    // correctly.  On Windows we use double-quotes; on Unix single-quotes.
     auto quoteIfNeeded = [](const std::string &s) -> std::string {
         if (s.find(' ') == std::string::npos)
             return s;
@@ -237,10 +226,27 @@ bool SteamCmdModule::runSteamCmd(const std::vector<std::string> &args)
 #endif
     };
 
-    std::string cmd = quoteIfNeeded(m_steamCmdPath);
+    std::string cmd = quoteIfNeeded(binary);
     for (const auto &arg : args)
         cmd += " " + quoteIfNeeded(arg);
     cmd += " 2>&1";
+
+#ifdef _WIN32
+    // On Windows, popen() invokes cmd.exe /c which has special
+    // quote-stripping rules: when the command string contains multiple
+    // double-quoted substrings, cmd.exe strips the first and last quote
+    // characters, breaking the executable path.  Wrapping the entire
+    // command in an extra pair of quotes forces cmd.exe to preserve the
+    // inner quoting.
+    cmd = "\"" + cmd + "\"";
+#endif
+
+    return cmd;
+}
+
+bool SteamCmdModule::runSteamCmd(const std::vector<std::string> &args)
+{
+    std::string cmd = buildCommandLine(m_steamCmdPath, args);
 
     FILE *pipe = popen(cmd.c_str(), "r");
     if (!pipe) {

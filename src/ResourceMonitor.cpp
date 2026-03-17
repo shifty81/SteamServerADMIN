@@ -187,6 +187,72 @@ void ResourceMonitor::poll()
         }
         tp.prevCpuTime  = cpuTime;
         tp.prevWallTime = wallNow;
+#elif defined(_WIN32)
+        // Read kernel + user time via GetProcessTimes (in 100-ns intervals)
+        {
+            HANDLE hProcess = OpenProcess(PROCESS_QUERY_INFORMATION,
+                                          FALSE, static_cast<DWORD>(tp.pid));
+            if (hProcess) {
+                FILETIME creationTime, exitTime, kernelTime, userTime;
+                if (GetProcessTimes(hProcess, &creationTime, &exitTime,
+                                    &kernelTime, &userTime)) {
+                    int64_t kernel = (static_cast<int64_t>(kernelTime.dwHighDateTime) << 32)
+                                     | kernelTime.dwLowDateTime;
+                    int64_t user   = (static_cast<int64_t>(userTime.dwHighDateTime) << 32)
+                                     | userTime.dwLowDateTime;
+                    int64_t cpuTime = kernel + user;  // 100-ns intervals
+
+                    auto wallNow = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::system_clock::now().time_since_epoch()).count();
+
+                    if (tp.prevCpuTime >= 0 && tp.prevWallTime > 0) {
+                        int64_t deltaCpu  = cpuTime - tp.prevCpuTime;
+                        int64_t deltaWall = wallNow - tp.prevWallTime;
+                        if (deltaWall > 0) {
+                            double cpuSec  = static_cast<double>(deltaCpu) / 10000000.0;
+                            double wallSec = static_cast<double>(deltaWall) / 1000.0;
+                            ru.cpuPercent = (cpuSec / wallSec) * 100.0;
+                        }
+                    }
+                    tp.prevCpuTime  = cpuTime;
+                    tp.prevWallTime = wallNow;
+                }
+                CloseHandle(hProcess);
+            }
+        }
+#elif defined(__APPLE__)
+        // Read user + system time via mach task_info (microseconds)
+        {
+            mach_port_t task;
+            if (task_for_pid(mach_task_self(), static_cast<int>(tp.pid), &task) == KERN_SUCCESS) {
+                task_thread_times_info_data_t times;
+                mach_msg_type_number_t count = TASK_THREAD_TIMES_INFO_COUNT;
+                if (task_info(task, TASK_THREAD_TIMES_INFO,
+                              reinterpret_cast<task_info_t>(&times), &count) == KERN_SUCCESS) {
+                    int64_t cpuTime =
+                        static_cast<int64_t>(times.user_time.seconds) * 1000000
+                        + times.user_time.microseconds
+                        + static_cast<int64_t>(times.system_time.seconds) * 1000000
+                        + times.system_time.microseconds;  // microseconds
+
+                    auto wallNow = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::system_clock::now().time_since_epoch()).count();
+
+                    if (tp.prevCpuTime >= 0 && tp.prevWallTime > 0) {
+                        int64_t deltaCpu  = cpuTime - tp.prevCpuTime;
+                        int64_t deltaWall = wallNow - tp.prevWallTime;
+                        if (deltaWall > 0) {
+                            double cpuSec  = static_cast<double>(deltaCpu) / 1000000.0;
+                            double wallSec = static_cast<double>(deltaWall) / 1000.0;
+                            ru.cpuPercent = (cpuSec / wallSec) * 100.0;
+                        }
+                    }
+                    tp.prevCpuTime  = cpuTime;
+                    tp.prevWallTime = wallNow;
+                }
+                mach_port_deallocate(mach_task_self(), task);
+            }
+        }
 #else
         (void)tp;
 #endif
