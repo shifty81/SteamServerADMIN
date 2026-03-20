@@ -6109,3 +6109,197 @@ TEST(ServerConfig, FormatRestartWarningEmptyUsesDefault)
     auto msg = s.formatRestartWarning(3);
     EXPECT_NE(msg.find("3 minute(s)"), std::string::npos);
 }
+
+// ---------------------------------------------------------------------------
+// testRconConnection – without a live server, only the validation paths fire
+// ---------------------------------------------------------------------------
+
+TEST(ServerManager, TestRconConnectionEmptyHostFails)
+{
+    const std::string tmpDir = std::filesystem::temp_directory_path().string()
+        + "/ssa_test_rcon_" + std::to_string(std::rand());
+    std::filesystem::create_directories(tmpDir);
+    ServerManager mgr(tmpDir + "/servers.json");
+
+    ServerConfig s;
+    s.name  = "TestServer";
+    s.appid = 730;
+    s.dir   = tmpDir;
+    s.rcon.host     = "";    // blank host
+    s.rcon.port     = 27015;
+    s.rcon.password = "secret";
+    mgr.servers().push_back(s);
+
+    std::string err;
+    bool ok = mgr.testRconConnection(s, err);
+    EXPECT_FALSE(ok);
+    EXPECT_FALSE(err.empty());
+
+    std::filesystem::remove_all(tmpDir);
+}
+
+TEST(ServerManager, TestRconConnectionInvalidPortFails)
+{
+    const std::string tmpDir = std::filesystem::temp_directory_path().string()
+        + "/ssa_test_rcon2_" + std::to_string(std::rand());
+    std::filesystem::create_directories(tmpDir);
+    ServerManager mgr(tmpDir + "/servers.json");
+
+    ServerConfig s;
+    s.name  = "TestServer";
+    s.appid = 730;
+    s.dir   = tmpDir;
+    s.rcon.host     = "127.0.0.1";
+    s.rcon.port     = 0;    // invalid port
+    s.rcon.password = "secret";
+
+    std::string err;
+    bool ok = mgr.testRconConnection(s, err);
+    EXPECT_FALSE(ok);
+    EXPECT_FALSE(err.empty());
+
+    std::filesystem::remove_all(tmpDir);
+}
+
+TEST(ServerManager, TestRconConnectionUnreachableHostFails)
+{
+    // Connect to an address that will refuse / time out immediately.
+    // Port 1 on loopback is almost always closed.
+    const std::string tmpDir = std::filesystem::temp_directory_path().string()
+        + "/ssa_test_rcon3_" + std::to_string(std::rand());
+    std::filesystem::create_directories(tmpDir);
+    ServerManager mgr(tmpDir + "/servers.json");
+
+    ServerConfig s;
+    s.name  = "TestServer";
+    s.appid = 730;
+    s.dir   = tmpDir;
+    s.rcon.host     = "127.0.0.1";
+    s.rcon.port     = 1;  // almost certainly closed
+    s.rcon.password = "secret";
+
+    std::string err;
+    bool ok = mgr.testRconConnection(s, err);
+    // Either connection refused or timed out – either way it should fail
+    EXPECT_FALSE(ok);
+    EXPECT_FALSE(err.empty());
+
+    std::filesystem::remove_all(tmpDir);
+}
+
+// ---------------------------------------------------------------------------
+// sendTestWebhook – no live Discord endpoint; just verifies no crash
+// ---------------------------------------------------------------------------
+
+TEST(ServerManager, SendTestWebhookEmptyUrlIsNoOp)
+{
+    const std::string tmpDir = std::filesystem::temp_directory_path().string()
+        + "/ssa_test_webhook_" + std::to_string(std::rand());
+    std::filesystem::create_directories(tmpDir);
+    ServerManager mgr(tmpDir + "/servers.json");
+
+    ServerConfig s;
+    s.name              = "TestServer";
+    s.appid             = 730;
+    s.dir               = tmpDir;
+    s.discordWebhookUrl = "";   // no URL configured
+
+    // Must not crash / throw even with no URL
+    EXPECT_NO_THROW(mgr.sendTestWebhook(s));
+
+    std::filesystem::remove_all(tmpDir);
+}
+
+TEST(ServerManager, SendTestWebhookWithCustomTemplate)
+{
+    const std::string tmpDir = std::filesystem::temp_directory_path().string()
+        + "/ssa_test_webhook2_" + std::to_string(std::rand());
+    std::filesystem::create_directories(tmpDir);
+    ServerManager mgr(tmpDir + "/servers.json");
+
+    ServerConfig s;
+    s.name              = "TestServer";
+    s.appid             = 730;
+    s.dir               = tmpDir;
+    // Use an invalid URL – curl will fail silently (fire-and-forget)
+    s.discordWebhookUrl = "http://127.0.0.1:1/nonexistent";
+    s.webhookTemplate   = "{server} fired {event}";
+
+    // Must not crash regardless of delivery outcome
+    EXPECT_NO_THROW(mgr.sendTestWebhook(s));
+
+    std::filesystem::remove_all(tmpDir);
+}
+
+// ---------------------------------------------------------------------------
+// Sidebar search – server matching by name / group / tag
+// ---------------------------------------------------------------------------
+
+// Shared helper: case-insensitive substring check (mirrors containsIgnoreCase
+// in MainWindow.cpp).
+static bool sidebarCi(const std::string &haystack, const std::string &needle)
+{
+    if (needle.empty()) return true;
+    auto it = std::search(haystack.begin(), haystack.end(),
+                          needle.begin(),  needle.end(),
+                          [](char a, char b){ return std::tolower((unsigned char)a)
+                                                   == std::tolower((unsigned char)b); });
+    return it != haystack.end();
+}
+
+// Returns true when the query matches a server's name, group, or any tag.
+static bool sidebarMatches(const ServerConfig &s, const std::string &q)
+{
+    if (sidebarCi(s.name, q)) return true;
+    if (sidebarCi(s.group, q)) return true;
+    for (const auto &tag : s.tags)
+        if (sidebarCi(tag, q)) return true;
+    return false;
+}
+
+TEST(ServerConfig, SidebarSearchMatchesName)
+{
+    ServerConfig s;
+    s.name  = "ARK Survival";
+    s.group = "Production";
+    s.tags  = {"pvp", "cluster"};
+
+    EXPECT_TRUE(sidebarMatches(s, "ark"));
+    EXPECT_TRUE(sidebarMatches(s, "ARK"));
+    EXPECT_TRUE(sidebarMatches(s, "Survival"));
+    EXPECT_TRUE(sidebarMatches(s, "Production"));
+    EXPECT_TRUE(sidebarMatches(s, "pvp"));
+    EXPECT_TRUE(sidebarMatches(s, "cluster"));
+    EXPECT_FALSE(sidebarMatches(s, "zombie"));
+    EXPECT_FALSE(sidebarMatches(s, "valheim"));
+}
+
+TEST(ServerConfig, SidebarSearchMatchesGroup)
+{
+    ServerConfig s;
+    s.name  = "CS2 Server";
+    s.group = "Testing";
+    s.tags  = {};
+
+    EXPECT_TRUE(sidebarCi(s.group, "test"));
+    EXPECT_TRUE(sidebarCi(s.group, "Testing"));
+    EXPECT_FALSE(sidebarCi(s.group, "Production"));
+}
+
+TEST(ServerConfig, SidebarSearchMatchesTag)
+{
+    ServerConfig s;
+    s.name  = "Rust Server";
+    s.group = "";
+    s.tags  = {"modded", "vanilla", "pve"};
+
+    bool foundPve = false;
+    for (const auto &tag : s.tags)
+        if (sidebarCi(tag, "pve")) { foundPve = true; break; }
+    EXPECT_TRUE(foundPve);
+
+    bool foundUnknown = false;
+    for (const auto &tag : s.tags)
+        if (sidebarCi(tag, "hardcore")) { foundUnknown = true; break; }
+    EXPECT_FALSE(foundUnknown);
+}

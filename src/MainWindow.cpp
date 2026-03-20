@@ -398,8 +398,17 @@ void MainWindow::renderSidebar()
     for (const auto &entry : sorted) {
         const ServerConfig *s = entry.config;
 
-        if (!m_searchText.empty() && !containsIgnoreCase(s->name, m_searchText))
-            continue;
+        if (!m_searchText.empty()) {
+            bool match = containsIgnoreCase(s->name, m_searchText)
+                      || containsIgnoreCase(s->group, m_searchText);
+            if (!match) {
+                for (const auto &tag : s->tags) {
+                    if (containsIgnoreCase(tag, m_searchText)) { match = true; break; }
+                }
+            }
+            if (!match)
+                continue;
+        }
 
         bool running = (entry.index < static_cast<int>(m_cachedRunningStatus.size()))
             ? m_cachedRunningStatus[entry.index] : false;
