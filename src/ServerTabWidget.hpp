@@ -82,6 +82,12 @@ private:
     // Tags (comma-separated editing buffer)
     char m_settTags[1024]    = {};
 
+    // Feedback for test buttons
+    std::string m_rconTestResult;   // "OK", error message, or empty before first test
+    bool        m_rconTestOk = false;
+    std::string m_webhookTestResult; // "Sent." or "No URL configured.", or empty
+    bool        m_webhookTestOk = false;
+
     // Environment variables (key=value pair editing buffers)
     char m_envKey[256]       = {};
     char m_envValue[512]     = {};

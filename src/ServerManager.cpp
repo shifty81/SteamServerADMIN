@@ -1604,6 +1604,50 @@ std::string ServerManager::sendRconCommand(const ServerConfig &server, const std
 }
 
 // ---------------------------------------------------------------------------
+// RCON connection test (temporary connection, independent of pool)
+// ---------------------------------------------------------------------------
+
+bool ServerManager::testRconConnection(const ServerConfig &server, std::string &errorOut)
+{
+    if (trimString(server.rcon.host).empty()) {
+        errorOut = "RCON host is not configured.";
+        return false;
+    }
+    if (server.rcon.port < 1 || server.rcon.port > 65535) {
+        errorOut = "RCON port is invalid.";
+        return false;
+    }
+
+    RconClient probe;
+    if (server.appid == 294420) // 7 Days to Die uses telnet
+        probe.setTelnetMode(true);
+
+    bool ok = probe.connectToServer(server.rcon.host, server.rcon.port, server.rcon.password);
+    if (!ok) {
+        errorOut = "Connection failed (host unreachable or wrong password).";
+        return false;
+    }
+    errorOut.clear();
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Test Discord webhook
+// ---------------------------------------------------------------------------
+
+void ServerManager::sendTestWebhook(const ServerConfig &server)
+{
+    if (trimString(server.discordWebhookUrl).empty())
+        return;
+    m_webhook.sendNotification(server.discordWebhookUrl,
+                               server.name,
+                               "test notification",
+                               server.webhookTemplate.empty()
+                                   ? "**[{server}]** SSA test notification sent at {timestamp}."
+                                   : server.webhookTemplate);
+}
+
+// ---------------------------------------------------------------------------
 // Cluster operations
 // ---------------------------------------------------------------------------
 

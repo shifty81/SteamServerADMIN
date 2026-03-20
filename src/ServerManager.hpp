@@ -124,6 +124,27 @@ public:
     int getPlayerCount(const ServerConfig &server);
     std::string sendRconCommand(const ServerConfig &server, const std::string &cmd);
 
+    /**
+     * @brief Test whether a new RCON connection can be established (and
+     *        authenticated) with the given server configuration.
+     *
+     * This opens a *temporary* connection that is independent of the
+     * persistent RCON pool so it does not disrupt running commands.
+     *
+     * @param server   The server whose RCON settings are tested.
+     * @param errorOut On failure, receives a human-readable error message.
+     * @return true if connection and authentication succeeded.
+     */
+    bool testRconConnection(const ServerConfig &server, std::string &errorOut);
+
+    /**
+     * @brief Send a test Discord notification to the webhook URL configured
+     *        in @p server.  The message identifies itself as a test.
+     *
+     * @param server The server whose discordWebhookUrl / webhookTemplate are used.
+     */
+    void sendTestWebhook(const ServerConfig &server);
+
     // ---- Server removal ----
     bool removeServer(const std::string &serverName);
 

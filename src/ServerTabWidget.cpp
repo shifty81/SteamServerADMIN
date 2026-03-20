@@ -290,6 +290,10 @@ void ServerTabWidget::renderSettingsTab()
         copyStr(m_hookOnUpdate, sizeof(m_hookOnUpdate), hookStr("onUpdate"));
 
         m_settingsInitialized = true;
+        m_rconTestResult.clear();
+        m_rconTestOk = false;
+        m_webhookTestResult.clear();
+        m_webhookTestOk = false;
     }
 
     ImGui::SeparatorText("Server Identity");
@@ -326,6 +330,26 @@ void ServerTabWidget::renderSettingsTab()
             ImGui::SetTooltip("Hold 'Show' to reveal.\n"
                               "Stored with XOR + base64 obfuscation in servers.json\n"
                               "(not encrypted, but better than plain text).");
+    }
+    if (ImGui::Button("Test RCON Connection##settRcon")) {
+        // Build a temporary config with the current (unsaved) RCON fields
+        ServerConfig tmp = m_server;
+        tmp.rcon.host     = m_settRconHost;
+        tmp.rcon.port     = m_settRconPort;
+        tmp.rcon.password = m_settRconPass;
+        std::string err;
+        m_rconTestOk = m_manager->testRconConnection(tmp, err);
+        if (m_rconTestOk)
+            m_rconTestResult = "OK: connection and authentication succeeded.";
+        else
+            m_rconTestResult = "Failed: " + err;
+    }
+    if (!m_rconTestResult.empty()) {
+        ImGui::SameLine();
+        if (m_rconTestOk)
+            ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.2f, 1.0f), "%s", m_rconTestResult.c_str());
+        else
+            ImGui::TextColored(ImVec4(0.9f, 0.3f, 0.3f, 1.0f), "%s", m_rconTestResult.c_str());
     }
 
     ImGui::SeparatorText("Paths");
@@ -367,6 +391,26 @@ void ServerTabWidget::renderSettingsTab()
     ImGui::SeparatorText("Webhooks");
     ImGui::InputText("Discord URL",    m_settWebhookUrl, sizeof(m_settWebhookUrl));
     ImGui::InputText("Message Template", m_settWebhookTpl, sizeof(m_settWebhookTpl));
+    if (ImGui::Button("Send Test Notification##settWebhook")) {
+        ServerConfig tmp = m_server;
+        tmp.discordWebhookUrl = m_settWebhookUrl;
+        tmp.webhookTemplate   = m_settWebhookTpl;
+        if (trimString(tmp.discordWebhookUrl).empty()) {
+            m_webhookTestOk     = false;
+            m_webhookTestResult = "No webhook URL configured.";
+        } else {
+            m_manager->sendTestWebhook(tmp);
+            m_webhookTestOk     = true;
+            m_webhookTestResult = "Sent. Check your Discord channel.";
+        }
+    }
+    if (!m_webhookTestResult.empty()) {
+        ImGui::SameLine();
+        if (m_webhookTestOk)
+            ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.2f, 1.0f), "%s", m_webhookTestResult.c_str());
+        else
+            ImGui::TextColored(ImVec4(0.9f, 0.3f, 0.3f, 1.0f), "%s", m_webhookTestResult.c_str());
+    }
 
     ImGui::SeparatorText("Organization");
     ImGui::InputText("Group",          m_settGroup,     sizeof(m_settGroup));
