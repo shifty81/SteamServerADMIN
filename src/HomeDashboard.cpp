@@ -306,6 +306,14 @@ void HomeDashboard::renderCard(ServerConfig &server, int index, float cardWidth)
 
     ImVec2 cardMin = ImGui::GetWindowPos();
 
+    // Split the draw list into 2 channels immediately:
+    //   channel 0 = glass background (drawn first → behind)
+    //   channel 1 = card content (drawn second → in front)
+    // All content below is emitted to channel 1 so it appears above the panel.
+    ImDrawList *dl = ImGui::GetWindowDrawList();
+    dl->ChannelsSplit(2);
+    dl->ChannelsSetCurrent(1);
+
     // ====== Card content ======
 
     // Status indicator + name
@@ -417,15 +425,15 @@ void HomeDashboard::renderCard(ServerConfig &server, int index, float cardWidth)
     renderContextMenu(server);
 
     // ====== Custom glass background (drawn behind content) ======
+    // Now that content has been emitted to channel 1, switch to channel 0
+    // (back layer) to draw the glass panel, then merge so the background
+    // is composited behind the text and buttons.
     ImVec2 cardMax(cardMin.x + cardWidth, cardMin.y + ImGui::GetWindowHeight());
     bool hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows);
 
-    ImDrawList *dl = ImGui::GetWindowDrawList();
-    dl->ChannelsSplit(2);
     dl->ChannelsSetCurrent(0);
     drawGlassPanel(dl, cardMin, cardMax, online, hovered);
     drawStatusStripe(dl, cardMin, cardMax, online, players);
-    dl->ChannelsSetCurrent(1);
     dl->ChannelsMerge();
 
     ImGui::EndChild();
