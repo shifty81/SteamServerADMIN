@@ -1,0 +1,108 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Tag name for the release (e.g. v0.1.0-beta)'
+        required: true
+        default: 'v0.1.0-beta'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: Linux
+            zip: SSA-Linux-x64.zip
+          - os: windows-latest
+            name: Windows
+            zip: SSA-Windows-x64.zip
+          - os: macos-latest
+            name: macOS
+            zip: SSA-macOS-x64.zip
+
+    runs-on: ${{ matrix.os }}
+    name: Build (${{ matrix.name }})
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgl1-mesa-dev libx11-dev \
+            libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+            libwayland-dev libxkbcommon-dev
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+        shell: bash
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+        shell: bash
+
+      - name: Package (Linux / macOS)
+        if: runner.os != 'Windows'
+        run: |
+          mkdir -p dist
+          cp build/SSA dist/SSA
+          chmod +x dist/SSA
+          cp README.md dist/
+          cd dist && zip -r ../${{ matrix.zip }} .
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          $exePath = if (Test-Path "build/Release/SSA.exe") { "build/Release/SSA.exe" } else { "build/SSA.exe" }
+          Copy-Item $exePath dist/SSA.exe
+          Copy-Item README.md dist/
+          Compress-Archive -Path dist/* -DestinationPath ${{ matrix.zip }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.zip }}
+          path: ${{ matrix.zip }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Resolve tag name
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.tag_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: SSA ${{ steps.tag.outputs.tag }}
+          draft: true
+          generate_release_notes: true
+          files: |
+            SSA-Windows-x64.zip
+            SSA-Linux-x64.zip
+            SSA-macOS-x64.zip

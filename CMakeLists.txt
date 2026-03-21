@@ -4,6 +4,12 @@ project(SSA VERSION 0.1.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Use the static MSVC runtime so release builds on Windows are self-contained
+# (testers don't need the Visual C++ Redistributable installed).
+if(MSVC)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
+
 include(FetchContent)
 
 # -------- GLFW (windowing / input) --------
