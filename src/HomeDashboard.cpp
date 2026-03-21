@@ -355,6 +355,12 @@ void HomeDashboard::renderCard(ServerConfig &server, int index, float cardWidth)
                         : transitional ? "\xF0\x9F\x9F\xA1" // 🟡 deploying / restarting
                                        : "\xF0\x9F\x9F\xA2"; // 🟢 online
     ImGui::Text("%s", light);
+    if (ImGui::IsItemHovered()) {
+        const char *statusDesc = !online       ? "Server is offline"
+                                 : transitional ? "Server is busy (deploying or restarting)"
+                                               : "Server is online";
+        ImGui::SetTooltip("%s", statusDesc);
+    }
     ImGui::SameLine();
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
     ImGui::SetWindowFontScale(1.1f);
@@ -394,12 +400,17 @@ void HomeDashboard::renderCard(ServerConfig &server, int index, float cardWidth)
             ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.10f, 0.10f, 0.15f, 0.7f));
             ImGui::ProgressBar(frac, ImVec2(-1.0f, 4.0f), "");
             ImGui::PopStyleColor(2);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("%.0f%% capacity (%d / %d players)",
+                                  frac * 100.0f, players, server.maxPlayers);
         } else {
             ImGui::TextColored(ImVec4(0.80f, 0.92f, 1.0f, 1.0f),
                                "Players: %d", players);
         }
     } else {
         ImGui::TextColored(ImVec4(0.50f, 0.50f, 0.56f, 1.0f), "Players: \xe2\x80\x93");
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("Player count unavailable (RCON not configured or server offline)");
     }
 
     // Uptime
@@ -475,15 +486,19 @@ void HomeDashboard::renderCard(ServerConfig &server, int index, float cardWidth)
     // ---- Glass-style action buttons ----
     if (glassButton("\xe2\x96\xb6 Start"))
         m_manager->startServer(server);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Start this server");
     ImGui::SameLine();
     if (glassButton("\xe2\x96\xa0 Stop"))
         m_manager->stopServer(server);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Stop this server");
     ImGui::SameLine();
     if (glassButton("\xe2\x86\xba Restart"))
         m_manager->restartServer(server);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Restart this server");
     ImGui::SameLine();
     if (glassButton("\xF0\x9F\x93\xA6 Backup"))
         m_manager->takeSnapshot(server);
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Take a backup snapshot now");
 
     // Deploy / Update
     {
@@ -512,6 +527,10 @@ void HomeDashboard::renderCard(ServerConfig &server, int index, float cardWidth)
                 if (onRequestDeploy)   onRequestDeploy(index);
                 if (onNavigateToServer) onNavigateToServer(index);
             }
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip(dirEmpty
+                    ? "Install the server via SteamCMD"
+                    : "Update the server to the latest version via SteamCMD");
         }
     }
 

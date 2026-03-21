@@ -158,9 +158,41 @@ void MainWindow::render()
         }
     }
 
+    // ---- Global keyboard shortcuts (no text input active) ----
+    if (!ImGui::GetIO().WantTextInput) {
+        ImGuiIO &io = ImGui::GetIO();
+        // Ctrl+H  →  Home tab
+        if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_H, false))
+            m_selectedTab = 0;
+        // Ctrl+L  →  Log tab
+        if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_L, false))
+            m_selectedTab = static_cast<int>(m_serverTabs.size()) + 1;
+        // Ctrl+N  →  Add Server dialog
+        if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_N, false))
+            m_showAddServer = true;
+        // Ctrl+S  →  Save all server configs
+        if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false))
+            m_manager->saveConfig();
+        // Ctrl+F  →  Focus sidebar search  (set flag consumed in renderSidebar)
+        if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_F, false))
+            m_focusSidebarSearch = true;
+        // 1..9  →  Quick-switch to server tab N (when Ctrl held)
+        if (io.KeyCtrl) {
+            for (int k = 0; k < 9; ++k) {
+                if (ImGui::IsKeyPressed(static_cast<ImGuiKey>(ImGuiKey_1 + k), false)) {
+                    int tabIdx = k + 1; // Tab 1 = first server
+                    if (tabIdx <= static_cast<int>(m_serverTabs.size()))
+                        m_selectedTab = tabIdx;
+                }
+            }
+        }
+    }
+
     const ImGuiViewport *viewport = ImGui::GetMainViewport();
+    static constexpr float kStatusBarHeight = 22.0f;
     ImGui::SetNextWindowPos(viewport->WorkPos);
-    ImGui::SetNextWindowSize(viewport->WorkSize);
+    ImGui::SetNextWindowSize(ImVec2(viewport->WorkSize.x,
+                                    viewport->WorkSize.y - kStatusBarHeight));
     ImGui::Begin("##MainWindow", nullptr,
                  ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                  ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse |
@@ -245,6 +277,7 @@ void MainWindow::render()
 
     ImGui::End();
 
+    renderStatusBar();
     renderNotifications();
 }
 
@@ -263,14 +296,16 @@ void MainWindow::renderMenuBar()
 
     if (ImGui::BeginMenuBar()) {
         if (ImGui::BeginMenu("File")) {
-            if (ImGui::MenuItem("Add Server..."))    m_showAddServer = true;
-            if (ImGui::MenuItem("Clone Server..."))  m_showCloneServer = true;
-            if (ImGui::MenuItem("Remove Server...")) m_showRemoveServer = true;
+            if (ImGui::MenuItem("Add Server...",    "Ctrl+N")) m_showAddServer = true;
+            if (ImGui::MenuItem("Clone Server..."))            m_showCloneServer = true;
+            if (ImGui::MenuItem("Remove Server..."))           m_showRemoveServer = true;
             ImGui::Separator();
-            if (ImGui::MenuItem("Export Server...")) m_showExportServer = true;
-            if (ImGui::MenuItem("Import Server...")) m_showImportServer = true;
+            if (ImGui::MenuItem("Export Server..."))           m_showExportServer = true;
+            if (ImGui::MenuItem("Import Server..."))           m_showImportServer = true;
             ImGui::Separator();
-            if (ImGui::MenuItem("Quit"))             m_wantQuit = true;
+            if (ImGui::MenuItem("Save Config",      "Ctrl+S")) m_manager->saveConfig();
+            ImGui::Separator();
+            if (ImGui::MenuItem("Quit"))                        m_wantQuit = true;
             ImGui::EndMenu();
         }
 
@@ -321,6 +356,11 @@ void MainWindow::renderMenuBar()
         }
 
         if (ImGui::BeginMenu("View")) {
+            if (ImGui::MenuItem("Home",       "Ctrl+H")) m_selectedTab = 0;
+            if (ImGui::MenuItem("Log",        "Ctrl+L"))
+                m_selectedTab = static_cast<int>(m_serverTabs.size()) + 1;
+            if (ImGui::MenuItem("Search",     "Ctrl+F")) m_focusSidebarSearch = true;
+            ImGui::Separator();
             if (ImGui::MenuItem("Dark Theme", nullptr, m_darkMode)) {
                 m_darkMode = true;
                 applyTheme();
@@ -385,8 +425,12 @@ void MainWindow::renderSidebar()
     char searchBuf[256];
     std::strncpy(searchBuf, m_searchText.c_str(), sizeof(searchBuf) - 1);
     searchBuf[sizeof(searchBuf) - 1] = '\0';
+    if (m_focusSidebarSearch) {
+        ImGui::SetKeyboardFocusHere();
+        m_focusSidebarSearch = false;
+    }
     ImGui::SetNextItemWidth(-1);
-    if (ImGui::InputTextWithHint("##search", "Search servers...", searchBuf, sizeof(searchBuf)))
+    if (ImGui::InputTextWithHint("##search", "Search servers... (Ctrl+F)", searchBuf, sizeof(searchBuf)))
         m_searchText = searchBuf;
 
     // Sort: favorites first, then alphabetical
@@ -457,6 +501,26 @@ void MainWindow::renderSidebar()
             m_selectedTab = entry.index + 1; // 0=Home, 1..N=servers
         }
 
+        // Hover tooltip: show group, tags, and app ID
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
+            ImGui::BeginTooltip();
+            ImGui::TextUnformatted(s->name.c_str());
+            ImGui::Separator();
+            ImGui::TextDisabled("AppID: %d", s->appid);
+            if (!s->group.empty())
+                ImGui::TextDisabled("Group: %s", s->group.c_str());
+            if (!s->tags.empty()) {
+                std::string tagList;
+                for (size_t t = 0; t < s->tags.size(); ++t) {
+                    if (t > 0) tagList += ", ";
+                    tagList += s->tags[t];
+                }
+                ImGui::TextDisabled("Tags: %s", tagList.c_str());
+            }
+            ImGui::TextDisabled("Double-click to toggle favourite");
+            ImGui::EndTooltip();
+        }
+
         // Double-click to toggle favorite
         if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(0)) {
             m_manager->servers()[entry.index].favorite =
@@ -501,15 +565,22 @@ void MainWindow::renderSidebar()
     // Action buttons
     const float w = ImGui::GetContentRegionAvail().x;
     if (ImGui::Button("+ Add Server",      ImVec2(w, 0))) m_showAddServer = true;
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Add a new game server (Ctrl+N)");
     if (ImGui::Button("Clone Server",       ImVec2(w, 0))) m_showCloneServer = true;
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Duplicate an existing server's settings");
     if (ImGui::Button("- Remove Server",    ImVec2(w, 0))) m_showRemoveServer = true;
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Permanently remove a server from the list");
     if (ImGui::Button("Export Server",      ImVec2(w, 0))) m_showExportServer = true;
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Export a server config to a JSON file");
     if (ImGui::Button("Import Server",      ImVec2(w, 0))) m_showImportServer = true;
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Import a server config from a JSON file");
     if (ImGui::Button("Sync Mods",          ImVec2(w, 0)))
         m_manager->syncModsCluster();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Synchronise Workshop mods for all servers");
 
     if (ImGui::Button("Sync Configs",       ImVec2(w, 0)))
         ImGui::OpenPopup("##SyncConfigsSidebar");
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Push a master config zip to all servers");
     if (ImGui::BeginPopup("##SyncConfigsSidebar")) {
         static char cfgPath[512] = {};
         ImGui::Text("Master Config Zip Path:");
@@ -532,9 +603,13 @@ void MainWindow::renderSidebar()
     }
 
     if (ImGui::Button("Broadcast Cmd",      ImVec2(w, 0))) m_showBroadcast = true;
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Send an RCON command to all running servers");
     if (ImGui::Button("Start All",          ImVec2(w, 0))) m_manager->startAllServers();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Start every server in the list");
     if (ImGui::Button("Stop All",           ImVec2(w, 0))) m_manager->stopAllServers();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Stop every running server");
     if (ImGui::Button("Restart All",        ImVec2(w, 0))) m_manager->restartAllServers();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Restart every running server");
 
     ImGui::EndChild(); // Sidebar
 }
@@ -649,6 +724,62 @@ void MainWindow::renderLogViewerTab()
                               logDisplayBuf.data(),
                               logDisplayBuf.size(), avail,
                               ImGuiInputTextFlags_ReadOnly);
+}
+
+// ---------------------------------------------------------------------------
+// Status bar (bottom strip)
+// ---------------------------------------------------------------------------
+
+void MainWindow::renderStatusBar()
+{
+    const ImGuiViewport *vp = ImGui::GetMainViewport();
+    static constexpr float kStatusBarHeight = 22.0f;
+    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x,
+                                   vp->WorkPos.y + vp->WorkSize.y - kStatusBarHeight));
+    ImGui::SetNextWindowSize(ImVec2(vp->WorkSize.x, kStatusBarHeight));
+    ImGui::SetNextWindowBgAlpha(1.0f);
+
+    ImGuiWindowFlags flags =
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
+        ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBringToFrontOnFocus |
+        ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav |
+        ImGuiWindowFlags_NoInputs;
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 3));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    // Draw a subtle top border line for the status bar
+    if (m_darkMode)
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.08f, 0.08f, 0.10f, 1.0f));
+    else
+        ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.88f, 0.88f, 0.90f, 1.0f));
+
+    ImGui::Begin("##StatusBar", nullptr, flags);
+
+    const auto &servers = m_manager->servers();
+    int total = static_cast<int>(servers.size());
+    int onlineCount = 0;
+    for (const auto &s : servers)
+        if (m_manager->isServerRunning(s)) ++onlineCount;
+    int offlineCount = total - onlineCount;
+
+    // Cluster summary
+    ImGui::TextColored(ImVec4(0.30f, 0.85f, 0.45f, 1.0f), "Online: %d", onlineCount);
+    ImGui::SameLine(0, 12);
+    ImGui::TextColored(ImVec4(0.75f, 0.35f, 0.30f, 1.0f), "Offline: %d", offlineCount);
+    ImGui::SameLine(0, 12);
+    ImGui::TextDisabled("|");
+    ImGui::SameLine(0, 12);
+    ImGui::TextDisabled("Ctrl+N New  \xe2\x80\x83"   // thin space
+                        "Ctrl+S Save  \xe2\x80\x83"
+                        "Ctrl+H Home  \xe2\x80\x83"
+                        "Ctrl+L Log  \xe2\x80\x83"
+                        "Ctrl+F Search");
+
+    ImGui::End();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar(3);
 }
 
 // ---------------------------------------------------------------------------
@@ -1529,5 +1660,37 @@ void MainWindow::applyTheme()
         style.FramePadding      = ImVec2(8, 4);
         style.ItemSpacing       = ImVec2(8, 6);
         style.WindowPadding     = ImVec2(10, 10);
+        style.ScrollbarSize     = 14.0f;
+        style.GrabMinSize       = 12.0f;
+        style.WindowBorderSize  = 1.0f;
+        style.ChildBorderSize   = 1.0f;
+        style.FrameBorderSize   = 0.0f;
+
+        // Polished light palette with a soft blue accent
+        ImVec4 *c = style.Colors;
+        c[ImGuiCol_WindowBg]            = ImVec4(0.94f, 0.94f, 0.96f, 1.00f);
+        c[ImGuiCol_ChildBg]             = ImVec4(0.97f, 0.97f, 0.98f, 1.00f);
+        c[ImGuiCol_PopupBg]             = ImVec4(0.98f, 0.98f, 0.99f, 0.97f);
+        c[ImGuiCol_Border]              = ImVec4(0.72f, 0.72f, 0.78f, 0.60f);
+        c[ImGuiCol_FrameBg]             = ImVec4(0.88f, 0.88f, 0.92f, 1.00f);
+        c[ImGuiCol_FrameBgHovered]      = ImVec4(0.80f, 0.84f, 0.92f, 1.00f);
+        c[ImGuiCol_FrameBgActive]       = ImVec4(0.72f, 0.78f, 0.92f, 1.00f);
+        c[ImGuiCol_TitleBg]             = ImVec4(0.86f, 0.86f, 0.90f, 1.00f);
+        c[ImGuiCol_TitleBgActive]       = ImVec4(0.78f, 0.82f, 0.94f, 1.00f);
+        c[ImGuiCol_MenuBarBg]           = ImVec4(0.90f, 0.90f, 0.94f, 1.00f);
+        c[ImGuiCol_CheckMark]           = ImVec4(0.22f, 0.48f, 0.88f, 1.00f);
+        c[ImGuiCol_SliderGrab]          = ImVec4(0.22f, 0.48f, 0.88f, 1.00f);
+        c[ImGuiCol_SliderGrabActive]    = ImVec4(0.16f, 0.38f, 0.76f, 1.00f);
+        c[ImGuiCol_Button]              = ImVec4(0.82f, 0.84f, 0.92f, 1.00f);
+        c[ImGuiCol_ButtonHovered]       = ImVec4(0.68f, 0.76f, 0.94f, 1.00f);
+        c[ImGuiCol_ButtonActive]        = ImVec4(0.54f, 0.66f, 0.92f, 1.00f);
+        c[ImGuiCol_Header]              = ImVec4(0.80f, 0.84f, 0.94f, 0.80f);
+        c[ImGuiCol_HeaderHovered]       = ImVec4(0.70f, 0.78f, 0.96f, 0.80f);
+        c[ImGuiCol_HeaderActive]        = ImVec4(0.58f, 0.70f, 0.96f, 1.00f);
+        c[ImGuiCol_Separator]           = ImVec4(0.74f, 0.74f, 0.80f, 1.00f);
+        c[ImGuiCol_Tab]                 = ImVec4(0.84f, 0.84f, 0.90f, 1.00f);
+        c[ImGuiCol_TabHovered]          = ImVec4(0.70f, 0.78f, 0.96f, 0.80f);
+        c[ImGuiCol_TabSelected]         = ImVec4(0.62f, 0.74f, 0.96f, 1.00f);
+        c[ImGuiCol_TextSelectedBg]      = ImVec4(0.28f, 0.52f, 0.90f, 0.30f);
     }
 }

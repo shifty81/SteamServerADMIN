@@ -42,6 +42,7 @@ private:
     void renderSidebar();
     void renderTabArea();
     void renderLogViewerTab();
+    void renderStatusBar();
     void renderNotifications();
     void renderAddServerDialog();
     void renderCloneServerDialog();
@@ -70,6 +71,7 @@ private:
     std::string m_searchText;
     std::string m_logFilterText;
     int m_selectedSidebarServer = -1;
+    bool m_focusSidebarSearch = false; // set to true to grab focus for search box
 
     // Per-frame cache for server running status (avoids repeated system calls)
     std::vector<bool> m_cachedRunningStatus;
