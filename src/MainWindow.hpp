@@ -5,6 +5,8 @@
 #include <string>
 #include <vector>
 #include <chrono>
+#include <mutex>
+#include <thread>
 
 struct GLFWwindow;
 class HomeDashboard;
@@ -114,6 +116,14 @@ private:
 
     // Install SteamCMD dialog
     char m_installSteamCmdDir[512] = {};
+
+    // Install SteamCMD async state
+    std::thread              m_installThread;
+    std::mutex               m_installLogMutex;
+    std::vector<std::string> m_installLog;
+    bool                     m_installRunning = false;
+    bool                     m_installDone    = false;
+    bool                     m_installSuccess = false;
 
     // Steam Library detection (for Add Server dialog)
     std::vector<SteamLibraryDetector::InstalledApp> m_steamLibraryApps;

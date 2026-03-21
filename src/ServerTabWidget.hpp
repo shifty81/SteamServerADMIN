@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 #include <chrono>
+#include <mutex>
+#include <thread>
 
 /**
  * @brief Per-server tabbed widget (Dear ImGui immediate mode).
@@ -22,10 +24,20 @@
 class ServerTabWidget {
 public:
     ServerTabWidget(ServerManager *manager, ServerConfig &server);
-    ~ServerTabWidget() = default;
+    ~ServerTabWidget();
 
     /** Render the full widget.  Call once per frame inside ImGui context. */
     void render();
+
+    /**
+     * @brief Start a deploy/update in the background (non-blocking).
+     *
+     * Called externally (e.g. from the Add Server dialog) to kick off an
+     * install without requiring the user to click the button in the Overview
+     * tab.  Safe to call from the UI thread.  Does nothing if a deploy is
+     * already in progress.
+     */
+    void startDeployAsync();
 
 private:
     void renderOverviewTab();
@@ -108,7 +120,7 @@ private:
     std::string m_configPath;
     std::string m_originalConfig;
     bool m_configLoaded      = false;
-    int  m_configViewMode    = 0;          // 0 = raw text, 1 = INI editor
+    int  m_configViewMode    = 1;          // 0 = raw text, 1 = INI editor
 
     // INI editor state
     IniEditor m_iniEditor;
@@ -126,6 +138,14 @@ private:
     // Graceful restart state
     int  m_gracefulCountdown = 10;
     char m_gracefulSaveCmd[256] = "saveworld";
+
+    // Async deploy/update state
+    std::thread              m_deployThread;
+    std::mutex               m_deployLogMutex;
+    std::vector<std::string> m_deployLog;
+    bool                     m_deployRunning = false;
+    bool                     m_deployDone    = false;
+    bool                     m_deploySuccess = false;
 
     // Mods
     char m_newModId[32]      = {};

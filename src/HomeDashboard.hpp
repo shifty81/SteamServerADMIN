@@ -3,7 +3,9 @@
 #include "ServerManager.hpp"
 #include <chrono>
 #include <map>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 /**
@@ -29,6 +31,7 @@
 class HomeDashboard {
 public:
     explicit HomeDashboard(ServerManager *manager);
+    ~HomeDashboard();
 
     /** Render the full dashboard.  Call once per frame. */
     void render();
@@ -59,4 +62,12 @@ private:
         std::chrono::steady_clock::time_point restartAt;
     };
     std::vector<PendingWarningRestart> m_pendingRestarts;
+
+    // Per-server deploy in-progress tracking (background thread deploy from dashboard)
+    struct DeployState {
+        std::thread thread;
+        bool        running = false;
+    };
+    std::map<std::string, DeployState> m_deployStates;
+    std::mutex                         m_deployStatesMutex;
 };

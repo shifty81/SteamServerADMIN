@@ -16,6 +16,7 @@
 #include <functional>
 #include <chrono>
 #include <cstdint>
+#include <mutex>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -209,6 +210,17 @@ public:
     std::function<void(const std::string &serverName)> onServerCrashed;
     std::function<void(const std::string &serverName, const std::string &detail)> onResourceAlert;
 
+    /**
+     * @brief Register a per-server log observer for live output capture (e.g. deploy progress).
+     *
+     * The observer is called from whatever thread emits the log (may be a background thread).
+     * The caller is responsible for thread-safe access inside the observer.
+     * Pass nullptr to clear the observer for a server.
+     */
+    void setDeployLogObserver(const std::string &serverName,
+                               std::function<void(const std::string &)> observer);
+    void clearDeployLogObserver(const std::string &serverName);
+
 private:
     void checkProcesses();
     void handleCrash(const std::string &serverName, int exitCode);
@@ -260,6 +272,10 @@ private:
     EventHookManager m_eventHookManager;
     GracefulRestartManager m_gracefulRestartManager;
     SteamLibraryDetector   m_steamLibraryDetector;
+
+    // Per-server deploy log observers (registered by UI widgets for progress display)
+    std::mutex m_deployObserverMutex;
+    std::map<std::string, std::function<void(const std::string &)>> m_deployLogObservers;
 
     void emitLog(const std::string &serverName, const std::string &msg);
     std::string lookupEventHook(const std::string &serverName, const std::string &event) const;

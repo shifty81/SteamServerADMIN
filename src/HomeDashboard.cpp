@@ -7,6 +7,8 @@
 #include <cmath>
 #include <algorithm>
 #include <filesystem>
+#include <mutex>
+#include <thread>
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -159,6 +161,15 @@ static bool glassButton(const char *label, ImVec2 size = ImVec2(0, 0))
 HomeDashboard::HomeDashboard(ServerManager *manager)
     : m_manager(manager)
 {
+}
+
+HomeDashboard::~HomeDashboard()
+{
+    // Join any in-progress deploy threads before destruction
+    for (auto &[name, state] : m_deployStates) {
+        if (state.thread.joinable())
+            state.thread.join();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -486,9 +497,40 @@ void HomeDashboard::renderCard(ServerConfig &server, int index, float cardWidth)
             }
         } catch (...) { dirEmpty = true; }
 
-        const char *label = dirEmpty ? "\xe2\xac\x87 Install" : "\xe2\xac\x86 Update";
-        if (glassButton(label))
-            m_manager->deployOrUpdateServer(server);
+        // Check if a deploy is currently running for this server
+        bool deployRunning = false;
+        {
+            std::lock_guard<std::mutex> lk(m_deployStatesMutex);
+            auto it = m_deployStates.find(server.name);
+            if (it != m_deployStates.end()) {
+                deployRunning = it->second.running;
+                // Clean up finished thread
+                if (!deployRunning && it->second.thread.joinable())
+                    it->second.thread.join();
+            }
+        }
+
+        if (deployRunning) {
+            static const char *spinFrames[] = {"|", "/", "-", "\\"};
+            int frame = static_cast<int>(ImGui::GetTime() * 8.0) % 4;
+            ImGui::Text("%s Deploying...", spinFrames[frame]);
+        } else {
+            const char *label = dirEmpty ? "\xe2\xac\x87 Install" : "\xe2\xac\x86 Update";
+            if (glassButton(label)) {
+                std::lock_guard<std::mutex> lk(m_deployStatesMutex);
+                auto &state = m_deployStates[server.name];
+                if (!state.running) {
+                    if (state.thread.joinable())
+                        state.thread.join();
+                    state.running = true;
+                    state.thread = std::thread([this, &server]() {
+                        m_manager->deployOrUpdateServer(server);
+                        std::lock_guard<std::mutex> lk2(m_deployStatesMutex);
+                        m_deployStates[server.name].running = false;
+                    });
+                }
+            }
+        }
     }
 
     // Context menu

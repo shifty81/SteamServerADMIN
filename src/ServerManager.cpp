@@ -327,6 +327,24 @@ static std::vector<std::string> splitString(const std::string &s, char delim)
 void ServerManager::emitLog(const std::string &serverName, const std::string &msg)
 {
     if (onLogMessage) onLogMessage(serverName, msg);
+
+    std::lock_guard<std::mutex> lk(m_deployObserverMutex);
+    auto it = m_deployLogObservers.find(serverName);
+    if (it != m_deployLogObservers.end() && it->second)
+        it->second(msg);
+}
+
+void ServerManager::setDeployLogObserver(const std::string &serverName,
+                                          std::function<void(const std::string &)> observer)
+{
+    std::lock_guard<std::mutex> lk(m_deployObserverMutex);
+    m_deployLogObservers[serverName] = std::move(observer);
+}
+
+void ServerManager::clearDeployLogObserver(const std::string &serverName)
+{
+    std::lock_guard<std::mutex> lk(m_deployObserverMutex);
+    m_deployLogObservers.erase(serverName);
 }
 
 std::string ServerManager::lookupEventHook(const std::string &serverName,
