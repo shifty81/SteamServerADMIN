@@ -2,137 +2,146 @@
 
 #include <string>
 #include <vector>
-#include <map>
-#include <set>
 #include <optional>
-#include <functional>
 
 /**
- * @brief User roles for access control, ordered from least to most privileged.
+ * @brief A player's standing in a game server.
+ *
+ * These roles map directly to the access-control concepts used by most
+ * Steam dedicated servers:
+ *
+ *  Whitelisted – player is permitted to connect (whitelist / permittedlist).
+ *  Operator    – player has elevated in-game privileges (moderator / op).
+ *  Admin       – player has full admin privileges in the game server.
+ *  Banned      – player is blocked from connecting (blacklist / bannedlist).
  */
-enum class UserRole {
-    Player    = 0, ///< Standard player – no management access.
-    Operator  = 1, ///< Can start/stop servers and view logs.
-    Moderator = 2, ///< Can start/stop/restart servers, send RCON commands, manage whitelists, kick/ban players, and view logs.
-    Admin     = 3  ///< Full management access.
+enum class ServerPlayerRole {
+    Whitelisted = 0, ///< Allowed to connect; no extra in-game privileges.
+    Operator    = 1, ///< Moderator / operator level in-game privileges.
+    Admin       = 2, ///< Full admin level in-game privileges.
+    Banned      = 3  ///< Banned from connecting to the server.
 };
 
 /**
- * @brief Granular permission flags checked against a user's role.
+ * @brief A player tracked in the server access-control lists.
  */
-enum class Permission {
-    StartServer,      ///< Launch a server process.
-    StopServer,       ///< Stop a running server process.
-    RestartServer,    ///< Restart a server (stop + start).
-    UpdateServer,     ///< Run a SteamCMD update for a server.
-    InstallServer,    ///< Install a new server via SteamCMD.
-    ViewLogs,         ///< Read server console / log output.
-    SendRconCommand,  ///< Send arbitrary RCON commands.
-    ManageWhitelist,  ///< Add or remove whitelist entries.
-    ManageAdmins,     ///< Add, remove, or change user roles.
-    ManageBackups,    ///< Trigger or manage server backups.
-    ManageScheduler,  ///< Modify scheduled tasks.
-    KickPlayer,       ///< Kick a connected player.
-    BanPlayer         ///< Ban a player from the server.
+struct PlayerEntry {
+    std::string      steamId; ///< Steam 64-bit ID (string form).
+    std::string      name;    ///< Optional human-readable display name.
+    ServerPlayerRole role = ServerPlayerRole::Whitelisted;
 };
 
 /**
- * @brief A user known to the role management system.
- */
-struct User {
-    std::string steamId; ///< Steam 64-bit ID (string form).
-    std::string name;    ///< Human-readable display name.
-    UserRole    role = UserRole::Player;
-};
-
-/**
- * @brief A single entry in the permission-change audit trail.
+ * @brief A single entry in the audit trail.
  */
 struct AuditEntry {
     std::string timestamp; ///< ISO 8601 UTC timestamp.
-    std::string actorId;   ///< SteamId (or "system") of who performed the action.
+    std::string actorId;   ///< SteamId (or "system") who performed the action.
     std::string action;    ///< Human-readable description of the change.
-    std::string targetId;  ///< SteamId of the affected user (may be empty).
+    std::string targetId;  ///< SteamId of the affected player (may be empty).
 };
 
 /**
- * @brief Manages users, roles, whitelists, and permissions for all servers.
+ * @brief Manages the player access-control lists for a game server.
  *
- * Responsibilities:
- *  - Persist users and their roles to a JSON file.
- *  - Read/write per-server whitelist text files (one Steam ID per line).
- *  - Check whether a user has a specific permission based on their role.
- *  - Record every role/whitelist change in an in-memory audit log.
+ * Tracks players with their game-server roles (Whitelisted / Operator /
+ * Admin / Banned) and provides helpers to read and write the native config
+ * files that dedicated servers use for these lists:
+ *
+ *  - Plain-text files (one Steam ID per line) used by Valheim, ARK, etc.
+ *    e.g. adminlist.txt, permittedlist.txt, bannedlist.txt
+ *
+ *  - XML admin files used by 7 Days to Die (serveradmin.xml) that contain
+ *    <admins>, <moderators>, <whitelist>, and <blacklist> sections.
+ *
+ * Every explicit change (add / remove / role change) is recorded in an
+ * in-memory audit log.
  */
 class UserRoleManager {
 public:
     UserRoleManager() = default;
     explicit UserRoleManager(const std::string &filePath);
 
-    // ---- Persistence -------------------------------------------------------
-    /** Load users and whitelist from a JSON file.  Returns false on error. */
+    // ---- Persistence (SSA internal JSON cache) -----------------------------
+    /** Load players from SSA's own JSON cache file.  Returns false on error. */
     bool load(const std::string &filePath);
 
-    /** Save users and whitelist to a JSON file.  Returns false on error. */
+    /** Save players to SSA's own JSON cache file.  Returns false on error. */
     bool save(const std::string &filePath) const;
 
-    // ---- User management ---------------------------------------------------
-    /** Add or update a user.  Logged to the audit trail. */
-    void addUser(const User &user, const std::string &actorId = "system");
+    // ---- Player management -------------------------------------------------
+    /** Add a new player or update an existing one (matched by steamId). */
+    void addPlayer(const PlayerEntry &entry,
+                   const std::string &actorId = "system");
 
-    /** Remove a user by Steam ID.  Returns false if not found. */
-    bool removeUser(const std::string &steamId,
-                    const std::string &actorId = "system");
+    /** Remove a player by Steam ID.  Returns false if not found. */
+    bool removePlayer(const std::string &steamId,
+                      const std::string &actorId = "system");
 
-    /** Change the role of an existing user.  Returns false if not found. */
-    bool setRole(const std::string &steamId, UserRole role,
-                 const std::string &actorId = "system");
+    /** Change the role of an existing player.  Returns false if not found. */
+    bool setPlayerRole(const std::string &steamId, ServerPlayerRole role,
+                       const std::string &actorId = "system");
 
-    /** Look up a user by Steam ID.  Returns nullopt if not found. */
-    std::optional<User> findUser(const std::string &steamId) const;
+    /** Look up a player by Steam ID.  Returns nullopt if not found. */
+    std::optional<PlayerEntry> findPlayer(const std::string &steamId) const;
 
-    /** Read-only view of all registered users. */
-    const std::vector<User> &users() const { return m_users; }
+    /** Read-only view of all tracked players. */
+    const std::vector<PlayerEntry> &players() const { return m_players; }
 
-    // ---- Whitelist ---------------------------------------------------------
-    /** Returns true if the given Steam ID is on the whitelist. */
-    bool isWhitelisted(const std::string &steamId) const;
+    /** Return all players that have the specified role. */
+    std::vector<PlayerEntry> getPlayersByRole(ServerPlayerRole role) const;
 
-    /** Add a Steam ID to the whitelist.  Logged to the audit trail. */
-    void addToWhitelist(const std::string &steamId,
-                        const std::string &actorId = "system");
+    // ---- Convenience queries -----------------------------------------------
+    /** True if the player is tracked as Admin. */
+    bool isAdmin(const std::string &steamId) const;
 
-    /** Remove a Steam ID from the whitelist.  Returns false if not present. */
-    bool removeFromWhitelist(const std::string &steamId,
-                             const std::string &actorId = "system");
-
-    /**
-     * @brief Load whitelist entries from a plain-text file (one ID per line).
-     *        Lines beginning with '#' and blank lines are ignored.
-     *        Existing whitelist entries are preserved; new ones are merged in.
-     */
-    bool loadWhitelistFile(const std::string &filePath);
+    /** True if the player is tracked as Banned. */
+    bool isBanned(const std::string &steamId) const;
 
     /**
-     * @brief Save the current whitelist to a plain-text file (one ID per line).
+     * True if the player is explicitly Whitelisted, Operator, or Admin.
+     * Returns false for Banned players and for unknown Steam IDs.
      */
-    bool saveWhitelistFile(const std::string &filePath) const;
+    bool isPermitted(const std::string &steamId) const;
 
-    /** Read-only view of all whitelisted Steam IDs. */
-    const std::set<std::string> &whitelist() const { return m_whitelist; }
+    // ---- Plain-text file I/O (one Steam ID per line) -----------------------
+    /**
+     * @brief Load entries from a plain-text game server list file.
+     *
+     * Each non-blank, non-comment line is treated as a Steam ID.  Lines
+     * beginning with '//' or '#' are skipped.  Loaded entries are assigned
+     * @p role and merged into the existing list (insert or update by steamId).
+     * File-load operations are not written to the audit log.
+     */
+    bool loadPlainTextFile(const std::string &filePath, ServerPlayerRole role);
 
-    // ---- Permissions -------------------------------------------------------
-    /** Returns true if the user with the given Steam ID holds @p perm. */
-    bool hasPermission(const std::string &steamId, Permission perm) const;
+    /**
+     * @brief Write all players with @p role to a plain-text file.
+     *
+     * Produces one Steam ID per line, preceded by a short comment header.
+     */
+    bool savePlainTextFile(const std::string &filePath,
+                           ServerPlayerRole role) const;
 
-    /** Returns true if @p role is sufficient to hold @p perm. */
-    static bool roleHasPermission(UserRole role, Permission perm);
+    // ---- XML file I/O (7 Days to Die serveradmin.xml format) ---------------
+    /**
+     * @brief Load all role sections from a 7 Days to Die serveradmin.xml.
+     *
+     * Recognises <admins>, <moderators>, <whitelist>, and <blacklist>
+     * sections and maps them to Admin, Operator, Whitelisted, and Banned
+     * respectively.  Entries are merged into the existing list.
+     * File-load operations are not written to the audit log.
+     */
+    bool loadXmlAdminFile(const std::string &filePath);
 
-    /** Returns the display name for a role (e.g. "Admin", "Moderator"). */
-    static std::string roleName(UserRole role);
+    /**
+     * @brief Save all players to a 7 Days to Die-style serveradmin.xml.
+     */
+    bool saveXmlAdminFile(const std::string &filePath) const;
 
-    /** Returns the display name for a permission. */
-    static std::string permissionName(Permission perm);
+    // ---- Helpers -----------------------------------------------------------
+    /** Return the display name for a role (e.g. "Admin", "Banned"). */
+    static std::string roleName(ServerPlayerRole role);
 
     // ---- Audit log ---------------------------------------------------------
     /** Read-only view of all recorded audit entries (most-recent last). */
@@ -145,7 +154,9 @@ private:
     void logAudit(const std::string &actorId, const std::string &action,
                   const std::string &targetId = "");
 
-    std::vector<User>        m_users;
-    std::set<std::string>    m_whitelist;
-    std::vector<AuditEntry>  m_auditLog;
+    // Internal upsert used by file-load methods (no audit logging).
+    void upsertPlayer(const std::string &steamId, ServerPlayerRole role);
+
+    std::vector<PlayerEntry>  m_players;
+    std::vector<AuditEntry>   m_auditLog;
 };

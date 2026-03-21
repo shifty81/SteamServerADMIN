@@ -6784,334 +6784,378 @@ TEST(ServerManager, IsDeployingIndependentPerServer)
 }
 
 
+
 // ===========================================================================
-// UserRoleManager – role names and permission names
+// UserRoleManager – role names
 // ===========================================================================
 
 TEST(UserRoleManager, RoleNames)
 {
-    EXPECT_EQ(UserRoleManager::roleName(UserRole::Admin),     "Admin");
-    EXPECT_EQ(UserRoleManager::roleName(UserRole::Moderator), "Moderator");
-    EXPECT_EQ(UserRoleManager::roleName(UserRole::Operator),  "Operator");
-    EXPECT_EQ(UserRoleManager::roleName(UserRole::Player),    "Player");
-}
-
-TEST(UserRoleManager, PermissionNames)
-{
-    EXPECT_EQ(UserRoleManager::permissionName(Permission::StartServer),     "StartServer");
-    EXPECT_EQ(UserRoleManager::permissionName(Permission::StopServer),      "StopServer");
-    EXPECT_EQ(UserRoleManager::permissionName(Permission::RestartServer),   "RestartServer");
-    EXPECT_EQ(UserRoleManager::permissionName(Permission::UpdateServer),    "UpdateServer");
-    EXPECT_EQ(UserRoleManager::permissionName(Permission::InstallServer),   "InstallServer");
-    EXPECT_EQ(UserRoleManager::permissionName(Permission::ViewLogs),        "ViewLogs");
-    EXPECT_EQ(UserRoleManager::permissionName(Permission::SendRconCommand), "SendRconCommand");
-    EXPECT_EQ(UserRoleManager::permissionName(Permission::ManageWhitelist), "ManageWhitelist");
-    EXPECT_EQ(UserRoleManager::permissionName(Permission::ManageAdmins),    "ManageAdmins");
-    EXPECT_EQ(UserRoleManager::permissionName(Permission::ManageBackups),   "ManageBackups");
-    EXPECT_EQ(UserRoleManager::permissionName(Permission::ManageScheduler), "ManageScheduler");
-    EXPECT_EQ(UserRoleManager::permissionName(Permission::KickPlayer),      "KickPlayer");
-    EXPECT_EQ(UserRoleManager::permissionName(Permission::BanPlayer),       "BanPlayer");
+    EXPECT_EQ(UserRoleManager::roleName(ServerPlayerRole::Admin),       "Admin");
+    EXPECT_EQ(UserRoleManager::roleName(ServerPlayerRole::Operator),    "Operator");
+    EXPECT_EQ(UserRoleManager::roleName(ServerPlayerRole::Whitelisted), "Whitelisted");
+    EXPECT_EQ(UserRoleManager::roleName(ServerPlayerRole::Banned),      "Banned");
 }
 
 // ===========================================================================
-// UserRoleManager – role-has-permission matrix
+// UserRoleManager – player CRUD
 // ===========================================================================
 
-TEST(UserRoleManager, AdminHasAllPermissions)
-{
-    EXPECT_TRUE(UserRoleManager::roleHasPermission(UserRole::Admin, Permission::StartServer));
-    EXPECT_TRUE(UserRoleManager::roleHasPermission(UserRole::Admin, Permission::StopServer));
-    EXPECT_TRUE(UserRoleManager::roleHasPermission(UserRole::Admin, Permission::RestartServer));
-    EXPECT_TRUE(UserRoleManager::roleHasPermission(UserRole::Admin, Permission::UpdateServer));
-    EXPECT_TRUE(UserRoleManager::roleHasPermission(UserRole::Admin, Permission::InstallServer));
-    EXPECT_TRUE(UserRoleManager::roleHasPermission(UserRole::Admin, Permission::ViewLogs));
-    EXPECT_TRUE(UserRoleManager::roleHasPermission(UserRole::Admin, Permission::SendRconCommand));
-    EXPECT_TRUE(UserRoleManager::roleHasPermission(UserRole::Admin, Permission::ManageWhitelist));
-    EXPECT_TRUE(UserRoleManager::roleHasPermission(UserRole::Admin, Permission::ManageAdmins));
-    EXPECT_TRUE(UserRoleManager::roleHasPermission(UserRole::Admin, Permission::ManageBackups));
-    EXPECT_TRUE(UserRoleManager::roleHasPermission(UserRole::Admin, Permission::ManageScheduler));
-    EXPECT_TRUE(UserRoleManager::roleHasPermission(UserRole::Admin, Permission::KickPlayer));
-    EXPECT_TRUE(UserRoleManager::roleHasPermission(UserRole::Admin, Permission::BanPlayer));
-}
-
-TEST(UserRoleManager, ModeratorPermissions)
-{
-    // Can: restart, start, stop, view logs, send RCON, manage whitelist, kick, ban
-    EXPECT_TRUE(UserRoleManager::roleHasPermission(UserRole::Moderator, Permission::StartServer));
-    EXPECT_TRUE(UserRoleManager::roleHasPermission(UserRole::Moderator, Permission::StopServer));
-    EXPECT_TRUE(UserRoleManager::roleHasPermission(UserRole::Moderator, Permission::RestartServer));
-    EXPECT_TRUE(UserRoleManager::roleHasPermission(UserRole::Moderator, Permission::ViewLogs));
-    EXPECT_TRUE(UserRoleManager::roleHasPermission(UserRole::Moderator, Permission::SendRconCommand));
-    EXPECT_TRUE(UserRoleManager::roleHasPermission(UserRole::Moderator, Permission::ManageWhitelist));
-    EXPECT_TRUE(UserRoleManager::roleHasPermission(UserRole::Moderator, Permission::KickPlayer));
-    EXPECT_TRUE(UserRoleManager::roleHasPermission(UserRole::Moderator, Permission::BanPlayer));
-    // Cannot: update, install, manage admins, manage backups, manage scheduler
-    EXPECT_FALSE(UserRoleManager::roleHasPermission(UserRole::Moderator, Permission::UpdateServer));
-    EXPECT_FALSE(UserRoleManager::roleHasPermission(UserRole::Moderator, Permission::InstallServer));
-    EXPECT_FALSE(UserRoleManager::roleHasPermission(UserRole::Moderator, Permission::ManageAdmins));
-    EXPECT_FALSE(UserRoleManager::roleHasPermission(UserRole::Moderator, Permission::ManageBackups));
-    EXPECT_FALSE(UserRoleManager::roleHasPermission(UserRole::Moderator, Permission::ManageScheduler));
-}
-
-TEST(UserRoleManager, OperatorPermissions)
-{
-    // Can: start, stop, restart, view logs
-    EXPECT_TRUE(UserRoleManager::roleHasPermission(UserRole::Operator, Permission::StartServer));
-    EXPECT_TRUE(UserRoleManager::roleHasPermission(UserRole::Operator, Permission::StopServer));
-    EXPECT_TRUE(UserRoleManager::roleHasPermission(UserRole::Operator, Permission::RestartServer));
-    EXPECT_TRUE(UserRoleManager::roleHasPermission(UserRole::Operator, Permission::ViewLogs));
-    // Cannot: update, install, RCON, whitelist, admins, backups, scheduler, kick, ban
-    EXPECT_FALSE(UserRoleManager::roleHasPermission(UserRole::Operator, Permission::UpdateServer));
-    EXPECT_FALSE(UserRoleManager::roleHasPermission(UserRole::Operator, Permission::InstallServer));
-    EXPECT_FALSE(UserRoleManager::roleHasPermission(UserRole::Operator, Permission::SendRconCommand));
-    EXPECT_FALSE(UserRoleManager::roleHasPermission(UserRole::Operator, Permission::ManageWhitelist));
-    EXPECT_FALSE(UserRoleManager::roleHasPermission(UserRole::Operator, Permission::ManageAdmins));
-    EXPECT_FALSE(UserRoleManager::roleHasPermission(UserRole::Operator, Permission::ManageBackups));
-    EXPECT_FALSE(UserRoleManager::roleHasPermission(UserRole::Operator, Permission::ManageScheduler));
-    EXPECT_FALSE(UserRoleManager::roleHasPermission(UserRole::Operator, Permission::KickPlayer));
-    EXPECT_FALSE(UserRoleManager::roleHasPermission(UserRole::Operator, Permission::BanPlayer));
-}
-
-TEST(UserRoleManager, PlayerHasNoPermissions)
-{
-    EXPECT_FALSE(UserRoleManager::roleHasPermission(UserRole::Player, Permission::StartServer));
-    EXPECT_FALSE(UserRoleManager::roleHasPermission(UserRole::Player, Permission::StopServer));
-    EXPECT_FALSE(UserRoleManager::roleHasPermission(UserRole::Player, Permission::RestartServer));
-    EXPECT_FALSE(UserRoleManager::roleHasPermission(UserRole::Player, Permission::UpdateServer));
-    EXPECT_FALSE(UserRoleManager::roleHasPermission(UserRole::Player, Permission::InstallServer));
-    EXPECT_FALSE(UserRoleManager::roleHasPermission(UserRole::Player, Permission::ViewLogs));
-    EXPECT_FALSE(UserRoleManager::roleHasPermission(UserRole::Player, Permission::SendRconCommand));
-    EXPECT_FALSE(UserRoleManager::roleHasPermission(UserRole::Player, Permission::ManageWhitelist));
-    EXPECT_FALSE(UserRoleManager::roleHasPermission(UserRole::Player, Permission::ManageAdmins));
-    EXPECT_FALSE(UserRoleManager::roleHasPermission(UserRole::Player, Permission::ManageBackups));
-    EXPECT_FALSE(UserRoleManager::roleHasPermission(UserRole::Player, Permission::ManageScheduler));
-    EXPECT_FALSE(UserRoleManager::roleHasPermission(UserRole::Player, Permission::KickPlayer));
-    EXPECT_FALSE(UserRoleManager::roleHasPermission(UserRole::Player, Permission::BanPlayer));
-}
-
-// ===========================================================================
-// UserRoleManager – user CRUD
-// ===========================================================================
-
-TEST(UserRoleManager, AddAndFindUser)
+TEST(UserRoleManager, AddAndFindPlayer)
 {
     UserRoleManager mgr;
-    User u{"76561198000000001", "Alice", UserRole::Admin};
-    mgr.addUser(u);
+    PlayerEntry e{"76561198000000001", "Alice", ServerPlayerRole::Admin};
+    mgr.addPlayer(e);
 
-    auto found = mgr.findUser("76561198000000001");
+    auto found = mgr.findPlayer("76561198000000001");
     ASSERT_TRUE(found.has_value());
     EXPECT_EQ(found->name, "Alice");
-    EXPECT_EQ(found->role, UserRole::Admin);
+    EXPECT_EQ(found->role, ServerPlayerRole::Admin);
 }
 
-TEST(UserRoleManager, FindUserMissingReturnsNullopt)
+TEST(UserRoleManager, FindPlayerMissingReturnsNullopt)
 {
     UserRoleManager mgr;
-    EXPECT_FALSE(mgr.findUser("76561198999999999").has_value());
+    EXPECT_FALSE(mgr.findPlayer("76561198999999999").has_value());
 }
 
-TEST(UserRoleManager, AddUserUpdatesExisting)
+TEST(UserRoleManager, AddPlayerUpdatesExisting)
 {
     UserRoleManager mgr;
-    mgr.addUser({"76561198000000001", "Alice", UserRole::Player});
-    mgr.addUser({"76561198000000001", "AliceRenamed", UserRole::Moderator});
+    mgr.addPlayer({"76561198000000001", "Alice", ServerPlayerRole::Whitelisted});
+    mgr.addPlayer({"76561198000000001", "AliceRenamed", ServerPlayerRole::Admin});
 
-    EXPECT_EQ(mgr.users().size(), 1u);
-    auto u = mgr.findUser("76561198000000001");
-    ASSERT_TRUE(u.has_value());
-    EXPECT_EQ(u->name, "AliceRenamed");
-    EXPECT_EQ(u->role, UserRole::Moderator);
+    EXPECT_EQ(mgr.players().size(), 1u);
+    auto p = mgr.findPlayer("76561198000000001");
+    ASSERT_TRUE(p.has_value());
+    EXPECT_EQ(p->name, "AliceRenamed");
+    EXPECT_EQ(p->role, ServerPlayerRole::Admin);
 }
 
-TEST(UserRoleManager, RemoveUser)
+TEST(UserRoleManager, RemovePlayer)
 {
     UserRoleManager mgr;
-    mgr.addUser({"76561198000000001", "Alice", UserRole::Admin});
-    EXPECT_TRUE(mgr.removeUser("76561198000000001"));
-    EXPECT_EQ(mgr.users().size(), 0u);
-    EXPECT_FALSE(mgr.findUser("76561198000000001").has_value());
+    mgr.addPlayer({"76561198000000001", "Alice", ServerPlayerRole::Admin});
+    EXPECT_TRUE(mgr.removePlayer("76561198000000001"));
+    EXPECT_EQ(mgr.players().size(), 0u);
+    EXPECT_FALSE(mgr.findPlayer("76561198000000001").has_value());
 }
 
-TEST(UserRoleManager, RemoveUserNotFoundReturnsFalse)
+TEST(UserRoleManager, RemovePlayerNotFoundReturnsFalse)
 {
     UserRoleManager mgr;
-    EXPECT_FALSE(mgr.removeUser("76561198999999999"));
+    EXPECT_FALSE(mgr.removePlayer("76561198999999999"));
 }
 
-TEST(UserRoleManager, SetRole)
+TEST(UserRoleManager, SetPlayerRole)
 {
     UserRoleManager mgr;
-    mgr.addUser({"76561198000000001", "Bob", UserRole::Player});
-    EXPECT_TRUE(mgr.setRole("76561198000000001", UserRole::Operator));
+    mgr.addPlayer({"76561198000000001", "Bob", ServerPlayerRole::Whitelisted});
+    EXPECT_TRUE(mgr.setPlayerRole("76561198000000001", ServerPlayerRole::Operator));
 
-    auto u = mgr.findUser("76561198000000001");
-    ASSERT_TRUE(u.has_value());
-    EXPECT_EQ(u->role, UserRole::Operator);
+    auto p = mgr.findPlayer("76561198000000001");
+    ASSERT_TRUE(p.has_value());
+    EXPECT_EQ(p->role, ServerPlayerRole::Operator);
 }
 
-TEST(UserRoleManager, SetRoleNotFoundReturnsFalse)
+TEST(UserRoleManager, SetPlayerRoleNotFoundReturnsFalse)
 {
     UserRoleManager mgr;
-    EXPECT_FALSE(mgr.setRole("76561198999999999", UserRole::Admin));
+    EXPECT_FALSE(mgr.setPlayerRole("76561198999999999", ServerPlayerRole::Admin));
+}
+
+TEST(UserRoleManager, GetPlayersByRole)
+{
+    UserRoleManager mgr;
+    mgr.addPlayer({"76561198000000001", "A1", ServerPlayerRole::Admin});
+    mgr.addPlayer({"76561198000000002", "A2", ServerPlayerRole::Admin});
+    mgr.addPlayer({"76561198000000003", "W1", ServerPlayerRole::Whitelisted});
+    mgr.addPlayer({"76561198000000004", "B1", ServerPlayerRole::Banned});
+
+    auto admins = mgr.getPlayersByRole(ServerPlayerRole::Admin);
+    EXPECT_EQ(admins.size(), 2u);
+
+    auto ops = mgr.getPlayersByRole(ServerPlayerRole::Operator);
+    EXPECT_EQ(ops.size(), 0u);
+
+    auto wl = mgr.getPlayersByRole(ServerPlayerRole::Whitelisted);
+    EXPECT_EQ(wl.size(), 1u);
+
+    auto banned = mgr.getPlayersByRole(ServerPlayerRole::Banned);
+    EXPECT_EQ(banned.size(), 1u);
 }
 
 // ===========================================================================
-// UserRoleManager – hasPermission via user lookup
+// UserRoleManager – convenience queries
 // ===========================================================================
 
-TEST(UserRoleManager, HasPermissionAdmin)
+TEST(UserRoleManager, IsAdmin)
 {
     UserRoleManager mgr;
-    mgr.addUser({"76561198000000001", "Admin", UserRole::Admin});
-    EXPECT_TRUE(mgr.hasPermission("76561198000000001", Permission::ManageAdmins));
-    EXPECT_TRUE(mgr.hasPermission("76561198000000001", Permission::UpdateServer));
+    mgr.addPlayer({"76561198000000001", "A", ServerPlayerRole::Admin});
+    mgr.addPlayer({"76561198000000002", "W", ServerPlayerRole::Whitelisted});
+
+    EXPECT_TRUE(mgr.isAdmin("76561198000000001"));
+    EXPECT_FALSE(mgr.isAdmin("76561198000000002"));
+    EXPECT_FALSE(mgr.isAdmin("76561198999999999")); // unknown
 }
 
-TEST(UserRoleManager, HasPermissionOperator)
+TEST(UserRoleManager, IsBanned)
 {
     UserRoleManager mgr;
-    mgr.addUser({"76561198000000002", "Op", UserRole::Operator});
-    EXPECT_TRUE(mgr.hasPermission("76561198000000002", Permission::StartServer));
-    EXPECT_FALSE(mgr.hasPermission("76561198000000002", Permission::UpdateServer));
+    mgr.addPlayer({"76561198000000001", "B", ServerPlayerRole::Banned});
+    mgr.addPlayer({"76561198000000002", "W", ServerPlayerRole::Whitelisted});
+
+    EXPECT_TRUE(mgr.isBanned("76561198000000001"));
+    EXPECT_FALSE(mgr.isBanned("76561198000000002"));
+    EXPECT_FALSE(mgr.isBanned("76561198999999999")); // unknown
 }
 
-TEST(UserRoleManager, HasPermissionUnknownUserReturnsFalse)
+TEST(UserRoleManager, IsPermitted)
 {
     UserRoleManager mgr;
-    EXPECT_FALSE(mgr.hasPermission("76561198999999999", Permission::ViewLogs));
+    mgr.addPlayer({"76561198000000001", "W", ServerPlayerRole::Whitelisted});
+    mgr.addPlayer({"76561198000000002", "O", ServerPlayerRole::Operator});
+    mgr.addPlayer({"76561198000000003", "A", ServerPlayerRole::Admin});
+    mgr.addPlayer({"76561198000000004", "B", ServerPlayerRole::Banned});
+
+    EXPECT_TRUE(mgr.isPermitted("76561198000000001"));  // Whitelisted
+    EXPECT_TRUE(mgr.isPermitted("76561198000000002"));  // Operator
+    EXPECT_TRUE(mgr.isPermitted("76561198000000003"));  // Admin
+    EXPECT_FALSE(mgr.isPermitted("76561198000000004")); // Banned
+    EXPECT_FALSE(mgr.isPermitted("76561198999999999")); // Unknown
 }
 
 // ===========================================================================
-// UserRoleManager – whitelist
+// UserRoleManager – plain-text file I/O
 // ===========================================================================
 
-TEST(UserRoleManager, WhitelistAddAndCheck)
-{
-    UserRoleManager mgr;
-    EXPECT_FALSE(mgr.isWhitelisted("76561198000000001"));
-    mgr.addToWhitelist("76561198000000001");
-    EXPECT_TRUE(mgr.isWhitelisted("76561198000000001"));
-}
-
-TEST(UserRoleManager, WhitelistRemove)
-{
-    UserRoleManager mgr;
-    mgr.addToWhitelist("76561198000000001");
-    EXPECT_TRUE(mgr.removeFromWhitelist("76561198000000001"));
-    EXPECT_FALSE(mgr.isWhitelisted("76561198000000001"));
-}
-
-TEST(UserRoleManager, WhitelistRemoveNotPresentReturnsFalse)
-{
-    UserRoleManager mgr;
-    EXPECT_FALSE(mgr.removeFromWhitelist("76561198999999999"));
-}
-
-TEST(UserRoleManager, WhitelistAddDuplicateIdempotent)
-{
-    UserRoleManager mgr;
-    mgr.addToWhitelist("76561198000000001");
-    mgr.addToWhitelist("76561198000000001"); // duplicate
-    EXPECT_EQ(mgr.whitelist().size(), 1u);
-}
-
-TEST(UserRoleManager, WhitelistFileRoundTrip)
+TEST(UserRoleManager, PlainTextWhitelistRoundTrip)
 {
     TempDir tmp;
     ASSERT_TRUE(tmp.isValid());
-    std::string wlPath = tmp.filePath("whitelist.txt");
+    std::string path = tmp.filePath("permittedlist.txt");
 
     UserRoleManager mgr;
-    mgr.addToWhitelist("76561198000000001");
-    mgr.addToWhitelist("76561198000000002");
-    ASSERT_TRUE(mgr.saveWhitelistFile(wlPath));
+    mgr.addPlayer({"76561198000000001", "", ServerPlayerRole::Whitelisted});
+    mgr.addPlayer({"76561198000000002", "", ServerPlayerRole::Whitelisted});
+    ASSERT_TRUE(mgr.savePlainTextFile(path, ServerPlayerRole::Whitelisted));
 
     UserRoleManager mgr2;
-    ASSERT_TRUE(mgr2.loadWhitelistFile(wlPath));
-    EXPECT_TRUE(mgr2.isWhitelisted("76561198000000001"));
-    EXPECT_TRUE(mgr2.isWhitelisted("76561198000000002"));
-    EXPECT_FALSE(mgr2.isWhitelisted("76561198000000003"));
+    ASSERT_TRUE(mgr2.loadPlainTextFile(path, ServerPlayerRole::Whitelisted));
+    EXPECT_EQ(mgr2.getPlayersByRole(ServerPlayerRole::Whitelisted).size(), 2u);
+    EXPECT_TRUE(mgr2.isPermitted("76561198000000001"));
+    EXPECT_TRUE(mgr2.isPermitted("76561198000000002"));
 }
 
-TEST(UserRoleManager, WhitelistFileSkipsCommentsAndBlankLines)
+TEST(UserRoleManager, PlainTextAdminFileRoundTrip)
 {
     TempDir tmp;
     ASSERT_TRUE(tmp.isValid());
-    std::string wlPath = tmp.filePath("whitelist.txt");
+    std::string path = tmp.filePath("adminlist.txt");
 
-    writeFile(wlPath,
-        "# This is a comment\n"
+    UserRoleManager mgr;
+    mgr.addPlayer({"76561198000000001", "", ServerPlayerRole::Admin});
+    ASSERT_TRUE(mgr.savePlainTextFile(path, ServerPlayerRole::Admin));
+
+    // Only admin entries should be in the file
+    UserRoleManager mgr2;
+    ASSERT_TRUE(mgr2.loadPlainTextFile(path, ServerPlayerRole::Admin));
+    auto admins = mgr2.getPlayersByRole(ServerPlayerRole::Admin);
+    ASSERT_EQ(admins.size(), 1u);
+    EXPECT_EQ(admins[0].steamId, "76561198000000001");
+}
+
+TEST(UserRoleManager, PlainTextFileSkipsCommentsAndBlankLines)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string path = tmp.filePath("adminlist.txt");
+
+    writeFile(path,
+        "// This is a comment\n"
         "\n"
         "76561198000000001\n"
         "# another comment\n"
         "76561198000000002\n");
 
     UserRoleManager mgr;
-    ASSERT_TRUE(mgr.loadWhitelistFile(wlPath));
-    EXPECT_EQ(mgr.whitelist().size(), 2u);
-    EXPECT_TRUE(mgr.isWhitelisted("76561198000000001"));
-    EXPECT_TRUE(mgr.isWhitelisted("76561198000000002"));
+    ASSERT_TRUE(mgr.loadPlainTextFile(path, ServerPlayerRole::Admin));
+    auto admins = mgr.getPlayersByRole(ServerPlayerRole::Admin);
+    EXPECT_EQ(admins.size(), 2u);
 }
 
-TEST(UserRoleManager, WhitelistLoadFileMergesExisting)
+TEST(UserRoleManager, PlainTextFileMergesExistingPlayers)
 {
     TempDir tmp;
     ASSERT_TRUE(tmp.isValid());
-    std::string wlPath = tmp.filePath("whitelist.txt");
-    writeFile(wlPath, "76561198000000002\n");
+    std::string path = tmp.filePath("adminlist.txt");
+    writeFile(path, "76561198000000002\n");
 
     UserRoleManager mgr;
-    mgr.addToWhitelist("76561198000000001"); // pre-existing
-    ASSERT_TRUE(mgr.loadWhitelistFile(wlPath));
-    // Both original and file-loaded entries should be present
-    EXPECT_TRUE(mgr.isWhitelisted("76561198000000001"));
-    EXPECT_TRUE(mgr.isWhitelisted("76561198000000002"));
+    mgr.addPlayer({"76561198000000001", "Alice", ServerPlayerRole::Whitelisted});
+    ASSERT_TRUE(mgr.loadPlainTextFile(path, ServerPlayerRole::Admin));
+
+    // Original entry kept, new admin entry added
+    EXPECT_EQ(mgr.players().size(), 2u);
+    EXPECT_TRUE(mgr.isPermitted("76561198000000001"));
+    EXPECT_TRUE(mgr.isAdmin("76561198000000002"));
+}
+
+TEST(UserRoleManager, PlainTextFileLoadMissingReturnsFalse)
+{
+    UserRoleManager mgr;
+    EXPECT_FALSE(mgr.loadPlainTextFile("/nonexistent/adminlist.txt",
+                                       ServerPlayerRole::Admin));
+}
+
+TEST(UserRoleManager, PlainTextFileSaveInvalidPathReturnsFalse)
+{
+    UserRoleManager mgr;
+    mgr.addPlayer({"76561198000000001", "", ServerPlayerRole::Admin});
+    EXPECT_FALSE(mgr.savePlainTextFile("/nonexistent/dir/adminlist.txt",
+                                       ServerPlayerRole::Admin));
+}
+
+TEST(UserRoleManager, PlainTextFileBannedRoundTrip)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string path = tmp.filePath("bannedlist.txt");
+
+    UserRoleManager mgr;
+    mgr.addPlayer({"76561198000000001", "", ServerPlayerRole::Banned});
+    ASSERT_TRUE(mgr.savePlainTextFile(path, ServerPlayerRole::Banned));
+
+    UserRoleManager mgr2;
+    ASSERT_TRUE(mgr2.loadPlainTextFile(path, ServerPlayerRole::Banned));
+    EXPECT_TRUE(mgr2.isBanned("76561198000000001"));
 }
 
 // ===========================================================================
-// UserRoleManager – persistence (JSON save/load)
+// UserRoleManager – XML file I/O (7 Days to Die serveradmin.xml)
+// ===========================================================================
+
+TEST(UserRoleManager, XmlAdminFileRoundTrip)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string path = tmp.filePath("serveradmin.xml");
+
+    UserRoleManager mgr;
+    mgr.addPlayer({"76561198000000001", "Admin1",  ServerPlayerRole::Admin});
+    mgr.addPlayer({"76561198000000002", "Mod1",    ServerPlayerRole::Operator});
+    mgr.addPlayer({"76561198000000003", "Player1", ServerPlayerRole::Whitelisted});
+    mgr.addPlayer({"76561198000000004", "Banned1", ServerPlayerRole::Banned});
+    ASSERT_TRUE(mgr.saveXmlAdminFile(path));
+
+    UserRoleManager mgr2;
+    ASSERT_TRUE(mgr2.loadXmlAdminFile(path));
+
+    EXPECT_TRUE(mgr2.isAdmin("76561198000000001"));
+    EXPECT_EQ(mgr2.findPlayer("76561198000000002")->role, ServerPlayerRole::Operator);
+    EXPECT_TRUE(mgr2.isPermitted("76561198000000003"));
+    EXPECT_TRUE(mgr2.isBanned("76561198000000004"));
+}
+
+TEST(UserRoleManager, XmlAdminFileSeparatesSections)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string path = tmp.filePath("serveradmin.xml");
+
+    UserRoleManager mgr;
+    mgr.addPlayer({"76561198000000001", "", ServerPlayerRole::Admin});
+    mgr.addPlayer({"76561198000000002", "", ServerPlayerRole::Banned});
+    ASSERT_TRUE(mgr.saveXmlAdminFile(path));
+
+    std::string xml = readFile(path);
+    // Admin should appear in <admins> section
+    EXPECT_NE(xml.find("<admins>"), std::string::npos);
+    EXPECT_NE(xml.find("76561198000000001"), std::string::npos);
+    // Banned should appear in <blacklist> section
+    EXPECT_NE(xml.find("<blacklist>"), std::string::npos);
+    EXPECT_NE(xml.find("76561198000000002"), std::string::npos);
+}
+
+TEST(UserRoleManager, XmlAdminFileMergesExistingPlayers)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string path = tmp.filePath("serveradmin.xml");
+
+    // Write a minimal 7DTD-style XML manually
+    writeFile(path,
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        "<adminTools>\n"
+        "  <admins>\n"
+        "    <admin steamID=\"76561198000000001\" permission_level=\"0\"/>\n"
+        "  </admins>\n"
+        "  <moderators/>\n"
+        "  <whitelist/>\n"
+        "  <blacklist>\n"
+        "    <blacklist steamID=\"76561198000000002\" unbandate=\"\"/>\n"
+        "  </blacklist>\n"
+        "</adminTools>\n");
+
+    UserRoleManager mgr;
+    ASSERT_TRUE(mgr.loadXmlAdminFile(path));
+
+    EXPECT_TRUE(mgr.isAdmin("76561198000000001"));
+    EXPECT_TRUE(mgr.isBanned("76561198000000002"));
+}
+
+TEST(UserRoleManager, XmlAdminFileLoadMissingReturnsFalse)
+{
+    UserRoleManager mgr;
+    EXPECT_FALSE(mgr.loadXmlAdminFile("/nonexistent/serveradmin.xml"));
+}
+
+TEST(UserRoleManager, XmlAdminFileSaveInvalidPathReturnsFalse)
+{
+    UserRoleManager mgr;
+    mgr.addPlayer({"76561198000000001", "", ServerPlayerRole::Admin});
+    EXPECT_FALSE(mgr.saveXmlAdminFile("/nonexistent/dir/serveradmin.xml"));
+}
+
+// ===========================================================================
+// UserRoleManager – persistence (internal JSON save/load)
 // ===========================================================================
 
 TEST(UserRoleManager, SaveAndLoad)
 {
     TempDir tmp;
     ASSERT_TRUE(tmp.isValid());
-    std::string path = tmp.filePath("roles.json");
+    std::string path = tmp.filePath("players.json");
 
     UserRoleManager mgr;
-    mgr.addUser({"76561198000000001", "Alice", UserRole::Admin});
-    mgr.addUser({"76561198000000002", "Bob",   UserRole::Moderator});
-    mgr.addToWhitelist("76561198000000003");
+    mgr.addPlayer({"76561198000000001", "Alice",  ServerPlayerRole::Admin});
+    mgr.addPlayer({"76561198000000002", "Bob",    ServerPlayerRole::Operator});
+    mgr.addPlayer({"76561198000000003", "Charlie", ServerPlayerRole::Whitelisted});
+    mgr.addPlayer({"76561198000000004", "Dave",   ServerPlayerRole::Banned});
     ASSERT_TRUE(mgr.save(path));
 
     UserRoleManager mgr2;
     ASSERT_TRUE(mgr2.load(path));
-    ASSERT_EQ(mgr2.users().size(), 2u);
+    ASSERT_EQ(mgr2.players().size(), 4u);
 
-    auto alice = mgr2.findUser("76561198000000001");
-    ASSERT_TRUE(alice.has_value());
-    EXPECT_EQ(alice->name, "Alice");
-    EXPECT_EQ(alice->role, UserRole::Admin);
-
-    auto bob = mgr2.findUser("76561198000000002");
-    ASSERT_TRUE(bob.has_value());
-    EXPECT_EQ(bob->role, UserRole::Moderator);
-
-    EXPECT_TRUE(mgr2.isWhitelisted("76561198000000003"));
+    EXPECT_TRUE(mgr2.isAdmin("76561198000000001"));
+    EXPECT_EQ(mgr2.findPlayer("76561198000000002")->role, ServerPlayerRole::Operator);
+    EXPECT_TRUE(mgr2.isPermitted("76561198000000003"));
+    EXPECT_TRUE(mgr2.isBanned("76561198000000004"));
 }
 
 TEST(UserRoleManager, LoadMissingFileReturnsFalse)
 {
     UserRoleManager mgr;
-    EXPECT_FALSE(mgr.load("/nonexistent/path/roles.json"));
+    EXPECT_FALSE(mgr.load("/nonexistent/path/players.json"));
 }
 
 TEST(UserRoleManager, LoadInvalidJsonReturnsFalse)
 {
     TempDir tmp;
     ASSERT_TRUE(tmp.isValid());
-    std::string path = tmp.filePath("roles.json");
+    std::string path = tmp.filePath("players.json");
     writeFile(path, "{ not valid json }");
     UserRoleManager mgr;
     EXPECT_FALSE(mgr.load(path));
@@ -7120,18 +7164,18 @@ TEST(UserRoleManager, LoadInvalidJsonReturnsFalse)
 TEST(UserRoleManager, SaveToInvalidPathReturnsFalse)
 {
     UserRoleManager mgr;
-    mgr.addUser({"76561198000000001", "Alice", UserRole::Admin});
-    EXPECT_FALSE(mgr.save("/nonexistent/dir/roles.json"));
+    mgr.addPlayer({"76561198000000001", "Alice", ServerPlayerRole::Admin});
+    EXPECT_FALSE(mgr.save("/nonexistent/dir/players.json"));
 }
 
 // ===========================================================================
 // UserRoleManager – audit log
 // ===========================================================================
 
-TEST(UserRoleManager, AuditLogRecordsAddUser)
+TEST(UserRoleManager, AuditLogRecordsAddPlayer)
 {
     UserRoleManager mgr;
-    mgr.addUser({"76561198000000001", "Alice", UserRole::Admin}, "admin_actor");
+    mgr.addPlayer({"76561198000000001", "Alice", ServerPlayerRole::Admin}, "admin_actor");
 
     ASSERT_EQ(mgr.auditLog().size(), 1u);
     EXPECT_EQ(mgr.auditLog()[0].actorId, "admin_actor");
@@ -7139,52 +7183,66 @@ TEST(UserRoleManager, AuditLogRecordsAddUser)
     EXPECT_FALSE(mgr.auditLog()[0].timestamp.empty());
 }
 
-TEST(UserRoleManager, AuditLogRecordsSetRole)
+TEST(UserRoleManager, AuditLogRecordsSetPlayerRole)
 {
     UserRoleManager mgr;
-    mgr.addUser({"76561198000000001", "Bob", UserRole::Player}, "system");
-    mgr.setRole("76561198000000001", UserRole::Operator, "admin_actor");
+    mgr.addPlayer({"76561198000000001", "Bob", ServerPlayerRole::Whitelisted}, "system");
+    mgr.setPlayerRole("76561198000000001", ServerPlayerRole::Operator, "admin_actor");
 
     ASSERT_EQ(mgr.auditLog().size(), 2u);
     EXPECT_EQ(mgr.auditLog()[1].actorId, "admin_actor");
     EXPECT_EQ(mgr.auditLog()[1].targetId, "76561198000000001");
 }
 
-TEST(UserRoleManager, AuditLogRecordsRemoveUser)
+TEST(UserRoleManager, AuditLogRecordsRemovePlayer)
 {
     UserRoleManager mgr;
-    mgr.addUser({"76561198000000001", "Bob", UserRole::Player}, "system");
-    mgr.removeUser("76561198000000001", "admin_actor");
+    mgr.addPlayer({"76561198000000001", "Bob", ServerPlayerRole::Whitelisted}, "system");
+    mgr.removePlayer("76561198000000001", "admin_actor");
 
     ASSERT_EQ(mgr.auditLog().size(), 2u);
     EXPECT_EQ(mgr.auditLog()[1].actorId, "admin_actor");
 }
 
-TEST(UserRoleManager, AuditLogRecordsWhitelistChanges)
-{
-    UserRoleManager mgr;
-    mgr.addToWhitelist("76561198000000001", "admin");
-    mgr.removeFromWhitelist("76561198000000001", "admin");
-
-    ASSERT_EQ(mgr.auditLog().size(), 2u);
-    EXPECT_EQ(mgr.auditLog()[0].actorId, "admin");
-    EXPECT_EQ(mgr.auditLog()[1].actorId, "admin");
-}
-
 TEST(UserRoleManager, ClearAuditLog)
 {
     UserRoleManager mgr;
-    mgr.addUser({"76561198000000001", "Alice", UserRole::Admin}, "system");
+    mgr.addPlayer({"76561198000000001", "Alice", ServerPlayerRole::Admin}, "system");
     ASSERT_FALSE(mgr.auditLog().empty());
     mgr.clearAuditLog();
     EXPECT_TRUE(mgr.auditLog().empty());
 }
 
-TEST(UserRoleManager, AuditLogWhitelistNoDoubleEntryOnDuplicate)
+TEST(UserRoleManager, FileLoadDoesNotLogAuditEntries)
 {
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string path = tmp.filePath("adminlist.txt");
+    writeFile(path, "76561198000000001\n76561198000000002\n");
+
     UserRoleManager mgr;
-    mgr.addToWhitelist("76561198000000001");
-    mgr.addToWhitelist("76561198000000001"); // duplicate – no new entry expected
-    // Only one audit entry because the set insert returns false for the duplicate
-    EXPECT_EQ(mgr.auditLog().size(), 1u);
+    ASSERT_TRUE(mgr.loadPlainTextFile(path, ServerPlayerRole::Admin));
+    // File loads are silent – no audit entries expected
+    EXPECT_TRUE(mgr.auditLog().empty());
+}
+
+TEST(UserRoleManager, XmlLoadDoesNotLogAuditEntries)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string path = tmp.filePath("serveradmin.xml");
+    writeFile(path,
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        "<adminTools>\n"
+        "  <admins>\n"
+        "    <admin steamID=\"76561198000000001\" permission_level=\"0\"/>\n"
+        "  </admins>\n"
+        "  <moderators/>\n"
+        "  <whitelist/>\n"
+        "  <blacklist/>\n"
+        "</adminTools>\n");
+
+    UserRoleManager mgr;
+    ASSERT_TRUE(mgr.loadXmlAdminFile(path));
+    EXPECT_TRUE(mgr.auditLog().empty());
 }
