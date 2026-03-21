@@ -69,6 +69,7 @@ A cross-platform Dear ImGui / GLFW desktop application for managing SteamCMD-bas
 | **Batch start / stop / restart** | Start, stop, or restart all servers at once, or limit to a specific group; startup priority ordering is respected |
 | **Auto-update checking** | Periodic SteamCMD update checks per server (`autoUpdateCheckIntervalMinutes`); pending update badges shown on dashboard |
 | **Server statistics** | Track cumulative uptime, total crash count, and last crash time across sessions; stats displayed on dashboard cards and settings tab |
+| **Steam A2S server query** | Optional UDP Steam server query (A2S_INFO protocol) per server via `queryPort`; enables player-count display for games without RCON (Valheim, Palworld, Mordhau, etc.); configured automatically from templates |
 | **About dialog** | Help → About SSA shows version and project information |
 
 ---
@@ -189,6 +190,7 @@ See `servers.json` in the repository root for an example configuration.
     "gracefulShutdownSeconds": 15,
     "environmentVariables": {},
     "autoUpdateCheckIntervalMinutes": 60,
+    "queryPort": 0,
     "totalUptimeSeconds": 0,
     "totalCrashes": 0,
     "lastCrashTime": ""

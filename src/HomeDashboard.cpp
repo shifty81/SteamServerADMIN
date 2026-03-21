@@ -1,4 +1,5 @@
 #include "HomeDashboard.hpp"
+#include "GracefulRestartManager.hpp"
 #include "imgui.h"
 #include "imgui_internal.h"
 
@@ -204,11 +205,19 @@ void HomeDashboard::render()
     auto &servers = m_manager->servers();
     int total = static_cast<int>(servers.size());
     int onlineCount = 0;
+    int pendingUpdateCount = 0;
     for (const auto &s : servers) {
         if (m_manager->isServerRunning(s))
             ++onlineCount;
+        if (m_manager->hasPendingUpdate(s.name) || m_manager->hasPendingModUpdate(s.name))
+            ++pendingUpdateCount;
     }
     int offlineCount = total - onlineCount;
+
+    // Total players across all running servers (sum cached counts)
+    int totalPlayers = 0;
+    for (const auto &[name, cache] : m_playerCounts)
+        if (cache.count > 0) totalPlayers += cache.count;
 
     ImGui::TextColored(ImVec4(0.65f, 0.70f, 0.80f, 1.0f), "Total: %d   ", total);
     ImGui::SameLine(0.0f, 0.0f);
@@ -217,6 +226,17 @@ void HomeDashboard::render()
     ImGui::TextColored(ImVec4(0.65f, 0.70f, 0.80f, 1.0f), "  |  ");
     ImGui::SameLine(0.0f, 0.0f);
     ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.30f, 1.0f), "Offline: %d", offlineCount);
+    ImGui::SameLine();
+    ImGui::TextColored(ImVec4(0.65f, 0.70f, 0.80f, 1.0f), "  |  ");
+    ImGui::SameLine(0.0f, 0.0f);
+    ImGui::TextColored(ImVec4(0.80f, 0.92f, 1.0f, 1.0f), "Players: %d", totalPlayers);
+    if (pendingUpdateCount > 0) {
+        ImGui::SameLine();
+        ImGui::TextColored(ImVec4(0.65f, 0.70f, 0.80f, 1.0f), "  |  ");
+        ImGui::SameLine(0.0f, 0.0f);
+        ImGui::TextColored(ImVec4(1.0f, 0.68f, 0.22f, 1.0f),
+                           "\xe2\xac\x86 %d update(s) pending", pendingUpdateCount);
+    }
 
     // --- Group filter dropdown ---
     {
@@ -244,11 +264,15 @@ void HomeDashboard::render()
     ImGui::Spacing();
     ImGui::Spacing();
 
-    // --- Server card grid (3 per row) ---
-    static constexpr int kCardsPerRow = 3;
+    // --- Server card grid (responsive: 2 cards on narrow windows, up to 4 on wide) ---
     float windowWidth = ImGui::GetWindowContentRegionMax().x - ImGui::GetWindowContentRegionMin().x;
     float gap = 10.0f;
-    float cardWidth = (windowWidth - gap * (kCardsPerRow - 1)) / kCardsPerRow;
+    // Choose column count based on available width
+    int cardsPerRow = 3;
+    if (windowWidth < 560.0f)       cardsPerRow = 1;
+    else if (windowWidth < 840.0f)  cardsPerRow = 2;
+    else if (windowWidth >= 1120.0f) cardsPerRow = 4;
+    float cardWidth = (windowWidth - gap * (cardsPerRow - 1)) / static_cast<float>(cardsPerRow);
     if (cardWidth < 220.0f) cardWidth = 220.0f;
 
     int col = 0;
@@ -265,7 +289,7 @@ void HomeDashboard::render()
         ImGui::PopID();
 
         ++col;
-        if (col >= kCardsPerRow)
+        if (col >= cardsPerRow)
             col = 0;
     }
 }
@@ -347,12 +371,22 @@ void HomeDashboard::renderCard(ServerConfig &server, int index, float cardWidth)
 
     // Player count
     if (players >= 0) {
-        if (server.maxPlayers > 0)
+        if (server.maxPlayers > 0) {
             ImGui::TextColored(ImVec4(0.80f, 0.92f, 1.0f, 1.0f),
                                "Players: %d / %d", players, server.maxPlayers);
-        else
+            // Thin fill bar showing occupancy
+            float frac = static_cast<float>(players) / static_cast<float>(server.maxPlayers);
+            frac = std::min(frac, 1.0f);
+            ImVec4 barColor = (frac >= 0.9f) ? ImVec4(1.0f, 0.50f, 0.20f, 1.0f)
+                                              : ImVec4(0.30f, 0.72f, 0.95f, 1.0f);
+            ImGui::PushStyleColor(ImGuiCol_PlotHistogram, barColor);
+            ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.10f, 0.10f, 0.15f, 0.7f));
+            ImGui::ProgressBar(frac, ImVec2(-1.0f, 4.0f), "");
+            ImGui::PopStyleColor(2);
+        } else {
             ImGui::TextColored(ImVec4(0.80f, 0.92f, 1.0f, 1.0f),
                                "Players: %d", players);
+        }
     } else {
         ImGui::TextColored(ImVec4(0.50f, 0.50f, 0.56f, 1.0f), "Players: \xe2\x80\x93");
     }
@@ -362,20 +396,46 @@ void HomeDashboard::renderCard(ServerConfig &server, int index, float cardWidth)
     ImGui::TextColored(ImVec4(0.68f, 0.74f, 0.86f, 1.0f),
                        "Uptime: %s", formatUptime(secs).c_str());
 
-    // Resource usage
+    // Resource usage – text + thin progress bars
     if (online) {
         ResourceUsage ru = m_manager->resourceMonitor()->usage(server.name);
         if (ru.cpuPercent > 0.0 || ru.memoryBytes > 0) {
-            ImVec4 cpuColor = (server.cpuAlertThreshold > 0.0 && ru.cpuPercent > server.cpuAlertThreshold)
+            bool cpuAlert = (server.cpuAlertThreshold > 0.0
+                             && ru.cpuPercent > server.cpuAlertThreshold);
+            ImVec4 cpuColor = cpuAlert
                 ? ImVec4(1.0f, 0.40f, 0.35f, 1.0f)
                 : ImVec4(0.45f, 0.82f, 0.50f, 1.0f);
-            ImGui::TextColored(cpuColor, "CPU: %.1f%%", ru.cpuPercent);
-            ImGui::SameLine();
             double memMB = static_cast<double>(ru.memoryBytes) / (1024.0 * 1024.0);
-            ImVec4 memColor = (server.memAlertThresholdMB > 0.0 && memMB > server.memAlertThresholdMB)
+            bool memAlert = (server.memAlertThresholdMB > 0.0
+                             && memMB > server.memAlertThresholdMB);
+            ImVec4 memColor = memAlert
                 ? ImVec4(1.0f, 0.40f, 0.35f, 1.0f)
                 : ImVec4(0.45f, 0.82f, 0.50f, 1.0f);
-            ImGui::TextColored(memColor, "Mem: %s", formatMemoryMB(ru.memoryBytes).c_str());
+
+            // CPU label + thin bar
+            ImGui::TextColored(cpuColor, "CPU: %.1f%%", ru.cpuPercent);
+            {
+                float frac = static_cast<float>(
+                    std::min(ru.cpuPercent / 100.0, 1.0));
+                ImGui::PushStyleColor(ImGuiCol_PlotHistogram, cpuColor);
+                ImGui::PushStyleColor(ImGuiCol_FrameBg,
+                                      ImVec4(0.10f, 0.10f, 0.15f, 0.7f));
+                ImGui::ProgressBar(frac, ImVec2(-1.0f, 4.0f), "");
+                ImGui::PopStyleColor(2);
+            }
+
+            // Memory label + thin bar
+            ImGui::TextColored(memColor, "Mem: %s",
+                               formatMemoryMB(ru.memoryBytes).c_str());
+            if (server.memAlertThresholdMB > 0.0) {
+                float frac = static_cast<float>(
+                    std::min(memMB / server.memAlertThresholdMB, 1.0));
+                ImGui::PushStyleColor(ImGuiCol_PlotHistogram, memColor);
+                ImGui::PushStyleColor(ImGuiCol_FrameBg,
+                                      ImVec4(0.10f, 0.10f, 0.15f, 0.7f));
+                ImGui::ProgressBar(frac, ImVec2(-1.0f, 4.0f), "");
+                ImGui::PopStyleColor(2);
+            }
         }
     }
 
@@ -384,6 +444,16 @@ void HomeDashboard::renderCard(ServerConfig &server, int index, float cardWidth)
         ImGui::TextColored(ImVec4(1.0f, 0.68f, 0.22f, 1.0f), "\xe2\xac\x86 Update Available");
     if (m_manager->hasPendingModUpdate(server.name))
         ImGui::TextColored(ImVec4(0.38f, 0.72f, 1.0f, 1.0f), "\xF0\x9F\x94\xA7 Mod Update");
+
+    // Graceful restart countdown badge
+    {
+        auto *grm = m_manager->gracefulRestartManager();
+        if (grm && grm->isRestarting(server.name)) {
+            int minsLeft = grm->minutesRemaining(server.name);
+            ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.20f, 1.0f),
+                               "\xF0\x9F\x94\x84 Restarting in %dm", minsLeft);
+        }
+    }
 
     // Statistics
     ImGui::TextColored(ImVec4(0.46f, 0.48f, 0.56f, 1.0f), "Total: %s  |  Crashes: %d",

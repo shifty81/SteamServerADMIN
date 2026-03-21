@@ -267,6 +267,7 @@ void ServerTabWidget::renderSettingsTab()
         copyStr(m_settGroup,      sizeof(m_settGroup),      m_server.group);
         m_settRconCmdInterval     = m_server.rconCommandIntervalMinutes;
         m_settAutoUpdateCheck     = m_server.autoUpdateCheckIntervalMinutes;
+        m_settQueryPort           = m_server.queryPort;
 
         // Tags: join as comma-separated string
         {
@@ -295,6 +296,28 @@ void ServerTabWidget::renderSettingsTab()
         m_webhookTestResult.clear();
         m_webhookTestOk = false;
     }
+
+    // ---- Live validation status banner ----
+    {
+        auto errors = m_server.validate();
+        if (errors.empty()) {
+            ImGui::TextColored(ImVec4(0.22f, 0.88f, 0.38f, 1.0f),
+                               "\xe2\x9c\x93 Configuration is valid");
+        } else {
+            ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.30f, 1.0f),
+                               "\xe2\x9c\x97 %d issue(s) \xe2\x80\x93 hover for details",
+                               static_cast<int>(errors.size()));
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
+                ImGui::BeginTooltip();
+                for (const auto &e : errors)
+                    ImGui::TextUnformatted(e.c_str());
+                ImGui::EndTooltip();
+            }
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("(unsaved changes are shown in the form below)");
+    }
+    ImGui::Separator();
 
     ImGui::SeparatorText("Server Identity");
     ImGui::InputText("Name",           m_settName,     sizeof(m_settName));
@@ -362,6 +385,17 @@ void ServerTabWidget::renderSettingsTab()
 
     ImGui::SeparatorText("Players");
     ImGui::InputInt("Max Players (0 = unlimited)", &m_settMaxPlayers);
+
+    ImGui::SeparatorText("Steam Query");
+    ImGui::InputInt("A2S Query Port (0 = disabled)", &m_settQueryPort);
+    ImGui::SameLine();
+    ImGui::TextDisabled("(?)");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip(
+            "UDP port for Steam A2S_INFO queries.\n"
+            "Used to retrieve player counts for servers without RCON.\n"
+            "Typical values: 27015 (most Source games), 2457 (Valheim),\n"
+            "28015 (Rust), 26900 (7 Days to Die). 0 = disabled.");
 
     ImGui::SeparatorText("Automation");
     ImGui::Checkbox("Auto Update",     &m_settAutoUpdate);
@@ -562,6 +596,7 @@ void ServerTabWidget::renderSettingsTab()
         m_server.group                       = m_settGroup;
         m_server.rconCommandIntervalMinutes  = m_settRconCmdInterval;
         m_server.autoUpdateCheckIntervalMinutes = m_settAutoUpdateCheck;
+        m_server.queryPort                   = m_settQueryPort;
 
         // Parse comma-separated tags
         {

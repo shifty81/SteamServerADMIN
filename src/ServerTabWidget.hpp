@@ -78,6 +78,7 @@ private:
     char m_settGroup[256]    = {};
     int  m_settRconCmdInterval = 0;
     int  m_settAutoUpdateCheck = 0;
+    int  m_settQueryPort = 0;
 
     // Tags (comma-separated editing buffer)
     char m_settTags[1024]    = {};
@@ -139,6 +140,7 @@ private:
 
     // Log viewer
     std::string m_logContent;
+    std::string m_logSearchText;   // filter text for the per-server log viewer
     std::chrono::steady_clock::time_point m_lastLogRefresh;
 
     // State flags

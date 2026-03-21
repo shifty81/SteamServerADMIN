@@ -17,7 +17,8 @@ struct GameTemplate {
     std::string defaultArgs;   // typical launch arguments
     std::string folderHint;    // short folder name hint (e.g. "ark_sa")
     std::vector<std::string> configPaths; // known config file paths relative to install dir
-    int         defaultRconPort = 27015;  // default RCON port for this game
+    int         defaultRconPort  = 27015; // default RCON port for this game
+    int         defaultQueryPort = 27015; // default Steam A2S query port (0 = no query support)
 
     /** Return the built-in list of known game server templates. */
     static std::vector<GameTemplate> builtinTemplates()
@@ -60,7 +61,7 @@ struct GameTemplate {
               "rust",
               { "server/rust_server/cfg/server.cfg",
                 "server/rust_server/cfg/users.cfg" },
-              28016 },
+              28016, 28015 },  // Rust RCON=28016, A2S query=28015 (same as game port)
 
             { "Valheim",
               896660,
@@ -74,7 +75,7 @@ struct GameTemplate {
               { "adminlist.txt",
                 "bannedlist.txt",
                 "permittedlist.txt" },
-              0 },   // Valheim has no RCON by default
+              0, 2457 },   // Valheim has no RCON; A2S query port is game port + 1
 
             { "Project Zomboid",
               380870,
@@ -113,7 +114,7 @@ struct GameTemplate {
               "satisfactory",
               { "FactoryGame/Saved/Config/LinuxServer/Game.ini",
                 "FactoryGame/Saved/Config/LinuxServer/Engine.ini" },
-              0 },   // Satisfactory has no RCON
+              0, 0 },   // Satisfactory has no RCON and no A2S query support
 
             // ---- Additional templates ----
 
@@ -128,7 +129,7 @@ struct GameTemplate {
               "7dtd",
               { "serverconfig.xml",
                 "serveradmin.xml" },
-              8081 },  // 7DTD uses telnet on 8081 by default
+              8081, 26900 },  // 7DTD telnet RCON=8081, A2S query=26900
 
             { "Garry's Mod",
               4020,
@@ -219,7 +220,7 @@ struct GameTemplate {
               "-serverip 0.0.0.0 -serversteamport 8766",
               "the_forest",
               { "config.cfg" },
-              0 },   // The Forest has no RCON
+              0, 0 },   // The Forest has no RCON and no A2S query support
 
             { "Enshrouded",
               2278520,
@@ -231,7 +232,7 @@ struct GameTemplate {
               "",
               "enshrouded",
               { "enshrouded_server.json" },
-              0 },   // Enshrouded has no RCON
+              0, 0 },   // Enshrouded has no RCON and no A2S query support
 
             { "V Rising",
               1829350,
@@ -282,7 +283,7 @@ struct GameTemplate {
               "dst",
               { "cluster.ini",
                 "cluster_token.txt" },
-              0 },   // DST has no RCON
+              0, 0 },   // DST has no RCON and no A2S query support
 
             { "ARMA 3",
               233780,
@@ -334,7 +335,7 @@ struct GameTemplate {
               "",
               "barotrauma",
               { "serversettings.xml" },
-              0 },   // Barotrauma has no RCON
+              0, 0 },   // Barotrauma has no RCON and no A2S query support
 
             { "Space Engineers",
               298740,
@@ -346,7 +347,7 @@ struct GameTemplate {
               "-console",
               "space_engineers",
               { "SpaceEngineers-Dedicated.cfg" },
-              0 },   // Space Engineers has no standard RCON
+              0, 0 },   // Space Engineers has no standard RCON or A2S
 
             { "Sons of the Forest",
               2465200,
@@ -358,7 +359,7 @@ struct GameTemplate {
               "",
               "sons_of_the_forest",
               { "dedicatedserver.cfg" },
-              0 },   // Sons of the Forest has no RCON
+              0, 0 },   // Sons of the Forest has no RCON or A2S
 
             { "Mordhau",
               629800,
@@ -370,7 +371,59 @@ struct GameTemplate {
               "-log -Port=7777 -QueryPort=27015",
               "mordhau",
               { "Mordhau/Saved/Config/LinuxServer/Game.ini" },
-              0 },   // Mordhau has no standard RCON
+              0, 27015 },   // Mordhau: no standard RCON; A2S query on default port 27015
+
+            // ---- Additional popular dedicated servers ----
+
+            { "Stationeers",
+              544550,
+#ifdef _WIN32
+              "rocketstation_DedicatedServer.exe",
+#else
+              "rocketstation_DedicatedServer.x86_64",
+#endif
+              "-load",
+              "stationeers",
+              { "saves/default/world.xml" },
+              27500, 27015 },   // Stationeers RCON=27500, A2S query=27015
+
+            { "SCUM",
+              996580,
+#ifdef _WIN32
+              "SCUM/Binaries/Win64/SCUMServer-Win64-Shipping.exe",
+#else
+              "SCUM/Binaries/Linux/SCUMServer-Linux-Shipping",
+#endif
+              "-log",
+              "scum",
+              { "SCUM/Saved/Config/WindowsServer/Game.ini",
+                "SCUM/Saved/Config/WindowsServer/GameUserSettings.ini" },
+              7779, 27016 },   // SCUM RCON=7779, A2S query=27016
+
+            { "Arma Reforger",
+              1874900,
+#ifdef _WIN32
+              "ArmaReforgerServer.exe",
+#else
+              "ArmaReforgerServer",
+#endif
+              "",
+              "arma_reforger",
+              { "config.json" },
+              19999, 17777 },  // Arma Reforger RCON=19999, A2S query=17777
+
+            { "ECO",
+              382310,
+#ifdef _WIN32
+              "EcoServer.exe",
+#else
+              "EcoServer.x86_64",
+#endif
+              "",
+              "eco",
+              { "Configs/Network.eco",
+                "Configs/Difficulty.eco" },
+              3001, 3000 },    // ECO REST/RCON=3001, A2S query=3000
 
             { "Custom (manual entry)",
               0,
@@ -378,7 +431,7 @@ struct GameTemplate {
               "",
               "custom",
               {},
-              27015 },
+              27015, 0 },   // Custom: user configures everything manually
         };
     }
 };
