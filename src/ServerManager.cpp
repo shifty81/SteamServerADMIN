@@ -526,6 +526,11 @@ static ServerConfig deserializeServerConfig(const json &obj)
 
 bool ServerManager::loadConfig()
 {
+    // If the config file does not exist yet (e.g. first run), treat it as an
+    // empty server list rather than an error.
+    if (!fs::exists(m_configFile))
+        return true;
+
     std::ifstream file(m_configFile);
     if (!file.is_open()) {
         std::cerr << "ServerManager::loadConfig: cannot open " << m_configFile << "\n";

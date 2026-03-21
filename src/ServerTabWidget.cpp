@@ -81,8 +81,11 @@ ServerTabWidget::~ServerTabWidget()
 
 void ServerTabWidget::startDeployAsync()
 {
-    if (m_deployRunning || m_deployThread.joinable())
+    if (m_deployRunning)
         return;
+    // Join a previously completed thread before starting a new deployment.
+    if (m_deployThread.joinable())
+        m_deployThread.join();
     m_deployRunning = true;
     m_deployDone    = false;
     m_deploySuccess = false;

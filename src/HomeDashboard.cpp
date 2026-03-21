@@ -566,7 +566,7 @@ void HomeDashboard::renderCard(ServerConfig &server, int index, float cardWidth)
 
 void HomeDashboard::renderContextMenu(ServerConfig &server)
 {
-    if (ImGui::BeginPopupContextItem()) {
+    if (ImGui::BeginPopupContextItem("##ctx")) {
         if (ImGui::MenuItem("\xF0\x9F\x92\xBE  Save Config"))
             m_manager->saveConfig();
 

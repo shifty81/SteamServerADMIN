@@ -484,8 +484,11 @@ TEST(ServerConfig, LoadMissingFile)
     TempDir tmp;
     ASSERT_TRUE(tmp.isValid());
 
+    // A missing servers.json is treated as an empty server list (first-run
+    // scenario), so loadConfig() returns true with an empty server list.
     ServerManager mgr(tmp.filePath("nonexistent.json"));
-    EXPECT_FALSE(mgr.loadConfig());
+    EXPECT_TRUE(mgr.loadConfig());
+    EXPECT_TRUE(mgr.servers().empty());
 }
 
 TEST(ServerConfig, MultipleServersRoundTrip)
