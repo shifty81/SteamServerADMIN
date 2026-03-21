@@ -195,6 +195,40 @@ TEST(ServerConfig, BackupRotation)
     }
 }
 
+// Verify that createZip and extractZip work correctly when the source/dest
+// paths contain spaces, which previously broke the shell command construction.
+TEST(BackupModule, CreateAndExtractZipPathWithSpaces)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    // Create a source directory whose path includes a space
+    std::string srcDir = tmp.filePath("source dir");
+    fs::create_directories(srcDir);
+    // Place a file inside it
+    { std::ofstream f(srcDir + "/data.txt"); ASSERT_TRUE(f.is_open()); f << "hello"; }
+
+    std::string destDir = tmp.filePath("dest dir");
+    std::string zipPath = tmp.filePath("out dir/archive.zip");
+
+    EXPECT_TRUE(BackupModule::createZip(srcDir, zipPath));
+    EXPECT_TRUE(fs::exists(zipPath));
+
+    EXPECT_TRUE(BackupModule::extractZip(zipPath, destDir));
+    EXPECT_TRUE(fs::exists(destDir + "/data.txt"));
+}
+
+// Verify that createZip fails gracefully when the source directory is missing.
+TEST(BackupModule, CreateZipMissingSource)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    std::string missing = tmp.filePath("no such dir");
+    std::string zip     = tmp.filePath("out.zip");
+    EXPECT_FALSE(BackupModule::createZip(missing, zip));
+}
+
 TEST(ServerConfig, SchedulerStartStop)
 {
     TempDir tmp;

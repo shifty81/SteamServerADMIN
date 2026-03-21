@@ -19,14 +19,21 @@ namespace fs = std::filesystem;
 // ---------------------------------------------------------------------------
 
 #ifdef _WIN32
-// Escape a path for use in a PowerShell double-quoted string.
-static std::string escapePwshArg(const std::string &path)
+// Escape a path for use inside a PowerShell single-quoted string ('...').
+// In PowerShell single-quoted strings only ' itself is special (escape as '').
+// Using single quotes avoids the double-quote nesting problem that arises when
+// cmd.exe parses the outer powershell -Command "..." invocation.
+static std::string escapePwshPath(const std::string &path)
 {
-    std::string s = path;
-    s = replaceAll(s, "`",  "``");
-    s = replaceAll(s, "\"", "`\"");
-    s = replaceAll(s, "$",  "`$");
-    return s;
+    return replaceAll(path, "'", "''");
+}
+#else
+// Escape a path for use inside a POSIX shell single-quoted string ('...').
+// The only character that cannot appear inside single quotes is ' itself,
+// which must be ended, escaped as \', then re-opened: '\''
+static std::string escapeShPath(const std::string &path)
+{
+    return replaceAll(path, "'", "'\\''");
 }
 #endif
 
@@ -53,15 +60,18 @@ bool BackupModule::createZip(const std::string &sourceDir, const std::string &de
     std::string levelArg = (compressionLevel == 0) ? "NoCompression" : "Optimal";
     std::string nativeSrc = fs::path(sourceDir).string();
     std::string nativeDst = fs::path(destZip).string();
+    // Use single-quoted strings so that cmd.exe's double-quote stripping cannot
+    // break paths that contain spaces (e.g. "C:\My Projects\...").
     std::string script =
-        "$src = \"" + escapePwshArg(nativeSrc) + "\\*\"; "
-        "$dst = \"" + escapePwshArg(nativeDst) + "\"; "
+        "$src = '" + escapePwshPath(nativeSrc) + "\\*'; "
+        "$dst = '" + escapePwshPath(nativeDst) + "'; "
         "Compress-Archive -LiteralPath $src -DestinationPath $dst"
         " -CompressionLevel " + levelArg + " -Force";
     std::string cmd = "powershell -NoProfile -NonInteractive -Command \"" + script + "\"";
 #else
-    std::string cmd = "cd " + sourceDir + " && zip -r -" + std::to_string(compressionLevel)
-                    + " " + destZip + " . 2>&1";
+    std::string cmd = "cd '" + escapeShPath(sourceDir) + "' && zip -r -"
+                    + std::to_string(compressionLevel)
+                    + " '" + escapeShPath(destZip) + "' . 2>&1";
 #endif
     int ret = runCommand(cmd);
     if (ret != 0) {
@@ -79,12 +89,13 @@ bool BackupModule::extractZip(const std::string &zipFile, const std::string &des
     std::string nativeSrc = fs::path(zipFile).string();
     std::string nativeDst = fs::path(destDir).string();
     std::string script =
-        "$src = \"" + escapePwshArg(nativeSrc) + "\"; "
-        "$dst = \"" + escapePwshArg(nativeDst) + "\"; "
+        "$src = '" + escapePwshPath(nativeSrc) + "'; "
+        "$dst = '" + escapePwshPath(nativeDst) + "'; "
         "Expand-Archive -LiteralPath $src -DestinationPath $dst -Force";
     std::string cmd = "powershell -NoProfile -NonInteractive -Command \"" + script + "\"";
 #else
-    std::string cmd = "unzip -o " + zipFile + " -d " + destDir + " 2>&1";
+    std::string cmd = "unzip -o '" + escapeShPath(zipFile) + "' -d '"
+                    + escapeShPath(destDir) + "' 2>&1";
 #endif
     int ret = runCommand(cmd);
     if (ret != 0) {

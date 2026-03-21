@@ -121,7 +121,7 @@ static void drawGlassPanel(ImDrawList *dl, ImVec2 pMin, ImVec2 pMax,
 
 /// Coloured status accent stripe along the top of the card.
 static void drawStatusStripe(ImDrawList *dl, ImVec2 pMin, ImVec2 pMax,
-                              bool online, int players)
+                              bool online, bool transitional)
 {
     const float stripeH = 3.0f;
     ImVec2 sMax(pMax.x, pMin.y + stripeH);
@@ -129,10 +129,10 @@ static void drawStatusStripe(ImDrawList *dl, ImVec2 pMin, ImVec2 pMax,
     ImU32 col;
     if (!online)
         col = IM_COL32(220, 55, 55, 200);
-    else if (players > 0)
-        col = IM_COL32(50, 210, 90, 220);
-    else
+    else if (transitional)
         col = IM_COL32(230, 190, 40, 200);
+    else
+        col = IM_COL32(50, 210, 90, 220);
 
     dl->AddRectFilled(pMin, sMax, col, kCardRounding, ImDrawFlags_RoundCornersTop);
 }
@@ -306,6 +306,12 @@ void HomeDashboard::renderCard(ServerConfig &server, int index, float cardWidth)
 {
     bool online = m_manager->isServerRunning(server);
 
+    // Transitional state: deploying or gracefully restarting – shown as yellow.
+    bool deployRunning = m_manager->isDeploying(server.name);
+    auto *grm = m_manager->gracefulRestartManager();
+    bool inRestart = grm && grm->isRestarting(server.name);
+    bool transitional = online && (deployRunning || inRestart);
+
     // Throttle player count queries
     int players = -1;
     if (online) {
@@ -344,9 +350,10 @@ void HomeDashboard::renderCard(ServerConfig &server, int index, float cardWidth)
 
     // ====== Card content ======
 
-    // Status indicator + name
-    const char *light = !online ? "\xF0\x9F\x94\xB4"
-                        : (players > 0 ? "\xF0\x9F\x9F\xA2" : "\xF0\x9F\x9F\xA1");
+    // Status indicator + name – aligned with sidebar: 🟢 online, 🟡 transitional, 🔴 offline
+    const char *light = !online     ? "\xF0\x9F\x94\xB4"   // 🔴 offline
+                        : transitional ? "\xF0\x9F\x9F\xA1" // 🟡 deploying / restarting
+                                       : "\xF0\x9F\x9F\xA2"; // 🟢 online
     ImGui::Text("%s", light);
     ImGui::SameLine();
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
@@ -451,7 +458,6 @@ void HomeDashboard::renderCard(ServerConfig &server, int index, float cardWidth)
 
     // Graceful restart countdown badge
     {
-        auto *grm = m_manager->gracefulRestartManager();
         if (grm && grm->isRestarting(server.name)) {
             int minsLeft = grm->minutesRemaining(server.name);
             ImGui::TextColored(ImVec4(1.0f, 0.85f, 0.20f, 1.0f),
@@ -493,8 +499,6 @@ void HomeDashboard::renderCard(ServerConfig &server, int index, float cardWidth)
         // Use the ServerManager's isDeploying() to reflect the actual deploy
         // state managed by ServerTabWidget::startDeployAsync (which registers
         // a deploy log observer while a deploy is running).
-        bool deployRunning = m_manager->isDeploying(server.name);
-
         if (deployRunning) {
             static const char *spinFrames[] = {"|", "/", "-", "\\"};
             int frame = static_cast<int>(ImGui::GetTime() * 8.0) % 4;
@@ -523,7 +527,7 @@ void HomeDashboard::renderCard(ServerConfig &server, int index, float cardWidth)
 
     dl->ChannelsSetCurrent(0);
     drawGlassPanel(dl, cardMin, cardMax, online, hovered);
-    drawStatusStripe(dl, cardMin, cardMax, online, players);
+    drawStatusStripe(dl, cardMin, cardMax, online, transitional);
     dl->ChannelsMerge();
 
     ImGui::EndChild();
