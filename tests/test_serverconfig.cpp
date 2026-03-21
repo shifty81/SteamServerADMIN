@@ -29,6 +29,7 @@
 #include "SteamCmdModule.hpp"
 #include "RconClient.hpp"
 #include "SteamQueryClient.hpp"
+#include "UserRoleManager.hpp"
 
 namespace fs = std::filesystem;
 
@@ -6782,3 +6783,466 @@ TEST(ServerManager, IsDeployingIndependentPerServer)
     EXPECT_TRUE(mgr.isDeploying("ServerB"));
 }
 
+
+
+// ===========================================================================
+// UserRoleManager – role names
+// ===========================================================================
+
+TEST(UserRoleManager, RoleNames)
+{
+    EXPECT_EQ(UserRoleManager::roleName(ServerPlayerRole::Admin),       "Admin");
+    EXPECT_EQ(UserRoleManager::roleName(ServerPlayerRole::Operator),    "Operator");
+    EXPECT_EQ(UserRoleManager::roleName(ServerPlayerRole::Whitelisted), "Whitelisted");
+    EXPECT_EQ(UserRoleManager::roleName(ServerPlayerRole::Banned),      "Banned");
+}
+
+// ===========================================================================
+// UserRoleManager – player CRUD
+// ===========================================================================
+
+TEST(UserRoleManager, AddAndFindPlayer)
+{
+    UserRoleManager mgr;
+    PlayerEntry e{"76561198000000001", "Alice", ServerPlayerRole::Admin};
+    mgr.addPlayer(e);
+
+    auto found = mgr.findPlayer("76561198000000001");
+    ASSERT_TRUE(found.has_value());
+    EXPECT_EQ(found->name, "Alice");
+    EXPECT_EQ(found->role, ServerPlayerRole::Admin);
+}
+
+TEST(UserRoleManager, FindPlayerMissingReturnsNullopt)
+{
+    UserRoleManager mgr;
+    EXPECT_FALSE(mgr.findPlayer("76561198999999999").has_value());
+}
+
+TEST(UserRoleManager, AddPlayerUpdatesExisting)
+{
+    UserRoleManager mgr;
+    mgr.addPlayer({"76561198000000001", "Alice", ServerPlayerRole::Whitelisted});
+    mgr.addPlayer({"76561198000000001", "AliceRenamed", ServerPlayerRole::Admin});
+
+    EXPECT_EQ(mgr.players().size(), 1u);
+    auto p = mgr.findPlayer("76561198000000001");
+    ASSERT_TRUE(p.has_value());
+    EXPECT_EQ(p->name, "AliceRenamed");
+    EXPECT_EQ(p->role, ServerPlayerRole::Admin);
+}
+
+TEST(UserRoleManager, RemovePlayer)
+{
+    UserRoleManager mgr;
+    mgr.addPlayer({"76561198000000001", "Alice", ServerPlayerRole::Admin});
+    EXPECT_TRUE(mgr.removePlayer("76561198000000001"));
+    EXPECT_EQ(mgr.players().size(), 0u);
+    EXPECT_FALSE(mgr.findPlayer("76561198000000001").has_value());
+}
+
+TEST(UserRoleManager, RemovePlayerNotFoundReturnsFalse)
+{
+    UserRoleManager mgr;
+    EXPECT_FALSE(mgr.removePlayer("76561198999999999"));
+}
+
+TEST(UserRoleManager, SetPlayerRole)
+{
+    UserRoleManager mgr;
+    mgr.addPlayer({"76561198000000001", "Bob", ServerPlayerRole::Whitelisted});
+    EXPECT_TRUE(mgr.setPlayerRole("76561198000000001", ServerPlayerRole::Operator));
+
+    auto p = mgr.findPlayer("76561198000000001");
+    ASSERT_TRUE(p.has_value());
+    EXPECT_EQ(p->role, ServerPlayerRole::Operator);
+}
+
+TEST(UserRoleManager, SetPlayerRoleNotFoundReturnsFalse)
+{
+    UserRoleManager mgr;
+    EXPECT_FALSE(mgr.setPlayerRole("76561198999999999", ServerPlayerRole::Admin));
+}
+
+TEST(UserRoleManager, GetPlayersByRole)
+{
+    UserRoleManager mgr;
+    mgr.addPlayer({"76561198000000001", "A1", ServerPlayerRole::Admin});
+    mgr.addPlayer({"76561198000000002", "A2", ServerPlayerRole::Admin});
+    mgr.addPlayer({"76561198000000003", "W1", ServerPlayerRole::Whitelisted});
+    mgr.addPlayer({"76561198000000004", "B1", ServerPlayerRole::Banned});
+
+    auto admins = mgr.getPlayersByRole(ServerPlayerRole::Admin);
+    EXPECT_EQ(admins.size(), 2u);
+
+    auto ops = mgr.getPlayersByRole(ServerPlayerRole::Operator);
+    EXPECT_EQ(ops.size(), 0u);
+
+    auto wl = mgr.getPlayersByRole(ServerPlayerRole::Whitelisted);
+    EXPECT_EQ(wl.size(), 1u);
+
+    auto banned = mgr.getPlayersByRole(ServerPlayerRole::Banned);
+    EXPECT_EQ(banned.size(), 1u);
+}
+
+// ===========================================================================
+// UserRoleManager – convenience queries
+// ===========================================================================
+
+TEST(UserRoleManager, IsAdmin)
+{
+    UserRoleManager mgr;
+    mgr.addPlayer({"76561198000000001", "A", ServerPlayerRole::Admin});
+    mgr.addPlayer({"76561198000000002", "W", ServerPlayerRole::Whitelisted});
+
+    EXPECT_TRUE(mgr.isAdmin("76561198000000001"));
+    EXPECT_FALSE(mgr.isAdmin("76561198000000002"));
+    EXPECT_FALSE(mgr.isAdmin("76561198999999999")); // unknown
+}
+
+TEST(UserRoleManager, IsBanned)
+{
+    UserRoleManager mgr;
+    mgr.addPlayer({"76561198000000001", "B", ServerPlayerRole::Banned});
+    mgr.addPlayer({"76561198000000002", "W", ServerPlayerRole::Whitelisted});
+
+    EXPECT_TRUE(mgr.isBanned("76561198000000001"));
+    EXPECT_FALSE(mgr.isBanned("76561198000000002"));
+    EXPECT_FALSE(mgr.isBanned("76561198999999999")); // unknown
+}
+
+TEST(UserRoleManager, IsPermitted)
+{
+    UserRoleManager mgr;
+    mgr.addPlayer({"76561198000000001", "W", ServerPlayerRole::Whitelisted});
+    mgr.addPlayer({"76561198000000002", "O", ServerPlayerRole::Operator});
+    mgr.addPlayer({"76561198000000003", "A", ServerPlayerRole::Admin});
+    mgr.addPlayer({"76561198000000004", "B", ServerPlayerRole::Banned});
+
+    EXPECT_TRUE(mgr.isPermitted("76561198000000001"));  // Whitelisted
+    EXPECT_TRUE(mgr.isPermitted("76561198000000002"));  // Operator
+    EXPECT_TRUE(mgr.isPermitted("76561198000000003"));  // Admin
+    EXPECT_FALSE(mgr.isPermitted("76561198000000004")); // Banned
+    EXPECT_FALSE(mgr.isPermitted("76561198999999999")); // Unknown
+}
+
+// ===========================================================================
+// UserRoleManager – plain-text file I/O
+// ===========================================================================
+
+TEST(UserRoleManager, PlainTextWhitelistRoundTrip)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string path = tmp.filePath("permittedlist.txt");
+
+    UserRoleManager mgr;
+    mgr.addPlayer({"76561198000000001", "", ServerPlayerRole::Whitelisted});
+    mgr.addPlayer({"76561198000000002", "", ServerPlayerRole::Whitelisted});
+    ASSERT_TRUE(mgr.savePlainTextFile(path, ServerPlayerRole::Whitelisted));
+
+    UserRoleManager mgr2;
+    ASSERT_TRUE(mgr2.loadPlainTextFile(path, ServerPlayerRole::Whitelisted));
+    EXPECT_EQ(mgr2.getPlayersByRole(ServerPlayerRole::Whitelisted).size(), 2u);
+    EXPECT_TRUE(mgr2.isPermitted("76561198000000001"));
+    EXPECT_TRUE(mgr2.isPermitted("76561198000000002"));
+}
+
+TEST(UserRoleManager, PlainTextAdminFileRoundTrip)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string path = tmp.filePath("adminlist.txt");
+
+    UserRoleManager mgr;
+    mgr.addPlayer({"76561198000000001", "", ServerPlayerRole::Admin});
+    ASSERT_TRUE(mgr.savePlainTextFile(path, ServerPlayerRole::Admin));
+
+    // Only admin entries should be in the file
+    UserRoleManager mgr2;
+    ASSERT_TRUE(mgr2.loadPlainTextFile(path, ServerPlayerRole::Admin));
+    auto admins = mgr2.getPlayersByRole(ServerPlayerRole::Admin);
+    ASSERT_EQ(admins.size(), 1u);
+    EXPECT_EQ(admins[0].steamId, "76561198000000001");
+}
+
+TEST(UserRoleManager, PlainTextFileSkipsCommentsAndBlankLines)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string path = tmp.filePath("adminlist.txt");
+
+    writeFile(path,
+        "// This is a comment\n"
+        "\n"
+        "76561198000000001\n"
+        "# another comment\n"
+        "76561198000000002\n");
+
+    UserRoleManager mgr;
+    ASSERT_TRUE(mgr.loadPlainTextFile(path, ServerPlayerRole::Admin));
+    auto admins = mgr.getPlayersByRole(ServerPlayerRole::Admin);
+    EXPECT_EQ(admins.size(), 2u);
+}
+
+TEST(UserRoleManager, PlainTextFileMergesExistingPlayers)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string path = tmp.filePath("adminlist.txt");
+    writeFile(path, "76561198000000002\n");
+
+    UserRoleManager mgr;
+    mgr.addPlayer({"76561198000000001", "Alice", ServerPlayerRole::Whitelisted});
+    ASSERT_TRUE(mgr.loadPlainTextFile(path, ServerPlayerRole::Admin));
+
+    // Original entry kept, new admin entry added
+    EXPECT_EQ(mgr.players().size(), 2u);
+    EXPECT_TRUE(mgr.isPermitted("76561198000000001"));
+    EXPECT_TRUE(mgr.isAdmin("76561198000000002"));
+}
+
+TEST(UserRoleManager, PlainTextFileLoadMissingReturnsFalse)
+{
+    UserRoleManager mgr;
+    EXPECT_FALSE(mgr.loadPlainTextFile("/nonexistent/adminlist.txt",
+                                       ServerPlayerRole::Admin));
+}
+
+TEST(UserRoleManager, PlainTextFileSaveInvalidPathReturnsFalse)
+{
+    UserRoleManager mgr;
+    mgr.addPlayer({"76561198000000001", "", ServerPlayerRole::Admin});
+    EXPECT_FALSE(mgr.savePlainTextFile("/nonexistent/dir/adminlist.txt",
+                                       ServerPlayerRole::Admin));
+}
+
+TEST(UserRoleManager, PlainTextFileBannedRoundTrip)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string path = tmp.filePath("bannedlist.txt");
+
+    UserRoleManager mgr;
+    mgr.addPlayer({"76561198000000001", "", ServerPlayerRole::Banned});
+    ASSERT_TRUE(mgr.savePlainTextFile(path, ServerPlayerRole::Banned));
+
+    UserRoleManager mgr2;
+    ASSERT_TRUE(mgr2.loadPlainTextFile(path, ServerPlayerRole::Banned));
+    EXPECT_TRUE(mgr2.isBanned("76561198000000001"));
+}
+
+// ===========================================================================
+// UserRoleManager – XML file I/O (7 Days to Die serveradmin.xml)
+// ===========================================================================
+
+TEST(UserRoleManager, XmlAdminFileRoundTrip)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string path = tmp.filePath("serveradmin.xml");
+
+    UserRoleManager mgr;
+    mgr.addPlayer({"76561198000000001", "Admin1",  ServerPlayerRole::Admin});
+    mgr.addPlayer({"76561198000000002", "Mod1",    ServerPlayerRole::Operator});
+    mgr.addPlayer({"76561198000000003", "Player1", ServerPlayerRole::Whitelisted});
+    mgr.addPlayer({"76561198000000004", "Banned1", ServerPlayerRole::Banned});
+    ASSERT_TRUE(mgr.saveXmlAdminFile(path));
+
+    UserRoleManager mgr2;
+    ASSERT_TRUE(mgr2.loadXmlAdminFile(path));
+
+    EXPECT_TRUE(mgr2.isAdmin("76561198000000001"));
+    EXPECT_EQ(mgr2.findPlayer("76561198000000002")->role, ServerPlayerRole::Operator);
+    EXPECT_TRUE(mgr2.isPermitted("76561198000000003"));
+    EXPECT_TRUE(mgr2.isBanned("76561198000000004"));
+}
+
+TEST(UserRoleManager, XmlAdminFileSeparatesSections)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string path = tmp.filePath("serveradmin.xml");
+
+    UserRoleManager mgr;
+    mgr.addPlayer({"76561198000000001", "", ServerPlayerRole::Admin});
+    mgr.addPlayer({"76561198000000002", "", ServerPlayerRole::Banned});
+    ASSERT_TRUE(mgr.saveXmlAdminFile(path));
+
+    std::string xml = readFile(path);
+    // Admin should appear in <admins> section
+    EXPECT_NE(xml.find("<admins>"), std::string::npos);
+    EXPECT_NE(xml.find("76561198000000001"), std::string::npos);
+    // Banned should appear in <blacklist> section
+    EXPECT_NE(xml.find("<blacklist>"), std::string::npos);
+    EXPECT_NE(xml.find("76561198000000002"), std::string::npos);
+}
+
+TEST(UserRoleManager, XmlAdminFileMergesExistingPlayers)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string path = tmp.filePath("serveradmin.xml");
+
+    // Write a minimal 7DTD-style XML manually
+    writeFile(path,
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        "<adminTools>\n"
+        "  <admins>\n"
+        "    <admin steamID=\"76561198000000001\" permission_level=\"0\"/>\n"
+        "  </admins>\n"
+        "  <moderators/>\n"
+        "  <whitelist/>\n"
+        "  <blacklist>\n"
+        "    <blacklist steamID=\"76561198000000002\" unbandate=\"\"/>\n"
+        "  </blacklist>\n"
+        "</adminTools>\n");
+
+    UserRoleManager mgr;
+    ASSERT_TRUE(mgr.loadXmlAdminFile(path));
+
+    EXPECT_TRUE(mgr.isAdmin("76561198000000001"));
+    EXPECT_TRUE(mgr.isBanned("76561198000000002"));
+}
+
+TEST(UserRoleManager, XmlAdminFileLoadMissingReturnsFalse)
+{
+    UserRoleManager mgr;
+    EXPECT_FALSE(mgr.loadXmlAdminFile("/nonexistent/serveradmin.xml"));
+}
+
+TEST(UserRoleManager, XmlAdminFileSaveInvalidPathReturnsFalse)
+{
+    UserRoleManager mgr;
+    mgr.addPlayer({"76561198000000001", "", ServerPlayerRole::Admin});
+    EXPECT_FALSE(mgr.saveXmlAdminFile("/nonexistent/dir/serveradmin.xml"));
+}
+
+// ===========================================================================
+// UserRoleManager – persistence (internal JSON save/load)
+// ===========================================================================
+
+TEST(UserRoleManager, SaveAndLoad)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string path = tmp.filePath("players.json");
+
+    UserRoleManager mgr;
+    mgr.addPlayer({"76561198000000001", "Alice",  ServerPlayerRole::Admin});
+    mgr.addPlayer({"76561198000000002", "Bob",    ServerPlayerRole::Operator});
+    mgr.addPlayer({"76561198000000003", "Charlie", ServerPlayerRole::Whitelisted});
+    mgr.addPlayer({"76561198000000004", "Dave",   ServerPlayerRole::Banned});
+    ASSERT_TRUE(mgr.save(path));
+
+    UserRoleManager mgr2;
+    ASSERT_TRUE(mgr2.load(path));
+    ASSERT_EQ(mgr2.players().size(), 4u);
+
+    EXPECT_TRUE(mgr2.isAdmin("76561198000000001"));
+    EXPECT_EQ(mgr2.findPlayer("76561198000000002")->role, ServerPlayerRole::Operator);
+    EXPECT_TRUE(mgr2.isPermitted("76561198000000003"));
+    EXPECT_TRUE(mgr2.isBanned("76561198000000004"));
+}
+
+TEST(UserRoleManager, LoadMissingFileReturnsFalse)
+{
+    UserRoleManager mgr;
+    EXPECT_FALSE(mgr.load("/nonexistent/path/players.json"));
+}
+
+TEST(UserRoleManager, LoadInvalidJsonReturnsFalse)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string path = tmp.filePath("players.json");
+    writeFile(path, "{ not valid json }");
+    UserRoleManager mgr;
+    EXPECT_FALSE(mgr.load(path));
+}
+
+TEST(UserRoleManager, SaveToInvalidPathReturnsFalse)
+{
+    UserRoleManager mgr;
+    mgr.addPlayer({"76561198000000001", "Alice", ServerPlayerRole::Admin});
+    EXPECT_FALSE(mgr.save("/nonexistent/dir/players.json"));
+}
+
+// ===========================================================================
+// UserRoleManager – audit log
+// ===========================================================================
+
+TEST(UserRoleManager, AuditLogRecordsAddPlayer)
+{
+    UserRoleManager mgr;
+    mgr.addPlayer({"76561198000000001", "Alice", ServerPlayerRole::Admin}, "admin_actor");
+
+    ASSERT_EQ(mgr.auditLog().size(), 1u);
+    EXPECT_EQ(mgr.auditLog()[0].actorId, "admin_actor");
+    EXPECT_EQ(mgr.auditLog()[0].targetId, "76561198000000001");
+    EXPECT_FALSE(mgr.auditLog()[0].timestamp.empty());
+}
+
+TEST(UserRoleManager, AuditLogRecordsSetPlayerRole)
+{
+    UserRoleManager mgr;
+    mgr.addPlayer({"76561198000000001", "Bob", ServerPlayerRole::Whitelisted}, "system");
+    mgr.setPlayerRole("76561198000000001", ServerPlayerRole::Operator, "admin_actor");
+
+    ASSERT_EQ(mgr.auditLog().size(), 2u);
+    EXPECT_EQ(mgr.auditLog()[1].actorId, "admin_actor");
+    EXPECT_EQ(mgr.auditLog()[1].targetId, "76561198000000001");
+}
+
+TEST(UserRoleManager, AuditLogRecordsRemovePlayer)
+{
+    UserRoleManager mgr;
+    mgr.addPlayer({"76561198000000001", "Bob", ServerPlayerRole::Whitelisted}, "system");
+    mgr.removePlayer("76561198000000001", "admin_actor");
+
+    ASSERT_EQ(mgr.auditLog().size(), 2u);
+    EXPECT_EQ(mgr.auditLog()[1].actorId, "admin_actor");
+}
+
+TEST(UserRoleManager, ClearAuditLog)
+{
+    UserRoleManager mgr;
+    mgr.addPlayer({"76561198000000001", "Alice", ServerPlayerRole::Admin}, "system");
+    ASSERT_FALSE(mgr.auditLog().empty());
+    mgr.clearAuditLog();
+    EXPECT_TRUE(mgr.auditLog().empty());
+}
+
+TEST(UserRoleManager, FileLoadDoesNotLogAuditEntries)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string path = tmp.filePath("adminlist.txt");
+    writeFile(path, "76561198000000001\n76561198000000002\n");
+
+    UserRoleManager mgr;
+    ASSERT_TRUE(mgr.loadPlainTextFile(path, ServerPlayerRole::Admin));
+    // File loads are silent – no audit entries expected
+    EXPECT_TRUE(mgr.auditLog().empty());
+}
+
+TEST(UserRoleManager, XmlLoadDoesNotLogAuditEntries)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+    std::string path = tmp.filePath("serveradmin.xml");
+    writeFile(path,
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        "<adminTools>\n"
+        "  <admins>\n"
+        "    <admin steamID=\"76561198000000001\" permission_level=\"0\"/>\n"
+        "  </admins>\n"
+        "  <moderators/>\n"
+        "  <whitelist/>\n"
+        "  <blacklist/>\n"
+        "</adminTools>\n");
+
+    UserRoleManager mgr;
+    ASSERT_TRUE(mgr.loadXmlAdminFile(path));
+    EXPECT_TRUE(mgr.auditLog().empty());
+}
