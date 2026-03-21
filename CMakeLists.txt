@@ -137,6 +137,8 @@ set(APP_SOURCES
     src/ConfigFileDiscovery.hpp
     src/SteamQueryClient.cpp
     src/SteamQueryClient.hpp
+    src/UserRoleManager.cpp
+    src/UserRoleManager.hpp
 )
 
 add_executable(SSA ${APP_SOURCES})
@@ -197,6 +199,8 @@ set(TEST_SOURCES
     src/ConfigFileDiscovery.hpp
     src/SteamQueryClient.cpp
     src/SteamQueryClient.hpp
+    src/UserRoleManager.cpp
+    src/UserRoleManager.hpp
 )
 
 add_executable(SSA_Tests ${TEST_SOURCES})
