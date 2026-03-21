@@ -85,6 +85,19 @@ MainWindow::MainWindow(GLFWwindow *window)
 
     m_dashboard = new HomeDashboard(m_manager);
 
+    // Route HomeDashboard Install/Update actions through ServerTabWidget so
+    // that the deploy log observer is registered and the Overview tab's
+    // Deploy Progress panel shows live output.
+    m_dashboard->onNavigateToServer = [this](int serverIndex) {
+        // Tab indices: 0=Home, 1..N=servers, N+1=Log
+        m_selectedTab = serverIndex + 1;
+        m_selectedSidebarServer = serverIndex;
+    };
+    m_dashboard->onRequestDeploy = [this](int serverIndex) {
+        if (serverIndex >= 0 && serverIndex < static_cast<int>(m_serverTabs.size()))
+            m_serverTabs[serverIndex]->startDeployAsync();
+    };
+
     m_scheduler = new SchedulerModule(m_manager);
 
     // Wire up scheduled RCON commands
@@ -887,6 +900,10 @@ void MainWindow::renderAddServerDialog()
             validationError.clear();
             m_manager->saveConfig();
             addServerTab(m_manager->servers().back());
+            // Navigate to the new server's tab immediately so the user can
+            // see the Deploy Progress panel in the Overview sub-tab.
+            m_selectedTab = static_cast<int>(m_serverTabs.size()); // 0=Home, 1..N=servers
+            m_selectedSidebarServer = static_cast<int>(m_manager->servers().size()) - 1;
             m_dashboard->refresh();
             m_scheduler->startScheduler(s.name);
             m_logModule->log(s.name, "Server added.");

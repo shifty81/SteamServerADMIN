@@ -221,6 +221,11 @@ public:
                                std::function<void(const std::string &)> observer);
     void clearDeployLogObserver(const std::string &serverName);
 
+    /** Returns true while a deploy log observer is active for @p serverName.
+     *  This reflects whether a deployment (via deployOrUpdateServer) is
+     *  currently in progress for the given server. */
+    bool isDeploying(const std::string &serverName) const;
+
 private:
     void checkProcesses();
     void handleCrash(const std::string &serverName, int exitCode);
@@ -274,7 +279,7 @@ private:
     SteamLibraryDetector   m_steamLibraryDetector;
 
     // Per-server deploy log observers (registered by UI widgets for progress display)
-    std::mutex m_deployObserverMutex;
+    mutable std::mutex m_deployObserverMutex;
     std::map<std::string, std::function<void(const std::string &)>> m_deployLogObservers;
 
     void emitLog(const std::string &serverName, const std::string &msg);

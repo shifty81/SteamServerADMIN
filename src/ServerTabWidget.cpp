@@ -84,8 +84,19 @@ void ServerTabWidget::startDeployAsync()
     if (m_deployRunning)
         return;
     // Join a previously completed thread before starting a new deployment.
-    if (m_deployThread.joinable())
+    // Check m_deployDone under the mutex to confirm the thread has actually
+    // finished setting all state (avoids blocking the UI thread if somehow
+    // invoked while the thread is still winding down).
+    if (m_deployThread.joinable()) {
+        bool done = false;
+        {
+            std::lock_guard<std::mutex> lk(m_deployLogMutex);
+            done = m_deployDone;
+        }
+        if (!done)
+            return;
         m_deployThread.join();
+    }
     m_deployRunning = true;
     m_deployDone    = false;
     m_deploySuccess = false;

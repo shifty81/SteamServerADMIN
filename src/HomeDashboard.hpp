@@ -41,6 +41,25 @@ public:
     /** No-op in ImGui – the UI is rebuilt every frame. */
     void refresh();
 
+    /**
+     * @brief Callback invoked when the dashboard wants to navigate to a
+     *        specific server tab (0-based index into the server list).
+     *
+     * Set by MainWindow so the Install/Update button can bring the relevant
+     * Overview tab into view where deploy progress is displayed.
+     */
+    std::function<void(int serverIndex)> onNavigateToServer;
+
+    /**
+     * @brief Callback invoked when the dashboard wants to start a deploy for
+     *        a specific server (0-based index into the server list).
+     *
+     * Routes through ServerTabWidget::startDeployAsync so the deploy log
+     * observer is set up and the Overview tab's Deploy Progress panel is
+     * populated.
+     */
+    std::function<void(int serverIndex)> onRequestDeploy;
+
 private:
     void renderCard(ServerConfig &server, int index, float cardWidth);
     void renderContextMenu(ServerConfig &server);
@@ -64,16 +83,4 @@ private:
         std::chrono::steady_clock::time_point restartAt;
     };
     std::vector<PendingWarningRestart> m_pendingRestarts;
-
-    // Per-server deploy in-progress tracking (background thread deploy from dashboard).
-    // `running` is stored in a shared_ptr<atomic> so the background thread can safely
-    // clear it without acquiring any lock.
-    struct DeployState {
-        std::thread                            thread;
-        std::shared_ptr<std::atomic<bool>>     running;
-        DeployState()
-            : running(std::make_shared<std::atomic<bool>>(false)) {}
-    };
-    std::map<std::string, DeployState> m_deployStates;
-    std::mutex                         m_deployStatesMutex;  // protects map structure only
 };

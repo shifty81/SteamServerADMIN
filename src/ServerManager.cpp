@@ -347,6 +347,13 @@ void ServerManager::clearDeployLogObserver(const std::string &serverName)
     m_deployLogObservers.erase(serverName);
 }
 
+bool ServerManager::isDeploying(const std::string &serverName) const
+{
+    std::lock_guard<std::mutex> lk(m_deployObserverMutex);
+    auto it = m_deployLogObservers.find(serverName);
+    return it != m_deployLogObservers.end() && it->second != nullptr;
+}
+
 std::string ServerManager::lookupEventHook(const std::string &serverName,
                                            const std::string &event) const
 {
