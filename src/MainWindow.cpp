@@ -413,11 +413,25 @@ void MainWindow::renderSidebar()
         bool running = (entry.index < static_cast<int>(m_cachedRunningStatus.size()))
             ? m_cachedRunningStatus[entry.index] : false;
 
-        // Build label: [*] [ON/OFF] name
+        // Build label: ⭐ 🟢/🟡/🔴 name
+        // Use 🟡 when server has a pending update or is in graceful restart
+        bool pendingUpdate = m_manager->hasPendingUpdate(s->name)
+                             || m_manager->hasPendingModUpdate(s->name);
+        bool inRestart = m_manager->gracefulRestartManager()
+                         && m_manager->gracefulRestartManager()->isRestarting(s->name);
+
         std::string label;
-        if (s->favorite) label += "* ";
-        label += running ? "[ON] " : "[OFF] ";
+        if (s->favorite) label += "\xe2\xad\x90 ";  // ⭐
+        if (!running)
+            label += "\xF0\x9F\x94\xB4 ";  // 🔴 offline
+        else if (inRestart)
+            label += "\xF0\x9F\x94\x84 ";  // 🔄 restarting
+        else if (pendingUpdate)
+            label += "\xF0\x9F\x9F\xA1 ";  // 🟡 pending update
+        else
+            label += "\xF0\x9F\x9F\xA2 ";  // 🟢 online
         label += s->name;
+        label += "##sidebaritem";  // unique ID suffix
 
         bool selected = (m_selectedSidebarServer == entry.index);
         ImGui::PushID(entry.index);
@@ -431,6 +445,36 @@ void MainWindow::renderSidebar()
             m_manager->servers()[entry.index].favorite =
                 !m_manager->servers()[entry.index].favorite;
             m_manager->saveConfig();
+        }
+
+        // Right-click context menu with quick actions
+        if (ImGui::BeginPopupContextItem("##SidebarCtx")) {
+            ImGui::TextDisabled("%s", s->name.c_str());
+            ImGui::Separator();
+            if (running) {
+                if (ImGui::MenuItem("\xe2\x96\xa0  Stop Server"))
+                    m_manager->stopServer(m_manager->servers()[entry.index]);
+                if (ImGui::MenuItem("\xe2\x86\xba  Restart Server"))
+                    m_manager->restartServer(m_manager->servers()[entry.index]);
+            } else {
+                if (ImGui::MenuItem("\xe2\x96\xb6  Start Server"))
+                    m_manager->startServer(m_manager->servers()[entry.index]);
+            }
+            ImGui::Separator();
+            if (ImGui::MenuItem(s->favorite ? "\xe2\xad\x90  Remove Favorite"
+                                            : "\xe2\xad\x90  Mark as Favorite")) {
+                m_manager->servers()[entry.index].favorite =
+                    !m_manager->servers()[entry.index].favorite;
+                m_manager->saveConfig();
+            }
+            if (ImGui::MenuItem("\xF0\x9F\x93\xA6  Take Backup"))
+                m_manager->takeSnapshot(m_manager->servers()[entry.index]);
+            ImGui::Separator();
+            if (ImGui::MenuItem("\xF0\x9F\x93\x8B  Open Tab")) {
+                m_selectedSidebarServer = entry.index;
+                m_selectedTab = entry.index + 1;
+            }
+            ImGui::EndPopup();
         }
         ImGui::PopID();
     }

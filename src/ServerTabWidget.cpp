@@ -297,6 +297,28 @@ void ServerTabWidget::renderSettingsTab()
         m_webhookTestOk = false;
     }
 
+    // ---- Live validation status banner ----
+    {
+        auto errors = m_server.validate();
+        if (errors.empty()) {
+            ImGui::TextColored(ImVec4(0.22f, 0.88f, 0.38f, 1.0f),
+                               "\xe2\x9c\x93 Configuration is valid");
+        } else {
+            ImGui::TextColored(ImVec4(0.95f, 0.35f, 0.30f, 1.0f),
+                               "\xe2\x9c\x97 %d issue(s) \xe2\x80\x93 hover for details",
+                               static_cast<int>(errors.size()));
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort)) {
+                ImGui::BeginTooltip();
+                for (const auto &e : errors)
+                    ImGui::TextUnformatted(e.c_str());
+                ImGui::EndTooltip();
+            }
+        }
+        ImGui::SameLine();
+        ImGui::TextDisabled("(unsaved changes are shown in the form below)");
+    }
+    ImGui::Separator();
+
     ImGui::SeparatorText("Server Identity");
     ImGui::InputText("Name",           m_settName,     sizeof(m_settName));
     ImGui::InputInt("AppID",           &m_settAppid);
