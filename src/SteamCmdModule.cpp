@@ -60,8 +60,8 @@ bool SteamCmdModule::deployServer(const ServerConfig &server)
     }
 
     std::vector<std::string> args = {
-        "+login",    "anonymous",
         "+force_install_dir", server.dir,
+        "+login",    "anonymous",
         "+app_update", std::to_string(server.appid),
         "validate",
         "+quit"

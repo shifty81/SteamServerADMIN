@@ -5230,6 +5230,23 @@ TEST(SteamCmdModule, BuildCommandLineBothPathsWithSpaces)
     EXPECT_NE(cmd.find("2>&1"), std::string::npos);
 }
 
+TEST(SteamCmdModule, DeployServerPutsForceInstallDirBeforeLogin)
+{
+    // SteamCMD requires +force_install_dir to be set before +login, otherwise
+    // it fails with "Please use force_install_dir before logon!".
+    // Verify the argument ordering by checking positions in the command string.
+    std::string cmd = SteamCmdModule::buildCommandLine("/usr/bin/steamcmd",
+        {"+force_install_dir", "/srv/gameserver",
+         "+login", "anonymous",
+         "+app_update", "294420", "validate",
+         "+quit"});
+    auto posForce = cmd.find("+force_install_dir");
+    auto posLogin = cmd.find("+login");
+    ASSERT_NE(posForce, std::string::npos);
+    ASSERT_NE(posLogin, std::string::npos);
+    EXPECT_LT(posForce, posLogin) << "+force_install_dir must appear before +login";
+}
+
 // ===========================================================================
 // deployOrUpdateServer tests
 // ===========================================================================
