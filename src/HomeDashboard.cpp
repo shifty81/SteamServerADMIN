@@ -7,6 +7,8 @@
 #include <cmath>
 #include <algorithm>
 #include <filesystem>
+#include <mutex>
+#include <thread>
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -159,6 +161,15 @@ static bool glassButton(const char *label, ImVec2 size = ImVec2(0, 0))
 HomeDashboard::HomeDashboard(ServerManager *manager)
     : m_manager(manager)
 {
+}
+
+HomeDashboard::~HomeDashboard()
+{
+    // Join any in-progress deploy threads before destruction
+    for (auto &[name, state] : m_deployStates) {
+        if (state.thread.joinable())
+            state.thread.join();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -486,9 +497,47 @@ void HomeDashboard::renderCard(ServerConfig &server, int index, float cardWidth)
             }
         } catch (...) { dirEmpty = true; }
 
-        const char *label = dirEmpty ? "\xe2\xac\x87 Install" : "\xe2\xac\x86 Update";
-        if (glassButton(label))
-            m_manager->deployOrUpdateServer(server);
+        // Check if a deploy is currently running for this server
+        bool deployRunning = false;
+        {
+            std::lock_guard<std::mutex> lk(m_deployStatesMutex);
+            auto it = m_deployStates.find(server.name);
+            if (it != m_deployStates.end())
+                deployRunning = it->second.running->load();
+        }
+
+        if (deployRunning) {
+            static const char *spinFrames[] = {"|", "/", "-", "\\"};
+            int frame = static_cast<int>(ImGui::GetTime() * 8.0) % 4;
+            ImGui::Text("%s Deploying...", spinFrames[frame]);
+        } else {
+            const char *label = dirEmpty ? "\xe2\xac\x87 Install" : "\xe2\xac\x86 Update";
+            if (glassButton(label)) {
+                bool canStart = false;
+                std::shared_ptr<std::atomic<bool>> runFlag;
+                {
+                    std::lock_guard<std::mutex> lk(m_deployStatesMutex);
+                    auto &state = m_deployStates[server.name];
+                    if (!state.running->load()) {
+                        if (state.thread.joinable())
+                            state.thread.join();
+                        state.running->store(true);
+                        runFlag = state.running;
+                        canStart = true;
+                    }
+                }
+                // Spawn the thread outside the lock to avoid potential deadlock.
+                // The runFlag shared_ptr keeps the atomic alive in the thread.
+                if (canStart) {
+                    std::string serverName = server.name;
+                    std::lock_guard<std::mutex> lk(m_deployStatesMutex);
+                    m_deployStates[serverName].thread = std::thread([this, &server, runFlag]() {
+                        m_manager->deployOrUpdateServer(server);
+                        runFlag->store(false);  // atomic – no mutex needed
+                    });
+                }
+            }
+        }
     }
 
     // Context menu

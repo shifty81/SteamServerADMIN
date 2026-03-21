@@ -1,9 +1,13 @@
 #pragma once
 
 #include "ServerManager.hpp"
+#include <atomic>
 #include <chrono>
 #include <map>
+#include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 /**
@@ -29,6 +33,7 @@
 class HomeDashboard {
 public:
     explicit HomeDashboard(ServerManager *manager);
+    ~HomeDashboard();
 
     /** Render the full dashboard.  Call once per frame. */
     void render();
@@ -59,4 +64,16 @@ private:
         std::chrono::steady_clock::time_point restartAt;
     };
     std::vector<PendingWarningRestart> m_pendingRestarts;
+
+    // Per-server deploy in-progress tracking (background thread deploy from dashboard).
+    // `running` is stored in a shared_ptr<atomic> so the background thread can safely
+    // clear it without acquiring any lock.
+    struct DeployState {
+        std::thread                            thread;
+        std::shared_ptr<std::atomic<bool>>     running;
+        DeployState()
+            : running(std::make_shared<std::atomic<bool>>(false)) {}
+    };
+    std::map<std::string, DeployState> m_deployStates;
+    std::mutex                         m_deployStatesMutex;  // protects map structure only
 };

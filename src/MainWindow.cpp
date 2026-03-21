@@ -18,7 +18,9 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
 #include <nlohmann/json.hpp>
+#include <thread>
 
 static constexpr int    kSidebarButtonCount       = 11;
 static constexpr float  kNotificationTimeoutSec   = 5.0f;
@@ -111,6 +113,8 @@ MainWindow::MainWindow(GLFWwindow *window)
 
 MainWindow::~MainWindow()
 {
+    if (m_installThread.joinable())
+        m_installThread.join();
     for (auto *tab : m_serverTabs)
         delete tab;
     delete m_dashboard;
@@ -905,8 +909,13 @@ void MainWindow::renderAddServerDialog()
             if (m_addInstallViaSteamCmd) {
                 if (m_steamCmdPath[0] != '\0')
                     m_manager->setSteamCmdPath(m_steamCmdPath);
-                m_logModule->log(s.name, "Starting SteamCMD deployment...");
-                m_manager->deployOrUpdateServer(m_manager->servers().back());
+                m_logModule->log(s.name, "Scheduling SteamCMD deployment...");
+                // Run the deploy asynchronously so the UI does not freeze.
+                // The new server's Overview tab will display the progress.
+                if (!m_serverTabs.empty()) {
+                    ServerTabWidget *newTab = m_serverTabs.back();
+                    newTab->startDeployAsync();
+                }
                 savePreferences();
             }
 
@@ -1250,9 +1259,6 @@ void MainWindow::renderInstallSteamCmdDialog()
                                 ImGuiWindowFlags_AlwaysAutoResize))
         return;
 
-    static std::string statusText;
-    static bool installRunning = false;
-
     bool alreadyInstalled = m_manager->isSteamCmdInstalled();
     if (alreadyInstalled) {
         ImGui::TextColored(ImVec4(0.2f, 0.8f, 0.2f, 1.0f),
@@ -1269,37 +1275,82 @@ void MainWindow::renderInstallSteamCmdDialog()
             m_installSteamCmdDir, sizeof(m_installSteamCmdDir));
     }
 
-    if (!statusText.empty()) {
-        ImGui::Separator();
-        ImGui::TextWrapped("%s", statusText.c_str());
+    ImGui::Separator();
+
+    if (m_installRunning) {
+        // Animated spinner
+        static const char *spinFrames[] = {"|", "/", "-", "\\"};
+        int frame = static_cast<int>(ImGui::GetTime() * 8.0) % 4;
+        ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f),
+                           "%s Installing SteamCMD...", spinFrames[frame]);
+    } else if (m_installDone) {
+        if (m_installSuccess)
+            ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.2f, 1.0f),
+                               "SteamCMD installed successfully at: %s",
+                               m_manager->steamCmdPath().c_str());
+        else
+            ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f),
+                               "Failed to install SteamCMD. Check the log below.");
+    }
+
+    // Scrolling install log output
+    if (m_installRunning || m_installDone) {
+        ImGui::BeginChild("##InstallLog", ImVec2(500, 200), ImGuiChildFlags_Borders,
+                          ImGuiWindowFlags_HorizontalScrollbar);
+        {
+            std::lock_guard<std::mutex> lk(m_installLogMutex);
+            for (const auto &line : m_installLog)
+                ImGui::TextUnformatted(line.c_str());
+        }
+        if (m_installRunning)
+            ImGui::SetScrollHereY(1.0f);
+        ImGui::EndChild();
     }
 
     ImGui::Separator();
 
-    if (installRunning) {
-        ImGui::TextDisabled("Installing...");
-    } else {
+    if (!m_installRunning) {
         if (ImGui::Button("Install", ImVec2(120, 0)) && m_installSteamCmdDir[0] != '\0') {
-            installRunning = true;
-            statusText = "Installing SteamCMD...";
-            bool ok = m_manager->installSteamCmd(m_installSteamCmdDir);
-            if (ok) {
-                statusText = "SteamCMD installed successfully at " +
-                             m_manager->steamCmdPath();
-                // Persist the newly installed path so it survives app restarts
-                std::string newPath = m_manager->steamCmdPath();
-                std::strncpy(m_steamCmdPath, newPath.c_str(), sizeof(m_steamCmdPath) - 1);
-                m_steamCmdPath[sizeof(m_steamCmdPath) - 1] = '\0';
-                savePreferences();
-            } else {
-                statusText = "Failed to install SteamCMD. Check logs for details.";
+            m_installRunning = true;
+            m_installDone    = false;
+            m_installSuccess = false;
+            {
+                std::lock_guard<std::mutex> lk(m_installLogMutex);
+                m_installLog.clear();
             }
-            installRunning = false;
+            // Register log observer so install output appears in the dialog
+            m_manager->setDeployLogObserver("SSA",
+                [this](const std::string &line) {
+                    std::lock_guard<std::mutex> lk(m_installLogMutex);
+                    m_installLog.push_back(line);
+                });
+            if (m_installThread.joinable())
+                m_installThread.join();
+            std::string installDir(m_installSteamCmdDir);
+            m_installThread = std::thread([this, installDir]() {
+                bool ok = m_manager->installSteamCmd(installDir);
+                m_manager->clearDeployLogObserver("SSA");
+                if (ok) {
+                    // Persist the newly installed path so it survives app restarts
+                    std::string newPath = m_manager->steamCmdPath();
+                    std::strncpy(m_steamCmdPath, newPath.c_str(), sizeof(m_steamCmdPath) - 1);
+                    m_steamCmdPath[sizeof(m_steamCmdPath) - 1] = '\0';
+                    savePreferences();
+                }
+                m_installSuccess = ok;
+                m_installRunning = false;
+                m_installDone    = true;
+            });
         }
+        ImGui::SameLine();
     }
-    ImGui::SameLine();
+
     if (ImGui::Button("Close", ImVec2(120, 0))) {
-        statusText.clear();
+        // If install is still running, just close the dialog; the thread
+        // continues in the background and will be joined in the destructor.
+        if (!m_installRunning && m_installThread.joinable())
+            m_installThread.join();
+        m_installDone    = false;
         ImGui::CloseCurrentPopup();
     }
 

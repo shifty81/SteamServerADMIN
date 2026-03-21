@@ -15,7 +15,9 @@
 #include <cstdio>
 #include <fstream>
 #include <filesystem>
+#include <mutex>
 #include <sstream>
+#include <thread>
 
 namespace fs = std::filesystem;
 
@@ -69,6 +71,40 @@ ServerTabWidget::ServerTabWidget(ServerManager *manager, ServerConfig &server)
     : m_manager(manager), m_server(server)
 {
     copyStr(m_notesBuf, sizeof(m_notesBuf), m_server.notes);
+}
+
+ServerTabWidget::~ServerTabWidget()
+{
+    if (m_deployThread.joinable())
+        m_deployThread.join();
+}
+
+void ServerTabWidget::startDeployAsync()
+{
+    if (m_deployRunning || m_deployThread.joinable())
+        return;
+    m_deployRunning = true;
+    m_deployDone    = false;
+    m_deploySuccess = false;
+    {
+        std::lock_guard<std::mutex> lk(m_deployLogMutex);
+        m_deployLog.clear();
+    }
+    m_manager->setDeployLogObserver(m_server.name,
+        [this](const std::string &line) {
+            std::lock_guard<std::mutex> lk(m_deployLogMutex);
+            m_deployLog.push_back(line);
+        });
+    m_deployThread = std::thread([this]() {
+        bool ok = m_manager->deployOrUpdateServer(m_server);
+        m_manager->clearDeployLogObserver(m_server.name);
+        {
+            std::lock_guard<std::mutex> lk(m_deployLogMutex);
+            m_deploySuccess = ok;
+            m_deployRunning = false;
+            m_deployDone    = true;
+        }
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -170,9 +206,51 @@ void ServerTabWidget::renderOverviewTab()
             }
         } catch (...) { dirEmpty = true; }
 
-        const char *deployLabel = dirEmpty ? "Install Server" : "Verify / Update";
-        if (ImGui::Button(deployLabel))
-            m_manager->deployOrUpdateServer(m_server);
+        if (m_deployRunning) {
+            ImGui::TextDisabled("Deploying...");
+        } else {
+            const char *deployLabel = dirEmpty ? "Install Server" : "Verify / Update";
+            if (ImGui::Button(deployLabel))
+                startDeployAsync();
+        }
+    }
+
+    // Deploy progress / result panel
+    if (m_deployRunning || m_deployDone) {
+        ImGui::Spacing();
+        ImGui::SeparatorText("Deploy Progress");
+
+        if (m_deployRunning) {
+            // Animated spinner using elapsed time
+            static const char *spinFrames[] = {"|", "/", "-", "\\"};
+            int frame = static_cast<int>(ImGui::GetTime() * 8.0) % 4;
+            ImGui::TextColored(ImVec4(1.0f, 0.8f, 0.0f, 1.0f),
+                               "%s Working...", spinFrames[frame]);
+        } else if (m_deployDone) {
+            if (m_deploySuccess)
+                ImGui::TextColored(ImVec4(0.2f, 0.9f, 0.2f, 1.0f), "Completed successfully.");
+            else
+                ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "Deploy failed – see log for details.");
+            ImGui::SameLine();
+            if (ImGui::SmallButton("Dismiss")) {
+                m_deployDone = false;
+                if (m_deployThread.joinable())
+                    m_deployThread.join();
+            }
+        }
+
+        // Scrolling log output
+        ImGui::BeginChild("##DeployLog", ImVec2(-1, 180), ImGuiChildFlags_Borders,
+                          ImGuiWindowFlags_HorizontalScrollbar);
+        {
+            std::lock_guard<std::mutex> lk(m_deployLogMutex);
+            for (const auto &line : m_deployLog)
+                ImGui::TextUnformatted(line.c_str());
+        }
+        // Auto-scroll to bottom while running
+        if (m_deployRunning)
+            ImGui::SetScrollHereY(1.0f);
+        ImGui::EndChild();
     }
 
     // Graceful restart with countdown
