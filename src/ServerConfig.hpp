@@ -82,6 +82,9 @@ struct ServerConfig {
     // ---- Custom environment variables for server process ----
     std::map<std::string, std::string> environmentVariables; // key=value pairs passed to the server process on launch
 
+    // ---- Steam server query (A2S) port ----
+    int queryPort = 0;  // UDP port for Steam A2S_INFO queries (0 = disabled; use RCON only)
+
     // ---- Auto-update check interval ----
     int autoUpdateCheckIntervalMinutes = 0;  // interval (minutes) for periodic SteamCMD update checks; 0 = disabled
 

@@ -4,6 +4,7 @@
 #include "RconClient.hpp"
 #include "ConsoleLogWriter.hpp"
 #include "GameTemplates.hpp"
+#include "SteamQueryClient.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -474,6 +475,7 @@ static ServerConfig deserializeServerConfig(const json &obj)
     s.backupBeforeRestart = jsonBool(obj, "backupBeforeRestart", false);
     s.gracefulShutdownSeconds = jsonInt(obj, "gracefulShutdownSeconds", 10);
     s.autoUpdateCheckIntervalMinutes = jsonInt(obj, "autoUpdateCheckIntervalMinutes", 0);
+    s.queryPort = jsonInt(obj, "queryPort", 0);
     s.totalUptimeSeconds = jsonInt64(obj, "totalUptimeSeconds", 0);
     s.totalCrashes = jsonInt(obj, "totalCrashes", 0);
     s.lastCrashTime = jsonStr(obj, "lastCrashTime");
@@ -593,6 +595,7 @@ static json serverToJson(const ServerConfig &s)
     obj["backupBeforeRestart"] = s.backupBeforeRestart;
     obj["gracefulShutdownSeconds"] = s.gracefulShutdownSeconds;
     obj["autoUpdateCheckIntervalMinutes"] = s.autoUpdateCheckIntervalMinutes;
+    obj["queryPort"] = s.queryPort;
     obj["totalUptimeSeconds"] = s.totalUptimeSeconds;
     obj["totalCrashes"] = s.totalCrashes;
     obj["lastCrashTime"] = s.lastCrashTime;
@@ -1560,27 +1563,59 @@ void ServerManager::releaseRcon(const std::string &serverName)
 
 int ServerManager::getPlayerCount(const ServerConfig &server)
 {
-    RconClient *rcon = acquireRcon(server);
-    if (!rcon)
-        return -1;
-    std::string resp = rcon->sendCommand("status", 3000);
-    if (resp.empty() && !rcon->isConnected()) {
-        // Connection dropped – retry once with a fresh connection
-        releaseRcon(server.name);
-        rcon = acquireRcon(server);
-        if (!rcon) return -1;
-        resp = rcon->sendCommand("status", 3000);
-    }
-    auto lines = splitString(resp, '\n');
-    for (const auto &line : lines) {
-        if (line.find("players") != std::string::npos) {
-            std::regex re("(\\d+) humans");
-            std::smatch m;
-            if (std::regex_search(line, m, re))
-                return std::stoi(m[1].str());
+    // ---- Try RCON first (Source engine "status" response) ----
+    bool rconConfigured = !trimString(server.rcon.host).empty()
+                          && server.rcon.port > 0;
+    bool rconConnected = false;
+
+    if (rconConfigured) {
+        RconClient *rcon = acquireRcon(server);
+        if (rcon) {
+            rconConnected = true;
+            std::string resp = rcon->sendCommand("status", 3000);
+            if (resp.empty() && !rcon->isConnected()) {
+                // Connection dropped – retry once with a fresh connection
+                releaseRcon(server.name);
+                rcon = acquireRcon(server);
+                if (rcon)
+                    resp = rcon->sendCommand("status", 3000);
+                else
+                    rconConnected = false;
+            }
+            auto lines = splitString(resp, '\n');
+            for (const auto &line : lines) {
+                if (line.find("players") != std::string::npos) {
+                    std::regex re("(\\d+) humans");
+                    std::smatch m;
+                    if (std::regex_search(line, m, re))
+                        return std::stoi(m[1].str());
+                }
+            }
+            // RCON connected but "status" didn't yield a parseable player count –
+            // fall through to A2S below (may get a better count for games with
+            // non-Source RCON formats). If a count WAS found above, the function
+            // already returned early via the regex match path.
         }
     }
-    return 0;
+
+    // ---- Fallback: Steam A2S_INFO query ----
+    // Used when RCON is not configured, unavailable, or didn't return a
+    // parseable player count (e.g., games with non-Source RCON formats).
+    if (server.queryPort > 0) {
+        std::string host = trimString(server.rcon.host).empty()
+                               ? "127.0.0.1"
+                               : server.rcon.host;
+        auto info = SteamQueryClient::queryInfo(host,
+                                                static_cast<uint16_t>(server.queryPort),
+                                                2000);
+        if (info.has_value() && info->players >= 0)
+            return info->players;
+    }
+
+    // Could not determine player count:
+    //   -1 means "unknown" (RCON unreachable and no A2S query succeeded)
+    //    0 means "server is reachable but no players" (RCON connected OK)
+    return rconConnected ? 0 : -1;
 }
 
 std::string ServerManager::sendRconCommand(const ServerConfig &server, const std::string &cmd)

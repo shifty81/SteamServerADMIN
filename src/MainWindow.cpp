@@ -687,6 +687,9 @@ void MainWindow::renderAddServerDialog()
                 if (templates[i].defaultRconPort > 0)
                     m_addRconPort = templates[i].defaultRconPort;
 
+                // Set the game-specific default A2S query port
+                m_addQueryPort = templates[i].defaultQueryPort;
+
                 // Auto-generate install directory: servers/<game>_<name>
                 std::string folder = ConfigFileDiscovery::generateFolderName(
                     templates[i].folderHint, m_addName);
@@ -772,6 +775,14 @@ void MainWindow::renderAddServerDialog()
                               "Stored with XOR + base64 obfuscation in servers.json\n"
                               "(not encrypted, but better than plain text).");
     }
+    ImGui::InputInt("A2S Query Port (0 = disabled)", &m_addQueryPort);
+    ImGui::SameLine();
+    ImGui::TextDisabled("(?)");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip(
+            "UDP port for Steam A2S_INFO queries.\n"
+            "Enables player count display for servers without RCON.\n"
+            "Auto-filled from template. 0 = disabled.");
 
     // SteamCMD install option
     ImGui::Separator();
@@ -815,6 +826,7 @@ void MainWindow::renderAddServerDialog()
         s.rcon.host    = m_addRconHost;
         s.rcon.port    = m_addRconPort;
         s.rcon.password = m_addRconPass;
+        s.queryPort    = m_addQueryPort;
 
         m_manager->servers().push_back(s);
         auto errors = m_manager->validateAll();

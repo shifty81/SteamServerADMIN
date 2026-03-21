@@ -135,6 +135,8 @@ set(APP_SOURCES
     src/GracefulRestartManager.cpp
     src/GracefulRestartManager.hpp
     src/ConfigFileDiscovery.hpp
+    src/SteamQueryClient.cpp
+    src/SteamQueryClient.hpp
 )
 
 add_executable(SSA ${APP_SOURCES})
@@ -193,6 +195,8 @@ set(TEST_SOURCES
     src/GracefulRestartManager.cpp
     src/GracefulRestartManager.hpp
     src/ConfigFileDiscovery.hpp
+    src/SteamQueryClient.cpp
+    src/SteamQueryClient.hpp
 )
 
 add_executable(SSA_Tests ${TEST_SOURCES})

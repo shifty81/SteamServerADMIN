@@ -267,6 +267,7 @@ void ServerTabWidget::renderSettingsTab()
         copyStr(m_settGroup,      sizeof(m_settGroup),      m_server.group);
         m_settRconCmdInterval     = m_server.rconCommandIntervalMinutes;
         m_settAutoUpdateCheck     = m_server.autoUpdateCheckIntervalMinutes;
+        m_settQueryPort           = m_server.queryPort;
 
         // Tags: join as comma-separated string
         {
@@ -362,6 +363,17 @@ void ServerTabWidget::renderSettingsTab()
 
     ImGui::SeparatorText("Players");
     ImGui::InputInt("Max Players (0 = unlimited)", &m_settMaxPlayers);
+
+    ImGui::SeparatorText("Steam Query");
+    ImGui::InputInt("A2S Query Port (0 = disabled)", &m_settQueryPort);
+    ImGui::SameLine();
+    ImGui::TextDisabled("(?)");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip(
+            "UDP port for Steam A2S_INFO queries.\n"
+            "Used to retrieve player counts for servers without RCON.\n"
+            "Typical values: 27015 (most Source games), 2457 (Valheim),\n"
+            "28015 (Rust), 26900 (7 Days to Die). 0 = disabled.");
 
     ImGui::SeparatorText("Automation");
     ImGui::Checkbox("Auto Update",     &m_settAutoUpdate);
@@ -562,6 +574,7 @@ void ServerTabWidget::renderSettingsTab()
         m_server.group                       = m_settGroup;
         m_server.rconCommandIntervalMinutes  = m_settRconCmdInterval;
         m_server.autoUpdateCheckIntervalMinutes = m_settAutoUpdateCheck;
+        m_server.queryPort                   = m_settQueryPort;
 
         // Parse comma-separated tags
         {
