@@ -1346,10 +1346,11 @@ void MainWindow::renderInstallSteamCmdDialog()
     }
 
     if (ImGui::Button("Close", ImVec2(120, 0))) {
-        if (m_installThread.joinable())
+        // If install is still running, just close the dialog; the thread
+        // continues in the background and will be joined in the destructor.
+        if (!m_installRunning && m_installThread.joinable())
             m_installThread.join();
         m_installDone    = false;
-        m_installRunning = false;
         ImGui::CloseCurrentPopup();
     }
 
