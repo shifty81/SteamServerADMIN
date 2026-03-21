@@ -347,6 +347,13 @@ void ServerManager::clearDeployLogObserver(const std::string &serverName)
     m_deployLogObservers.erase(serverName);
 }
 
+bool ServerManager::isDeploying(const std::string &serverName) const
+{
+    std::lock_guard<std::mutex> lk(m_deployObserverMutex);
+    auto it = m_deployLogObservers.find(serverName);
+    return it != m_deployLogObservers.end() && it->second != nullptr;
+}
+
 std::string ServerManager::lookupEventHook(const std::string &serverName,
                                            const std::string &event) const
 {
@@ -526,6 +533,11 @@ static ServerConfig deserializeServerConfig(const json &obj)
 
 bool ServerManager::loadConfig()
 {
+    // If the config file does not exist yet (e.g. first run), treat it as an
+    // empty server list rather than an error.
+    if (!fs::exists(m_configFile))
+        return true;
+
     std::ifstream file(m_configFile);
     if (!file.is_open()) {
         std::cerr << "ServerManager::loadConfig: cannot open " << m_configFile << "\n";

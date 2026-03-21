@@ -7,8 +7,6 @@
 #include <cmath>
 #include <algorithm>
 #include <filesystem>
-#include <mutex>
-#include <thread>
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -165,11 +163,6 @@ HomeDashboard::HomeDashboard(ServerManager *manager)
 
 HomeDashboard::~HomeDashboard()
 {
-    // Join any in-progress deploy threads before destruction
-    for (auto &[name, state] : m_deployStates) {
-        if (state.thread.joinable())
-            state.thread.join();
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -497,14 +490,10 @@ void HomeDashboard::renderCard(ServerConfig &server, int index, float cardWidth)
             }
         } catch (...) { dirEmpty = true; }
 
-        // Check if a deploy is currently running for this server
-        bool deployRunning = false;
-        {
-            std::lock_guard<std::mutex> lk(m_deployStatesMutex);
-            auto it = m_deployStates.find(server.name);
-            if (it != m_deployStates.end())
-                deployRunning = it->second.running->load();
-        }
+        // Use the ServerManager's isDeploying() to reflect the actual deploy
+        // state managed by ServerTabWidget::startDeployAsync (which registers
+        // a deploy log observer while a deploy is running).
+        bool deployRunning = m_manager->isDeploying(server.name);
 
         if (deployRunning) {
             static const char *spinFrames[] = {"|", "/", "-", "\\"};
@@ -513,29 +502,11 @@ void HomeDashboard::renderCard(ServerConfig &server, int index, float cardWidth)
         } else {
             const char *label = dirEmpty ? "\xe2\xac\x87 Install" : "\xe2\xac\x86 Update";
             if (glassButton(label)) {
-                bool canStart = false;
-                std::shared_ptr<std::atomic<bool>> runFlag;
-                {
-                    std::lock_guard<std::mutex> lk(m_deployStatesMutex);
-                    auto &state = m_deployStates[server.name];
-                    if (!state.running->load()) {
-                        if (state.thread.joinable())
-                            state.thread.join();
-                        state.running->store(true);
-                        runFlag = state.running;
-                        canStart = true;
-                    }
-                }
-                // Spawn the thread outside the lock to avoid potential deadlock.
-                // The runFlag shared_ptr keeps the atomic alive in the thread.
-                if (canStart) {
-                    std::string serverName = server.name;
-                    std::lock_guard<std::mutex> lk(m_deployStatesMutex);
-                    m_deployStates[serverName].thread = std::thread([this, &server, runFlag]() {
-                        m_manager->deployOrUpdateServer(server);
-                        runFlag->store(false);  // atomic – no mutex needed
-                    });
-                }
+                // Route deploy through ServerTabWidget::startDeployAsync so
+                // that the deploy log observer is registered and the Overview
+                // tab's Deploy Progress panel shows live output.
+                if (onRequestDeploy)   onRequestDeploy(index);
+                if (onNavigateToServer) onNavigateToServer(index);
             }
         }
     }
@@ -566,7 +537,7 @@ void HomeDashboard::renderCard(ServerConfig &server, int index, float cardWidth)
 
 void HomeDashboard::renderContextMenu(ServerConfig &server)
 {
-    if (ImGui::BeginPopupContextItem()) {
+    if (ImGui::BeginPopupContextItem("##ctx")) {
         if (ImGui::MenuItem("\xF0\x9F\x92\xBE  Save Config"))
             m_manager->saveConfig();
 

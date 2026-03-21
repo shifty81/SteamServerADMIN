@@ -484,8 +484,11 @@ TEST(ServerConfig, LoadMissingFile)
     TempDir tmp;
     ASSERT_TRUE(tmp.isValid());
 
+    // A missing servers.json is treated as an empty server list (first-run
+    // scenario), so loadConfig() returns true with an empty server list.
     ServerManager mgr(tmp.filePath("nonexistent.json"));
-    EXPECT_FALSE(mgr.loadConfig());
+    EXPECT_TRUE(mgr.loadConfig());
+    EXPECT_TRUE(mgr.servers().empty());
 }
 
 TEST(ServerConfig, MultipleServersRoundTrip)
@@ -6679,3 +6682,52 @@ TEST(ServerConfig, QueryPortMaxValidValue)
     ASSERT_EQ(mgr2.servers().size(), 1u);
     EXPECT_EQ(mgr2.servers()[0].queryPort, 65535);
 }
+
+// ===========================================================================
+// isDeploying() reflects deploy log observer registration
+// ===========================================================================
+
+TEST(ServerManager, IsDeployingFalseByDefault)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    ServerManager mgr(tmp.filePath("servers.json"));
+    EXPECT_FALSE(mgr.isDeploying("SomeServer"));
+}
+
+TEST(ServerManager, IsDeployingTrueWhileObserverRegistered)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    ServerManager mgr(tmp.filePath("servers.json"));
+    EXPECT_FALSE(mgr.isDeploying("TestServer"));
+
+    mgr.setDeployLogObserver("TestServer", [](const std::string &) {});
+    EXPECT_TRUE(mgr.isDeploying("TestServer"));
+
+    mgr.clearDeployLogObserver("TestServer");
+    EXPECT_FALSE(mgr.isDeploying("TestServer"));
+}
+
+TEST(ServerManager, IsDeployingIndependentPerServer)
+{
+    TempDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    ServerManager mgr(tmp.filePath("servers.json"));
+
+    mgr.setDeployLogObserver("ServerA", [](const std::string &) {});
+    EXPECT_TRUE(mgr.isDeploying("ServerA"));
+    EXPECT_FALSE(mgr.isDeploying("ServerB"));
+
+    mgr.setDeployLogObserver("ServerB", [](const std::string &) {});
+    EXPECT_TRUE(mgr.isDeploying("ServerA"));
+    EXPECT_TRUE(mgr.isDeploying("ServerB"));
+
+    mgr.clearDeployLogObserver("ServerA");
+    EXPECT_FALSE(mgr.isDeploying("ServerA"));
+    EXPECT_TRUE(mgr.isDeploying("ServerB"));
+}
+
